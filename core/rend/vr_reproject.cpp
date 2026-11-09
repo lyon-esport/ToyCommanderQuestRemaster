@@ -73,7 +73,6 @@ static u32 activeViewPtrAddr;
 // Set per pass by noteMenuBackdrop. The game switches the view in use while it builds a frame
 // (both its mission view and its menu view are full screen), so the pointer alone can't tell.
 static std::atomic<bool> menuFrame;
-static u32 menuViewRecord;		// the last full-screen view other than the mission's seen in use
 
 // The game's focal length in DC pixels, per axis: viewport scale times projection scale.
 static glm::vec2 readGameFocal()
@@ -89,24 +88,11 @@ static glm::vec2 readGameFocal()
 			return w >= 600.f && plausible(focal.x, 10.f, 20000.f) && plausible(focal.y, 10.f, 20000.f);
 		};
 		glm::vec2 focal;
-		if (activeViewPtrAddr != 0)
-		{
-			const u32 ptr = ReadMem32_nommu(0x8C000000u + activeViewPtrAddr);
-			const u32 off = ptr & 0x00FFFFFFu;
-			if ((ptr & 0xFF000000u) == 0x8C000000u && off < RAM_SIZE - 64 && off != viewRecordAddr && fromRecord(off, focal)
-					&& off != menuViewRecord)
-			{
-				NOTICE_LOG(RENDERER, "VR: menu view record %06x (focal %.0f)", off, focal.y);
-				menuViewRecord = off;
-			}
-			if (menuFrame)
-			{
-				// a menu: its own view, else the stock framing (as at the first start)
-				if (menuViewRecord != 0 && fromRecord(menuViewRecord, focal))
-					return focal;
-				return glm::vec2(config::VrFocal);
-			}
-		}
+		// A menu: the stock framing (what looked right at the first start). The game's view records
+		// can't be trusted there: it reuses them (0x8C0D21DC is a 640x480 menu view one moment, the
+		// radar's 100x90 the next) and uses its mission view too while building a menu frame.
+		if (activeViewPtrAddr != 0 && menuFrame)
+			return glm::vec2(config::VrFocal);
 		if (fromRecord(viewRecordAddr, focal))
 			return focal;
 	}
@@ -1920,33 +1906,40 @@ static bool flattenMenu(rend_context& ctx, const RenderPass& pass, const RenderP
 	return true;
 }
 
-// tcvr: is this a menu frame? (see menuFrame) A flat opaque polygon filling the screen far away,
-// past the background plane (OP 0, which every frame has).
+// tcvr: is this a menu frame? (see menuFrame) Flat opaque pictures far away (W 5e4..1e9, past
+// the 3D's ~1e4 and short of the background plane's 1e11 that every frame has) that together
+// span the screen: one picture (the mission select, W 1e6) or several (the mission briefing:
+// two halves at W 1e5).
 static void noteMenuBackdrop(const rend_context& ctx, const RenderPass& pass, const RenderPass& prev, int fbWidth, int fbHeight)
 {
 	if (activeViewPtrAddr == 0)
 		return;
-	bool found = false;
+	glm::vec2 lo(1e30f), hi(-1e30f);
 	const auto& list = ctx.global_param_op;
-	for (u32 n = std::max(prev.op_count, 1u); n < pass.op_count && n < list.size() && !found; n++)
+	for (u32 n = std::max(prev.op_count, 1u); n < pass.op_count && n < list.size(); n++)
 	{
 		const PolyParam& pp = list[n];
 		if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
 			continue;
 		const float z = ctx.verts[pp.first].z;
-		if (!(z > 0.f) || 1.f / z < 1e5f || 1.f / z > 1e9f)
+		if (!(z > 0.f) || 1.f / z < 5e4f || 1.f / z > 1e9f)
 			continue;
-		glm::vec2 lo(1e30f), hi(-1e30f);
+		glm::vec2 plo(1e30f), phi(-1e30f);
 		bool flat = true;
 		for (u32 i = pp.first; i < pp.first + pp.count; i++)
 		{
 			const Vertex& v = ctx.verts[i];
 			flat = flat && std::abs(v.z - z) <= z * 1e-5f;
-			lo = glm::min(lo, glm::vec2(v.x, v.y));
-			hi = glm::max(hi, glm::vec2(v.x, v.y));
+			plo = glm::min(plo, glm::vec2(v.x, v.y));
+			phi = glm::max(phi, glm::vec2(v.x, v.y));
 		}
-		found = flat && lo.x <= 1.f && lo.y <= 1.f && hi.x >= fbWidth - 1.f && hi.y >= fbHeight - 1.f;
+		if (flat)
+		{
+			lo = glm::min(lo, plo);
+			hi = glm::max(hi, phi);
+		}
 	}
+	const bool found = lo.x <= 1.f && lo.y <= 1.f && hi.x >= fbWidth - 1.f && hi.y >= fbHeight - 1.f;
 	if (found != menuFrame)
 		NOTICE_LOG(RENDERER, "VR: %s frames", found ? "menu (far backdrop)" : "game");
 	menuFrame = found;
