@@ -8,3 +8,7 @@ export ADB="${ADB:-$ADB_DEFAULT}"
 export PATH="$JAVA_HOME/bin:$PATH"
 export TCVR_PACKAGE="${TCVR_PACKAGE:-com.toycommandervr.app}"
 export TCVR_DEVICE_DIR="/sdcard/Download/ToyCommanderVR"
+# Git Bash: stop MSYS from rewriting device paths like /sdcard
+export MSYS_NO_PATHCONV=1
+# Quest 3 on the LAN (adb over TLS; its port changes, found by mDNS - see connect.sh)
+export TCVR_HEADSET_IP="${TCVR_HEADSET_IP:-192.168.1.243}"
