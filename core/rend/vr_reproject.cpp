@@ -424,7 +424,10 @@ static std::vector<GameProfile> makeProfiles()
 	// 40% only, the target itself, not the ground in front of it under its lower edge.
 	// (its texture moves: 0x6a91f0 in one load, 0xacafa8 in another; found by its pure green and 16
 	// vertices instead. Captured: in the game's own frame it is exactly on the locked mouse.)
-	p.reticles[2] = { 0, 1.f, 1.f, 0.4f, 0x00ff00ff, 16 };
+	p.reticles[2] = { 0, 1.f, 1.f, 0.4f, 0x00ff00ff, 0 };
+	// The bomber's ground mark: where the bomb falls (TR, tex 0x529b20, 42 px, W 1.001), a fixed-size
+	// sprite: stock size, at the depth of the ground under its centre.
+	p.reticles[3] = { 0x529b20, 1.f / 2.537f, 1.f, 0.f };
 	list.push_back(p);
 	return list;
 }
@@ -1689,6 +1692,19 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		pp.isp.ZWriteDis = 1;
 		for (u32 i = pp.first; i < pp.first + pp.count; i++)
 			ctx.verts[i].z = z;
+		// (diagnostics: what each mark got, at most every 2 s per kind)
+		{
+			static std::chrono::steady_clock::time_point last[8];
+			const GameProfile::Reticle *r = matchReticle(ctx, pp);
+			const int k = r != nullptr ? (int)(r - prof->reticles) : 7;
+			const auto now = std::chrono::steady_clock::now();
+			if (k >= 0 && k < 8 && now - last[k] > std::chrono::seconds(2))
+			{
+				last[k] = now;
+				NOTICE_LOG(RENDERER, "VR: mark %d (tex %06x, %u verts) at %.0f,%.0f put at W %.0f", k, tex, pp.count,
+						centre.x, centre.y, 1.f / z);
+			}
+		}
 	}
 }
 
