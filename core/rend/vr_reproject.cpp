@@ -251,7 +251,11 @@ struct GameProfile
 	// the game sizes to its target keeps 1. (Any of the opaque, punch-through or translucent lists.)
 	// posScale: a mark the game places with its stock projection (not the widened one) has its
 	// offset from the screen centre multiplied by this (the widening's inverse).
-	struct Reticle { u32 tex = 0; float scale = 1.f; float posScale = 1.f; };
+	// area: the part of the mark (around its centre, 0..1 of its size) whose nearest 3D sets its
+	// depth: 1 for a ring (nothing inside it may cut it), small for a frame around a target (its
+	// edges lie over the ground in front of the target, much nearer: the mark would sit there,
+	// and look shifted off the target from any eye not at the game camera).
+	struct Reticle { u32 tex = 0; float scale = 1.f; float posScale = 1.f; float area = 1.f; };
 	Reticle reticles[8] {};
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
@@ -411,12 +415,12 @@ static std::vector<GameProfile> makeProfiles()
 	// (the game draws them as many pixels as stock, in a view 2.54 times as wide: tan(49.44 deg) /
 	// tan(24.72 deg), see the fovPatch)
 	p.reticles[0] = { 0x510f40, 1.f / 2.537f };
-	p.reticles[1] = { 0x5063a0, 1.f / 2.537f };
+	p.reticles[1] = { 0x5063a0, 1.f / 2.537f, 1.f, 0.f };
 	// The target lock: a green square outline around the locked target (OP, 16 verts, tex
-	// 0x6a91f0, W 1.000), about 22 px. Kept at the game's size for now (it may follow the target's).
-	// Placed with the stock projection, it seems (off its target, more so away from the centre):
-	// its offset from the centre is scaled back to the widened view.
-	p.reticles[2] = { 0x6a91f0, 1.f, 1.f / 2.537f };
+	// 0x6a91f0, W 1.000), about 22 px, at the game's size (user-checked). Projected by the game with
+	// the live (widened) view (0x8C061F60), so its place is right; its depth comes from the middle
+	// 40% only, the target itself, not the ground in front of it under its lower edge.
+	p.reticles[2] = { 0x6a91f0, 1.f, 1.f, 0.4f };
 	list.push_back(p);
 	return list;
 }
@@ -1611,10 +1615,10 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		}
 		glm::vec2 centre = (lo + hi) * 0.5f;
 		float scale = 0.f;	// (0: not one of them)
-		float posScale = 1.f;
+		float posScale = 1.f, area = 1.f;
 		for (const auto& r : prof->reticles)
 			if (r.tex != 0 && r.tex == tex)
-				scale = r.scale, posScale = r.posScale;
+				scale = r.scale, posScale = r.posScale, area = r.area;
 		if (scale > 0.f && posScale != 1.f)
 		{
 			// placed by the game with its stock projection: its offset from the screen centre
@@ -1646,7 +1650,7 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		// mark (the centre dot) is still at its target's own depth.
 		float z = sceneZAt(ctx, pass, previousPass, centre, maxHudW * 2.f);
 		{
-			const glm::vec2 half = (hi - lo) * 0.5f * scale;
+			const glm::vec2 half = (hi - lo) * 0.5f * scale * area;
 			constexpr int Grid = 7;
 			for (int gy = 0; gy < Grid; gy++)
 				for (int gx = 0; gx < Grid; gx++)
