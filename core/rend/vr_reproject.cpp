@@ -440,10 +440,10 @@ static std::vector<GameProfile> makeProfiles()
 	p.hudDepth = 90.f;
 	// The mission select's blue backdrop: one full-screen picture at W 1e6 behind 3D frames;
 	// in the widened view it wrapped the whole field of view.
-	p.stretchedBackdrops = true;
+	p.stretchedBackdrops = false;	// (off: made the save select worse - user)
 	// Menus (title, save select, mission select) are 3D scenes made for a TV: flat on the 2D plane.
 	// In a mission the radar frame is always there: a flat HUD picture at 512,0..640,128.
-	p.flatMenus = true;
+	p.flatMenus = false;	// (off: blew up the title logo, flattened the 3D attract demo - user)
 	p.gameHudBox = { 512.f, 0.f, 640.f, 128.f };
 	p.menuScale = 2.537f;
 	p.snapAnyW = true;
