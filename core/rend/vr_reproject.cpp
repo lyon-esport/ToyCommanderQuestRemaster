@@ -247,6 +247,8 @@ struct GameProfile
 	// from any eye position (a mark on a plane at another depth slides off its target when the
 	// head moves, and doubles in stereo).
 	u32 reticleTextures[8] {};
+	// tcvr: their size, as drawn by the widened game, times this: back to their stock angle
+	float reticleScale = 1.f;
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
 	// headset's vertex shader pins every vertex near it onto the 2D plane.
@@ -404,6 +406,9 @@ static std::vector<GameProfile> makeProfiles()
 	// The gun sight: a ring (0x510f40, 64 px) and its centre dot (0x5063a0, 16 px), TR at W 1.111.
 	p.reticleTextures[0] = 0x510f40;
 	p.reticleTextures[1] = 0x5063a0;
+	// (the game draws them as many pixels as stock, in a view 2.54 times as wide: tan(49.44 deg) /
+	// tan(24.72 deg), see the fovPatch)
+	p.reticleScale = 1.f / 2.537f;
 	list.push_back(p);
 	return list;
 }
@@ -1577,7 +1582,7 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 	auto& list = ctx.global_param_tr;
 	for (u32 n = previousPass.tr_count; n < pass.tr_count && n < list.size(); n++)
 	{
-		const PolyParam& pp = list[n];
+		PolyParam& pp = list[n];	// (tcvr: its ISP is changed below)
 		if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
 			continue;
 		const float z0 = ctx.verts[pp.first].z;
@@ -1609,6 +1614,16 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		if (z <= 0.f)
 			z = 1.f / 3000.f;
 		z *= 1.02f;		// a hair in front of the surface, not into it
+		// back to its stock size around its centre, and over everything (a flat mark at one depth
+		// is cut by whatever is nearer around the target)
+		const glm::vec2 c = centre;
+		for (u32 i = pp.first; i < pp.first + pp.count; i++)
+		{
+			ctx.verts[i].x = c.x + (ctx.verts[i].x - c.x) * prof->reticleScale;
+			ctx.verts[i].y = c.y + (ctx.verts[i].y - c.y) * prof->reticleScale;
+		}
+		pp.isp.DepthMode = 7;	// always
+		pp.isp.ZWriteDis = 1;
 		for (u32 i = pp.first; i < pp.first + pp.count; i++)
 			ctx.verts[i].z = z;
 	}
