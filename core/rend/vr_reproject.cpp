@@ -242,6 +242,12 @@ struct GameProfile
 	// tcvr: snap every flat on-screen layer up to snapMaxW, whatever its W (no step test):
 	// for a game whose 3D never comes near the band (Toy Commander: HUD at 1.002-1.124, 3D from ~13)
 	bool snapAnyW = false;
+	// tcvr: the snapped layers are spread over the plane's +-0.0015 in their order by W up to this
+	// (0: snapMaxW); beyond it, frontmost. A band can then be wide (what counts as 2D) while the
+	// layers that overlap keep enough depth between them.
+	float snapSpreadW = 0.f;
+	// tcvr: how far the 2D plane is shown (game units; 0: vr.HudDepth)
+	float hudDepth = 0.f;
 	// tcvr: the textures (VRAM addresses) of the game's 2D aiming marks: each is put at the depth
 	// of the 3D scene under its centre instead of on the 2D plane, so it sits on what it aims at
 	// from any eye position (a mark on a plane at another depth slides off its target when the
@@ -257,7 +263,10 @@ struct GameProfile
 	// and look shifted off the target from any eye not at the game camera).
 	// Matched by texture, or (tex 0) by vertex colour and count: a texture the game moves around in
 	// VRAM from one load to the next (Toy Commander's lock square) is found by its look instead.
-	struct Reticle { u32 tex = 0; float scale = 1.f; float posScale = 1.f; float area = 1.f; u32 rgba = 0; u32 verts = 0; };
+	// border: for an outline (outer and inner points), the part of its thickness kept (inner points
+	// moved out toward the outer ones).
+	struct Reticle { u32 tex = 0; float scale = 1.f; float posScale = 1.f; float area = 1.f; u32 rgba = 0; u32 verts = 0;
+		float border = 1.f; };
 	Reticle reticles[8] {};
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
@@ -411,7 +420,15 @@ static std::vector<GameProfile> makeProfiles()
 	// (a tight band: the snapped layers keep their order spread over +-0.0015 of the plane, so the
 	// needles (OP, W 1.111) stay in front of the translucent gauge panels (W 1.002) drawn after them;
 	// with a band up to 2.0 they were 0.00016 apart and the panels covered the needles)
-	p.snapMaxW = 1.15f;
+	// What counts as 2D goes up to W 8 (the menus and title screens draw a full-screen layer at W
+	// 2.0; left out, it was rebuilt as 3D right in front of the eyes: a huge screen), still far from
+	// its 3D (W 10 and up). The spread keeps the tight 1.15 for the needles.
+	p.snapMaxW = 8.f;
+	p.snapSpreadW = 1.15f;
+	// The 2D plane (HUD, menus, title screens) at 90 game units (~11 m at the default world size)
+	// instead of 40: the same angle, farther (user: too close). Still in front of its own vehicle
+	// (W ~110 and up behind the plane).
+	p.hudDepth = 90.f;
 	p.snapAnyW = true;
 	// The gun sight: a ring (0x510f40, 64 px) and its centre dot (0x5063a0, 16 px), TR at W 1.111.
 	// (the game draws them as many pixels as stock, in a view 2.54 times as wide: tan(49.44 deg) /
@@ -424,7 +441,8 @@ static std::vector<GameProfile> makeProfiles()
 	// 40% only, the target itself, not the ground in front of it under its lower edge.
 	// (its texture moves: 0x6a91f0 in one load, 0xacafa8 in another; found by its pure green and 16
 	// vertices instead. Captured: in the game's own frame it is exactly on the locked mouse.)
-	p.reticles[2] = { 0, 1.f, 1.f, 0.4f, 0x00ff00ff, 0 };
+	// (user-checked aligned; its border thinned by a third, at the user's request)
+	p.reticles[2] = { 0, 1.f, 1.f, 0.4f, 0x00ff00ff, 0, 2.f / 3.f };
 	// The bomber's ground mark: where the bomb falls (TR, tex 0x529b20, 42 px, W 1.001), a fixed-size
 	// sprite: stock size, at the depth of the ground under its centre.
 	p.reticles[3] = { 0x529b20, 1.f / 2.537f, 1.f, 0.f };
@@ -494,6 +512,8 @@ static void applyGameProfile(Event, void *)
 			config::VrViewportAddr.override(prof.viewportAddr);
 		if (prof.focal > 0.f)
 			config::VrFocal.override(prof.focal);
+		if (prof.hudDepth > 0.f && config::VrHudDepth == 40.f)	// tcvr (unless the player set one)
+			config::VrHudDepth.override(prof.hudDepth);
 		if (prof.hudW > 0.f && config::VrHudW == 1.f)	// (unless the player set one)
 			config::VrHudW.override(prof.hudW);
 		if (netplay)
@@ -762,7 +782,8 @@ static void snapNear2D(rend_context& ctx, const std::vector<PolyParam>& list, u3
 		if (i != pp.first + pp.count)
 			continue;	// not flat, or not on the screen: 3D
 		// one linear scale per side over the whole band, inside the plane's +-0.002
-		const float t = w < hudW ? (w - hudW) / (hudW - SnapMinW) : (w - hudW) / (SnapMaxW - hudW);
+		const float spreadW = prof != nullptr && prof->snapSpreadW > 0.f ? prof->snapSpreadW : SnapMaxW;	// tcvr
+		const float t = w < hudW ? (w - hudW) / (hudW - SnapMinW) : (w - hudW) / (spreadW - hudW);
 		const float snapped = hudW + 0.0015f * std::clamp(t, -1.f, 1.f);
 		for (u32 j = pp.first; j < pp.first + pp.count; j++)
 			ctx.verts[j].z = 1.f / snapped;
@@ -952,7 +973,8 @@ static void place2DLayers(rend_context& ctx, const std::vector<PolyParam>& list,
 		const char *how;
 		if (w < hudDepth)
 		{
-			const float t = w < hudW ? (w - hudW) / (hudW - SnapMinW) : (w - hudW) / (SnapMaxW - hudW);
+			const float spreadW = prof != nullptr && prof->snapSpreadW > 0.f ? prof->snapSpreadW : SnapMaxW;	// tcvr
+		const float t = w < hudW ? (w - hudW) / (hudW - SnapMinW) : (w - hudW) / (spreadW - hudW);
 			const float snapped = hudW + 0.0015f * std::clamp(t, -1.f, 1.f);
 			for (u32 j = pp.first; j < pp.first + pp.count; j++)
 				ctx.verts[j].z = 1.f / snapped;
@@ -1666,7 +1688,7 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		// not just under its centre: the game's translucent pass is depth-sorted, the ISP depth
 		// mode isn't honoured there, so anything nearer inside its footprint would cut it. A small
 		// mark (the centre dot) is still at its target's own depth.
-		float z = sceneZAt(ctx, pass, previousPass, centre, maxHudW * 2.f);
+		float z = sceneZAt(ctx, pass, previousPass, centre, maxHudW + 1.f);
 		{
 			const glm::vec2 half = (hi - lo) * 0.5f * scale * area;
 			constexpr int Grid = 7;
@@ -1674,7 +1696,7 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 				for (int gx = 0; gx < Grid; gx++)
 				{
 					const glm::vec2 p = centre + half * glm::vec2(gx * 2.f / (Grid - 1) - 1.f, gy * 2.f / (Grid - 1) - 1.f);
-					z = std::max(z, sceneZAt(ctx, pass, previousPass, p, maxHudW * 2.f));
+					z = std::max(z, sceneZAt(ctx, pass, previousPass, p, maxHudW + 1.f));
 				}
 		}
 		if (z <= 0.f)
@@ -1687,6 +1709,32 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		{
 			ctx.verts[i].x = c.x + (ctx.verts[i].x - c.x) * scale;
 			ctx.verts[i].y = c.y + (ctx.verts[i].y - c.y) * scale;
+		}
+		// a thinner outline: the inner points (nearer the centre than halfway between the
+		// innermost and outermost) moved out, keeping `border` of the thickness
+		const GameProfile::Reticle *mark = matchReticle(ctx, pp);
+		if (mark != nullptr && mark->border < 1.f)
+		{
+			float inner = 1e30f, outer = 0.f;
+			for (u32 i = pp.first; i < pp.first + pp.count; i++)
+			{
+				const float d = glm::length(glm::vec2(ctx.verts[i].x, ctx.verts[i].y) - c);
+				inner = std::min(inner, d);
+				outer = std::max(outer, d);
+			}
+			if (inner > 0.5f && outer > inner)
+			{
+				const float wanted = outer - (outer - inner) * mark->border;
+				for (u32 i = pp.first; i < pp.first + pp.count; i++)
+				{
+					const glm::vec2 d = glm::vec2(ctx.verts[i].x, ctx.verts[i].y) - c;
+					if (glm::length(d) < (inner + outer) * 0.5f)
+					{
+						ctx.verts[i].x = c.x + d.x * (wanted / inner);
+						ctx.verts[i].y = c.y + d.y * (wanted / inner);
+					}
+				}
+			}
 		}
 		pp.isp.DepthMode = 7;	// always
 		pp.isp.ZWriteDis = 1;
