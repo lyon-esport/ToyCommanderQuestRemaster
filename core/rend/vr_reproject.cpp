@@ -242,6 +242,11 @@ struct GameProfile
 	// tcvr: snap every flat on-screen layer up to snapMaxW, whatever its W (no step test):
 	// for a game whose 3D never comes near the band (Toy Commander: HUD at 1.002-1.124, 3D from ~13)
 	bool snapAnyW = false;
+	// tcvr: the textures (VRAM addresses) of the game's 2D aiming marks: each is put at the depth
+	// of the 3D scene under its centre instead of on the 2D plane, so it sits on what it aims at
+	// from any eye position (a mark on a plane at another depth slides off its target when the
+	// head moves, and doubles in stereo).
+	u32 reticleTextures[8] {};
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
 	// headset's vertex shader pins every vertex near it onto the 2D plane.
@@ -396,6 +401,9 @@ static std::vector<GameProfile> makeProfiles()
 	// with a band up to 2.0 they were 0.00016 apart and the panels covered the needles)
 	p.snapMaxW = 1.15f;
 	p.snapAnyW = true;
+	// The gun sight: a ring (0x510f40, 64 px) and its centre dot (0x5063a0, 16 px), TR at W 1.111.
+	p.reticleTextures[0] = 0x510f40;
+	p.reticleTextures[1] = 0x5063a0;
 	list.push_back(p);
 	return list;
 }
@@ -891,6 +899,16 @@ static void place2DLayers(rend_context& ctx, const std::vector<PolyParam>& list,
 		}
 		if (i != pp.first + pp.count)
 			continue;
+		// tcvr: an aiming mark placeReticles put into the scene stays where it is
+		if (prof != nullptr && prof->reticleTextures[0] != 0)
+		{
+			const u32 tex = pp.tcw.TexAddr << 3;
+			bool reticle = false;
+			for (u32 t : prof->reticleTextures)
+				reticle = reticle || (t != 0 && t == tex);
+			if (reticle)
+				continue;
+		}
 		const bool onTop = pp.isp.DepthMode == 7 && w < SnapMinW && onScreen;
 		const bool sprite = aligned && texelForPixel(ctx, pp);
 		if (!sprite && !onTop)
@@ -1504,6 +1522,98 @@ static void clipFarOut(rend_context& ctx, std::vector<PolyParam>& list, u32 from
 	}
 }
 
+// tcvr: the 3D scene's depth (as the TA's z = 1/W, the nearest) at a screen point, from this
+// pass's opaque and punch-through strips (still vertex strips here), or 0 when nothing 3D is
+// there. 1/W is linear in screen space, so the barycentric blend of the corners' z is exact.
+static float sceneZAt(const rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass, glm::vec2 p,
+		float minW)
+{
+	float best = 0.f;
+	auto scan = [&](const std::vector<PolyParam>& list, u32 from, u32 to) {
+		for (u32 n = from; n < to && n < list.size(); n++)
+		{
+			const PolyParam& pp = list[n];
+			if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
+				continue;
+			for (u32 i = pp.first; i + 2 < pp.first + pp.count; i++)
+			{
+				const Vertex& a = ctx.verts[i];
+				const Vertex& b = ctx.verts[i + 1];
+				const Vertex& c = ctx.verts[i + 2];
+				// only 3D: the 2D layers and the far background (W ~1e11) aren't targets
+				const float zs[3] { a.z, b.z, c.z };
+				bool ok = true;
+				for (float z : zs)
+					ok = ok && z > 1e-6f && std::isfinite(z) && 1.f / z > minW;
+				if (!ok)
+					continue;
+				const float d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+				if (std::abs(d) < 1e-6f)
+					continue;
+				const float l1 = ((b.y - c.y) * (p.x - c.x) + (c.x - b.x) * (p.y - c.y)) / d;
+				const float l2 = ((c.y - a.y) * (p.x - c.x) + (a.x - c.x) * (p.y - c.y)) / d;
+				const float l3 = 1.f - l1 - l2;
+				if (l1 < 0.f || l2 < 0.f || l3 < 0.f)
+					continue;
+				best = std::max(best, l1 * a.z + l2 * b.z + l3 * c.z);
+			}
+		}
+	};
+	scan(ctx.global_param_op, std::max(previousPass.op_count, 1u), pass.op_count);
+	scan(ctx.global_param_pt, previousPass.pt_count, pass.pt_count);
+	return best;
+}
+
+// tcvr: the profile's aiming marks to the depth of what is under them (see reticleTextures).
+// Nothing 3D under one (the sky): far away, at W 3000, where it is near enough a direction.
+// Also logs, once per texture, every other flat sprite near the middle of the screen: that is
+// how the other vehicles' marks are found.
+static void placeReticles(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass, float maxHudW)
+{
+	const GameProfile *prof = activeProfile;
+	if (prof == nullptr || prof->reticleTextures[0] == 0)
+		return;
+	static std::vector<u32> logged;
+	auto& list = ctx.global_param_tr;
+	for (u32 n = previousPass.tr_count; n < pass.tr_count && n < list.size(); n++)
+	{
+		const PolyParam& pp = list[n];
+		if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
+			continue;
+		const float z0 = ctx.verts[pp.first].z;
+		if (!(z0 > 0.f) || 1.f / z0 > maxHudW)
+			continue;	// not a 2D layer
+		const u32 tex = pp.tcw.TexAddr << 3;
+		glm::vec2 lo(1e30f), hi(-1e30f);
+		for (u32 i = pp.first; i < pp.first + pp.count; i++)
+		{
+			lo = glm::min(lo, glm::vec2(ctx.verts[i].x, ctx.verts[i].y));
+			hi = glm::max(hi, glm::vec2(ctx.verts[i].x, ctx.verts[i].y));
+		}
+		const glm::vec2 centre = (lo + hi) * 0.5f;
+		bool reticle = false;
+		for (u32 t : prof->reticleTextures)
+			reticle = reticle || (t != 0 && t == tex);
+		if (!reticle)
+		{
+			if (centre.x > 120.f && centre.x < 520.f && centre.y > 80.f && centre.y < 420.f
+					&& std::find(logged.begin(), logged.end(), tex) == logged.end() && logged.size() < 64)
+			{
+				logged.push_back(tex);
+				NOTICE_LOG(RENDERER, "VR: 2D sprite near the middle: tex %06x at %.0f,%.0f..%.0f,%.0f W %.3f",
+						tex, lo.x, lo.y, hi.x, hi.y, 1.f / z0);
+			}
+			continue;
+		}
+		float z = sceneZAt(ctx, pass, previousPass, centre, maxHudW * 2.f);
+		if (z <= 0.f)
+			z = 1.f / 3000.f;
+		z *= 1.02f;		// a hair in front of the surface, not into it
+		for (u32 i = pp.first; i < pp.first + pp.count; i++)
+			ctx.verts[i].z = z;
+	}
+}
+
 void dropShotMarker(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass)
 {
 	// (Naomi 2 polygons are still in model space here, and aren't reprojected anyway)
@@ -1530,6 +1640,8 @@ void dropShotMarker(rend_context& ctx, const RenderPass& pass, const RenderPass&
 	}
 	if (!snapFlatScreen(ctx, pass, previousPass, hudW))
 	{
+		// tcvr: aiming marks into the scene first (snapNear2D leaves them alone then)
+		placeReticles(ctx, pass, previousPass, activeProfile != nullptr ? activeProfile->snapMaxW : 1.05f);
 		snapNear2D(ctx, ctx.global_param_op, std::max(previousPass.op_count, 1u), pass.op_count, hudW, fbWidth, fbHeight);
 		snapNear2D(ctx, ctx.global_param_pt, previousPass.pt_count, pass.pt_count, hudW, fbWidth, fbHeight);
 		snapNear2D(ctx, ctx.global_param_tr, previousPass.tr_count, pass.tr_count, hudW, fbWidth, fbHeight);
