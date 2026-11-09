@@ -43,6 +43,8 @@
 #include "input/gamepad.h"		// tcvr: DC_BTN_*, for the gamepad mode
 #include "input/gamepad_device.h"	// tcvr: kcode, joyx/joyy, lt/rt
 #include "hw/maple/maple_cfg.h"	// tcvr: MDT_LightGun
+#include "hw/sh4/sh4_mem.h"		// tcvr: mem_b (RAM dump)
+#include "hw/pvr/pvr_mem.h"		// tcvr: vram (RAM dump)
 #include "cfg/option.h"
 #include "cfg/cfg.h"
 #include "stdclass.h"
@@ -1842,6 +1844,25 @@ static void ringCapture(GLuint fbo, int width, int height, bool gameFrame)
 void captureIfRequested(GLuint fbo, int width, int height)
 {
 	const std::string& dir = debugDir();
+	// tcvr: "touch files/ram.request": the 16 MB of main RAM to files/ram.bin and the 8 MB
+	// of VRAM to files/vram.bin, as they are now (reverse engineering: camera, culling).
+	{
+		const std::string ramRequest = dir + "/ram.request";
+		if (file_exists(ramRequest))
+		{
+			nowide::remove(ramRequest.c_str());
+			auto dump = [&](RamRegion& mem, size_t size, const char *name) {
+				if (FILE *f = fopen((dir + "/" + name).c_str(), "wb"))
+				{
+					fwrite(&mem[0], 1, size, f);
+					fclose(f);
+				}
+			};
+			dump(mem_b, RAM_SIZE, "ram.bin");
+			dump(vram, VRAM_SIZE, "vram.bin");
+			NOTICE_LOG(RENDERER, "XR: RAM and VRAM dumped to %s (game %s)", dir.c_str(), settings.content.gameId.c_str());
+		}
+	}
 	static bool shotArmed;
 	static u32 armedSerial;
 	static int shotFrame = -1;
