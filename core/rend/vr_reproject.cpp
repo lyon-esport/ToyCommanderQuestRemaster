@@ -391,7 +391,10 @@ static std::vector<GameProfile> makeProfiles()
 	// Its HUD is drawn flat at W 1.002, 1.111 and 1.124 (gauges, needles, fuel level; measured in
 	// the kitchen), its 3D from W ~13 on: every flat layer up to 2.0 goes on the 2D plane, so the
 	// gauges stay together and fixed instead of floating as 3D in front of the eyes.
-	p.snapMaxW = 2.f;
+	// (a tight band: the snapped layers keep their order spread over +-0.0015 of the plane, so the
+	// needles (OP, W 1.111) stay in front of the translucent gauge panels (W 1.002) drawn after them;
+	// with a band up to 2.0 they were 0.00016 apart and the panels covered the needles)
+	p.snapMaxW = 1.15f;
 	p.snapAnyW = true;
 	list.push_back(p);
 	return list;
