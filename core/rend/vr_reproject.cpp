@@ -69,6 +69,11 @@ static u32 viewRecordAddr;
 // their own, 0x8C0D21DC, focal ~595, not the missions' 0x8C0D5910); when it points to a smaller
 // one (a mission sets its radar view last), viewRecordAddr is.
 static u32 activeViewPtrAddr;
+// tcvr: the last frame was a menu screen: it had a flat full-screen backdrop far away (W >= 1e5).
+// Set per pass by noteMenuBackdrop. The game switches the view in use while it builds a frame
+// (both its mission view and its menu view are full screen), so the pointer alone can't tell.
+static std::atomic<bool> menuFrame;
+static u32 menuViewRecord;		// the last full-screen view other than the mission's seen in use
 
 // The game's focal length in DC pixels, per axis: viewport scale times projection scale.
 static glm::vec2 readGameFocal()
@@ -86,35 +91,21 @@ static glm::vec2 readGameFocal()
 		glm::vec2 focal;
 		if (activeViewPtrAddr != 0)
 		{
-			// The record in use, as the candidate; switched to only once it has been the candidate
-			// for ~40 reads in a row (several frames): the pointer may change while the game builds
-			// a frame, and a camera flipping between frames shook the whole scene.
-			static u32 chosen, candidate;
-			static int seen;
-			u32 now = viewRecordAddr;
 			const u32 ptr = ReadMem32_nommu(0x8C000000u + activeViewPtrAddr);
-			if ((ptr & 0xFF000000u) == 0x8C000000u && (ptr & 0x00FFFFFFu) < RAM_SIZE - 64 && fromRecord(ptr & 0x00FFFFFFu, focal))
-				now = ptr & 0x00FFFFFFu;
-			if (now == chosen)
-				seen = 0;
-			else if (now == candidate)
+			const u32 off = ptr & 0x00FFFFFFu;
+			if ((ptr & 0xFF000000u) == 0x8C000000u && off < RAM_SIZE - 64 && off != viewRecordAddr && fromRecord(off, focal)
+					&& off != menuViewRecord)
 			{
-				if (++seen >= 40 || chosen == 0)
-				{
-					NOTICE_LOG(RENDERER, "VR: camera view record %06x -> %06x", chosen, now);
-					chosen = now;
-					seen = 0;
-				}
+				NOTICE_LOG(RENDERER, "VR: menu view record %06x (focal %.0f)", off, focal.y);
+				menuViewRecord = off;
 			}
-			else
+			if (menuFrame)
 			{
-				candidate = now;
-				seen = chosen == 0 ? 40 : 1;
-				if (chosen == 0)
-					chosen = now;
+				// a menu: its own view, else the stock framing (as at the first start)
+				if (menuViewRecord != 0 && fromRecord(menuViewRecord, focal))
+					return focal;
+				return glm::vec2(config::VrFocal);
 			}
-			if (chosen != 0 && fromRecord(chosen, focal))
-				return focal;
 		}
 		if (fromRecord(viewRecordAddr, focal))
 			return focal;
@@ -1929,6 +1920,38 @@ static bool flattenMenu(rend_context& ctx, const RenderPass& pass, const RenderP
 	return true;
 }
 
+// tcvr: is this a menu frame? (see menuFrame) A flat opaque polygon filling the screen far away,
+// past the background plane (OP 0, which every frame has).
+static void noteMenuBackdrop(const rend_context& ctx, const RenderPass& pass, const RenderPass& prev, int fbWidth, int fbHeight)
+{
+	if (activeViewPtrAddr == 0)
+		return;
+	bool found = false;
+	const auto& list = ctx.global_param_op;
+	for (u32 n = std::max(prev.op_count, 1u); n < pass.op_count && n < list.size() && !found; n++)
+	{
+		const PolyParam& pp = list[n];
+		if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
+			continue;
+		const float z = ctx.verts[pp.first].z;
+		if (!(z > 0.f) || 1.f / z < 1e5f || 1.f / z > 1e9f)
+			continue;
+		glm::vec2 lo(1e30f), hi(-1e30f);
+		bool flat = true;
+		for (u32 i = pp.first; i < pp.first + pp.count; i++)
+		{
+			const Vertex& v = ctx.verts[i];
+			flat = flat && std::abs(v.z - z) <= z * 1e-5f;
+			lo = glm::min(lo, glm::vec2(v.x, v.y));
+			hi = glm::max(hi, glm::vec2(v.x, v.y));
+		}
+		found = flat && lo.x <= 1.f && lo.y <= 1.f && hi.x >= fbWidth - 1.f && hi.y >= fbHeight - 1.f;
+	}
+	if (found != menuFrame)
+		NOTICE_LOG(RENDERER, "VR: %s frames", found ? "menu (far backdrop)" : "game");
+	menuFrame = found;
+}
+
 void dropShotMarker(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass)
 {
 	// (Naomi 2 polygons are still in model space here, and aren't reprojected anyway)
@@ -1944,6 +1967,7 @@ void dropShotMarker(rend_context& ctx, const RenderPass& pass, const RenderPass&
 		logOverlayCensus(ctx, pass, previousPass, hudW);
 	int fbWidth, fbHeight;
 	getPvrFramebufferSize(ctx, fbWidth, fbHeight);
+	noteMenuBackdrop(ctx, pass, previousPass, fbWidth, fbHeight);	// tcvr
 	// The letterbox first: only what the game drew at the plane's W, as the shader used to
 	// (a black text shadow on a snapped layer must stay). The first opaque polygon is the
 	// background plane.
