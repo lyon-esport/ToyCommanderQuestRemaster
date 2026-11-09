@@ -52,3 +52,6 @@ Every polygon of a frame: `touch files/capture.request` -> `files/polys.txt` (W 
 - 3D geometry: W from ~12.9 up (near plane 10). Nothing 3D between 1 and 12.
 - hotd2-vr only snapped flat layers up to W 1.05 and on 0.01 steps -> 1.111/1.124 were rebuilt as 3D right in front
   of the eyes (gauges misaligned, moving with the head). Profile: `snapMaxW = 2.0`, `snapAnyW = true`.
+- Aiming marks (2D sprites; profile `reticles`, placed at the depth of the 3D under them):
+  gun ring tex `0x510f40` (64 px, TR), centre dot `0x5063a0` (16 px, TR), both scaled 1/2.537 back to stock size;
+  target-lock green square tex `0x6a91f0` (OP, 16-vertex outline, ~22 px, W 1.000, colour 00ff00), scale 1.

@@ -246,9 +246,11 @@ struct GameProfile
 	// of the 3D scene under its centre instead of on the 2D plane, so it sits on what it aims at
 	// from any eye position (a mark on a plane at another depth slides off its target when the
 	// head moves, and doubles in stereo).
-	u32 reticleTextures[8] {};
-	// tcvr: their size, as drawn by the widened game, times this: back to their stock angle
-	float reticleScale = 1.f;
+	// Each with a size factor around its centre: a fixed-size sprite, drawn as many pixels as
+	// stock by the widened game, goes back to its stock angle with the widening's inverse; a mark
+	// the game sizes to its target keeps 1. (Any of the opaque, punch-through or translucent lists.)
+	struct Reticle { u32 tex = 0; float scale = 1.f; };
+	Reticle reticles[8] {};
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
 	// headset's vertex shader pins every vertex near it onto the 2D plane.
@@ -404,11 +406,13 @@ static std::vector<GameProfile> makeProfiles()
 	p.snapMaxW = 1.15f;
 	p.snapAnyW = true;
 	// The gun sight: a ring (0x510f40, 64 px) and its centre dot (0x5063a0, 16 px), TR at W 1.111.
-	p.reticleTextures[0] = 0x510f40;
-	p.reticleTextures[1] = 0x5063a0;
 	// (the game draws them as many pixels as stock, in a view 2.54 times as wide: tan(49.44 deg) /
 	// tan(24.72 deg), see the fovPatch)
-	p.reticleScale = 1.f / 2.537f;
+	p.reticles[0] = { 0x510f40, 1.f / 2.537f };
+	p.reticles[1] = { 0x5063a0, 1.f / 2.537f };
+	// The target lock: a green square outline around the locked target (OP, 16 verts, tex
+	// 0x6a91f0, W 1.000), about 22 px. Kept at the game's size for now (it may follow the target's).
+	p.reticles[2] = { 0x6a91f0, 1.f };
 	list.push_back(p);
 	return list;
 }
@@ -905,12 +909,12 @@ static void place2DLayers(rend_context& ctx, const std::vector<PolyParam>& list,
 		if (i != pp.first + pp.count)
 			continue;
 		// tcvr: an aiming mark placeReticles put into the scene stays where it is
-		if (prof != nullptr && prof->reticleTextures[0] != 0)
+		if (prof != nullptr && prof->reticles[0].tex != 0)
 		{
 			const u32 tex = pp.tcw.TexAddr << 3;
 			bool reticle = false;
-			for (u32 t : prof->reticleTextures)
-				reticle = reticle || (t != 0 && t == tex);
+			for (const auto& r : prof->reticles)
+				reticle = reticle || (r.tex != 0 && r.tex == tex);
 			if (reticle)
 				continue;
 		}
@@ -1569,20 +1573,25 @@ static float sceneZAt(const rend_context& ctx, const RenderPass& pass, const Ren
 	return best;
 }
 
-// tcvr: the profile's aiming marks to the depth of what is under them (see reticleTextures).
+// tcvr: the profile's aiming marks to the depth of what is under them (see GameProfile::reticles).
 // Nothing 3D under one (the sky): far away, at W 3000, where it is near enough a direction.
 // Also logs, once per texture, every other flat sprite near the middle of the screen: that is
 // how the other vehicles' marks are found.
 static void placeReticles(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass, float maxHudW)
 {
 	const GameProfile *prof = activeProfile;
-	if (prof == nullptr || prof->reticleTextures[0] == 0)
+	if (prof == nullptr || prof->reticles[0].tex == 0)
 		return;
 	static std::vector<u32> logged;
-	auto& list = ctx.global_param_tr;
-	for (u32 n = previousPass.tr_count; n < pass.tr_count && n < list.size(); n++)
+	const std::pair<std::vector<PolyParam>*, std::pair<u32, u32>> lists[] {
+		{ &ctx.global_param_op, { std::max(previousPass.op_count, 1u), pass.op_count } },
+		{ &ctx.global_param_pt, { previousPass.pt_count, pass.pt_count } },
+		{ &ctx.global_param_tr, { previousPass.tr_count, pass.tr_count } },
+	};
+	for (const auto& [listPtr, range] : lists)
+	for (u32 n = range.first; n < range.second && n < listPtr->size(); n++)
 	{
-		PolyParam& pp = list[n];	// (tcvr: its ISP is changed below)
+		PolyParam& pp = (*listPtr)[n];	// (its ISP is changed below)
 		if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
 			continue;
 		const float z0 = ctx.verts[pp.first].z;
@@ -1596,10 +1605,11 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 			hi = glm::max(hi, glm::vec2(ctx.verts[i].x, ctx.verts[i].y));
 		}
 		const glm::vec2 centre = (lo + hi) * 0.5f;
-		bool reticle = false;
-		for (u32 t : prof->reticleTextures)
-			reticle = reticle || (t != 0 && t == tex);
-		if (!reticle)
+		float scale = 0.f;	// (0: not one of them)
+		for (const auto& r : prof->reticles)
+			if (r.tex != 0 && r.tex == tex)
+				scale = r.scale;
+		if (scale <= 0.f)
 		{
 			if (centre.x > 120.f && centre.x < 520.f && centre.y > 80.f && centre.y < 420.f
 					&& std::find(logged.begin(), logged.end(), tex) == logged.end() && logged.size() < 64)
@@ -1616,7 +1626,7 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		// mark (the centre dot) is still at its target's own depth.
 		float z = sceneZAt(ctx, pass, previousPass, centre, maxHudW * 2.f);
 		{
-			const glm::vec2 half = (hi - lo) * 0.5f * prof->reticleScale;
+			const glm::vec2 half = (hi - lo) * 0.5f * scale;
 			constexpr int Grid = 7;
 			for (int gy = 0; gy < Grid; gy++)
 				for (int gx = 0; gx < Grid; gx++)
@@ -1633,8 +1643,8 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		const glm::vec2 c = centre;
 		for (u32 i = pp.first; i < pp.first + pp.count; i++)
 		{
-			ctx.verts[i].x = c.x + (ctx.verts[i].x - c.x) * prof->reticleScale;
-			ctx.verts[i].y = c.y + (ctx.verts[i].y - c.y) * prof->reticleScale;
+			ctx.verts[i].x = c.x + (ctx.verts[i].x - c.x) * scale;
+			ctx.verts[i].y = c.y + (ctx.verts[i].y - c.y) * scale;
 		}
 		pp.isp.DepthMode = 7;	// always
 		pp.isp.ZWriteDis = 1;
