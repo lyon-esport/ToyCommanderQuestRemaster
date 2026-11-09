@@ -249,7 +249,9 @@ struct GameProfile
 	// Each with a size factor around its centre: a fixed-size sprite, drawn as many pixels as
 	// stock by the widened game, goes back to its stock angle with the widening's inverse; a mark
 	// the game sizes to its target keeps 1. (Any of the opaque, punch-through or translucent lists.)
-	struct Reticle { u32 tex = 0; float scale = 1.f; };
+	// posScale: a mark the game places with its stock projection (not the widened one) has its
+	// offset from the screen centre multiplied by this (the widening's inverse).
+	struct Reticle { u32 tex = 0; float scale = 1.f; float posScale = 1.f; };
 	Reticle reticles[8] {};
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
@@ -412,7 +414,9 @@ static std::vector<GameProfile> makeProfiles()
 	p.reticles[1] = { 0x5063a0, 1.f / 2.537f };
 	// The target lock: a green square outline around the locked target (OP, 16 verts, tex
 	// 0x6a91f0, W 1.000), about 22 px. Kept at the game's size for now (it may follow the target's).
-	p.reticles[2] = { 0x6a91f0, 1.f };
+	// Placed with the stock projection, it seems (off its target, more so away from the centre):
+	// its offset from the centre is scaled back to the widened view.
+	p.reticles[2] = { 0x6a91f0, 1.f, 1.f / 2.537f };
 	list.push_back(p);
 	return list;
 }
@@ -1577,7 +1581,8 @@ static float sceneZAt(const rend_context& ctx, const RenderPass& pass, const Ren
 // Nothing 3D under one (the sky): far away, at W 3000, where it is near enough a direction.
 // Also logs, once per texture, every other flat sprite near the middle of the screen: that is
 // how the other vehicles' marks are found.
-static void placeReticles(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass, float maxHudW)
+static void placeReticles(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass, float maxHudW,
+		glm::vec2 screenCentre)
 {
 	const GameProfile *prof = activeProfile;
 	if (prof == nullptr || prof->reticles[0].tex == 0)
@@ -1604,11 +1609,26 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 			lo = glm::min(lo, glm::vec2(ctx.verts[i].x, ctx.verts[i].y));
 			hi = glm::max(hi, glm::vec2(ctx.verts[i].x, ctx.verts[i].y));
 		}
-		const glm::vec2 centre = (lo + hi) * 0.5f;
+		glm::vec2 centre = (lo + hi) * 0.5f;
 		float scale = 0.f;	// (0: not one of them)
+		float posScale = 1.f;
 		for (const auto& r : prof->reticles)
 			if (r.tex != 0 && r.tex == tex)
-				scale = r.scale;
+				scale = r.scale, posScale = r.posScale;
+		if (scale > 0.f && posScale != 1.f)
+		{
+			// placed by the game with its stock projection: its offset from the screen centre
+			// to the widened view's
+			const glm::vec2 moved = screenCentre + (centre - screenCentre) * posScale;
+			for (u32 i = pp.first; i < pp.first + pp.count; i++)
+			{
+				ctx.verts[i].x += moved.x - centre.x;
+				ctx.verts[i].y += moved.y - centre.y;
+			}
+			lo += moved - centre;
+			hi += moved - centre;
+			centre = moved;
+		}
 		if (scale <= 0.f)
 		{
 			if (centre.x > 120.f && centre.x < 520.f && centre.y > 80.f && centre.y < 420.f
@@ -1680,7 +1700,8 @@ void dropShotMarker(rend_context& ctx, const RenderPass& pass, const RenderPass&
 	if (!snapFlatScreen(ctx, pass, previousPass, hudW))
 	{
 		// tcvr: aiming marks into the scene first (snapNear2D leaves them alone then)
-		placeReticles(ctx, pass, previousPass, activeProfile != nullptr ? activeProfile->snapMaxW : 1.05f);
+		placeReticles(ctx, pass, previousPass, activeProfile != nullptr ? activeProfile->snapMaxW : 1.05f,
+				glm::vec2(fbWidth * 0.5f, fbHeight * 0.5f));
 		snapNear2D(ctx, ctx.global_param_op, std::max(previousPass.op_count, 1u), pass.op_count, hudW, fbWidth, fbHeight);
 		snapNear2D(ctx, ctx.global_param_pt, previousPass.pt_count, pass.pt_count, hudW, fbWidth, fbHeight);
 		snapNear2D(ctx, ctx.global_param_tr, previousPass.tr_count, pass.tr_count, hudW, fbWidth, fbHeight);
