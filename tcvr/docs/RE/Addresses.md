@@ -4,7 +4,7 @@ Disc: Toy Commander (Europe) (En,Fr,De,Es). Main executable: `1ST_READ.BIN` (ext
 
 | Address | Size/type | Meaning | How verified | Date |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| Game ID | string | `MK-5102050` (Toy Commander EU) = `settings.content.gameId`; key for the GameProfile in core/rend/vr_reproject.cpp | logcat "Game ID is [MK-5102050]" | 2026-11-09 |
 
 ## Targets (in order)
 1. Projection / FOV / culling frustum (to widen the view for VR)

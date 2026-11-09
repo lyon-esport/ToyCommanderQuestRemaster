@@ -40,6 +40,9 @@
 #include "hw/pvr/Renderer_if.h"
 #include "hw/pvr/ta_ctx.h"
 #include "input/udp_lightgun.h"
+#include "input/gamepad.h"		// tcvr: DC_BTN_*, for the gamepad mode
+#include "input/gamepad_device.h"	// tcvr: kcode, joyx/joyy, lt/rt
+#include "hw/maple/maple_cfg.h"	// tcvr: MDT_LightGun
 #include "cfg/option.h"
 #include "cfg/cfg.h"
 #include "stdclass.h"
@@ -98,6 +101,8 @@ XrSpace aimSpaces[2];
 XrSpace gripSpaces[2];		// the hand on the handle (grip pose): where the gun's grip goes
 XrActionSet actionSet = XR_NULL_HANDLE;
 XrAction aimAction, handAction, triggerAction, startAction, skipAction, recenterAction, laserAction, hapticAction, stickAction, gripAction;
+// tcvr: the gamepad mode's own buttons (A, B on the right; X, Y on the left; stick clicks)
+XrAction padAAction, padBAction, padXAction, padYAction, stickClickAction;
 PFN_xrRequestDisplayRefreshRateFB requestRefreshRate;
 PFN_xrPerfSettingsSetPerformanceLevelEXT setPerformanceLevel;
 
@@ -221,8 +226,14 @@ bool initActions()
 			|| !createAction(recenterAction, "recenter", "Recenter", XR_ACTION_TYPE_BOOLEAN_INPUT)
 			|| !createAction(laserAction, "laser", "Laser on/off", XR_ACTION_TYPE_BOOLEAN_INPUT)
 			|| !createAction(hapticAction, "recoil", "Recoil", XR_ACTION_TYPE_VIBRATION_OUTPUT, true)
-			|| !createAction(stickAction, "stick", "Menus (D-pad), world size", XR_ACTION_TYPE_VECTOR2F_INPUT)
-			|| !createAction(gripAction, "grip", "Rack the slide; hold for world size", XR_ACTION_TYPE_FLOAT_INPUT, true))
+			// tcvr: per hand, so the gamepad mode reads each stick (unchanged for the gun: both together)
+			|| !createAction(stickAction, "stick", "Menus (D-pad), world size", XR_ACTION_TYPE_VECTOR2F_INPUT, true)
+			|| !createAction(gripAction, "grip", "Rack the slide; hold for world size", XR_ACTION_TYPE_FLOAT_INPUT, true)
+			|| !createAction(padAAction, "pad_a", "Pad A", XR_ACTION_TYPE_BOOLEAN_INPUT)
+			|| !createAction(padBAction, "pad_b", "Pad B", XR_ACTION_TYPE_BOOLEAN_INPUT)
+			|| !createAction(padXAction, "pad_x", "Pad X", XR_ACTION_TYPE_BOOLEAN_INPUT)
+			|| !createAction(padYAction, "pad_y", "Pad Y", XR_ACTION_TYPE_BOOLEAN_INPUT)
+			|| !createAction(stickClickAction, "stick_click", "Stick click", XR_ACTION_TYPE_BOOLEAN_INPUT, true))
 		return false;
 	// Either trigger fires; shooting away from the screen reloads. Start (pauses): A. The
 	// menu button on the left lets player 2 join (vr.DualWield), else it is player 1's Start
@@ -261,6 +272,13 @@ bool initActions()
 		{ laserAction, "/user/hand/right/input/thumbstick/click" },
 		{ hapticAction, "/user/hand/left/output/haptic" },
 		{ hapticAction, "/user/hand/right/output/haptic" },
+		// tcvr: the gamepad mode (the same inputs, other actions of this set)
+		{ padAAction, "/user/hand/right/input/a/click" },
+		{ padBAction, "/user/hand/right/input/b/click" },
+		{ padXAction, "/user/hand/left/input/x/click" },
+		{ padYAction, "/user/hand/left/input/y/click" },
+		{ stickClickAction, "/user/hand/left/input/thumbstick/click" },
+		{ stickClickAction, "/user/hand/right/input/thumbstick/click" },
 	});
 #ifndef __ANDROID__
 	// PCVR: the other controllers, as near as they come: a Start on each hand (the left one
@@ -1334,10 +1352,113 @@ void updateGun(Gun& g, XrTime time, const XrSpaceLocation *locations, const bool
 	lightgunSet(g.player, pos.x, pos.y, buttons);
 }
 
+// tcvr: the gamepad mode. A game with a Dreamcast controller in port A (no light gun: every
+// game without a gun profile, e.g. Toy Commander) is played with the Quest controllers as a
+// Dreamcast pad: no gun is drawn. Only what changed is written to kcode, so a Bluetooth pad
+// (Flycast's Android input) keeps working next to it.
+bool gamepadMode()
+{
+	return settings.platform.isConsole() && config::MapleMainDevices[0] != MDT_LightGun;
+}
+
+glm::vec2 handStick(int hand)
+{
+	XrActionStateGetInfo info { XR_TYPE_ACTION_STATE_GET_INFO };
+	info.action = stickAction;
+	info.subactionPath = handPaths[hand];
+	XrActionStateVector2f stick { XR_TYPE_ACTION_STATE_VECTOR2F };
+	if (!XR_SUCCEEDED(xrGetActionStateVector2f(session, &info, &stick)) || !stick.isActive)
+		return glm::vec2(0.f);
+	return glm::vec2(stick.currentState.x, stick.currentState.y);
+}
+
+void updateGamepad(XrTime time)
+{
+	static u32 lastButtons;		// DC_* bits we hold down (1 = pressed)
+	static bool padActive, logged, stickClickWas;
+	if (!logged)
+	{
+		logged = true;
+		NOTICE_LOG(INPUT, "XR: gamepad mode for [%s]: left stick = analog, right stick = D-pad, triggers = L/R, "
+				"A B X Y = A B X Y, menu or right stick click = Start, left stick click = recenter",
+				settings.content.gameId.c_str());
+	}
+	u32 buttons = 0;
+	glm::vec2 analog(0.f);
+	float left = 0.f, right = 0.f;
+	bool sync = false;
+	if (focused)
+	{
+		const XrActiveActionSet active { actionSet, XR_NULL_PATH };
+		XrActionsSyncInfo info { XR_TYPE_ACTIONS_SYNC_INFO };
+		info.countActiveActionSets = 1;
+		info.activeActionSets = &active;
+		sync = XR_SUCCEEDED(xrSyncActions(session, &info));
+	}
+	if (sync)
+	{
+		analog = handStick(Left);
+		left = floatAction(triggerAction, Left);
+		right = floatAction(triggerAction, Right);
+		// right stick: the D-pad, 8 ways, with some hysteresis
+		static u32 dpadHeld;
+		const glm::vec2 rs = handStick(Right);
+		auto axis = [&](float v, u32 neg, u32 pos) {
+			const u32 was = dpadHeld & (neg | pos);
+			if (was == pos ? v > 0.4f : v > 0.6f)
+				return pos;
+			if (was == neg ? v < -0.4f : v < -0.6f)
+				return neg;
+			return 0u;
+		};
+		dpadHeld = axis(rs.y, DC_DPAD_DOWN, DC_DPAD_UP) | axis(rs.x, DC_DPAD_LEFT, DC_DPAD_RIGHT);
+		buttons |= dpadHeld;
+		if (boolAction(padAAction)) buttons |= DC_BTN_A;
+		if (boolAction(padBAction)) buttons |= DC_BTN_B;
+		if (boolAction(padXAction)) buttons |= DC_BTN_X;
+		if (boolAction(padYAction)) buttons |= DC_BTN_Y;
+		// Start: the left menu button for now (it opens the VR menu later), or the right stick click
+		if (boolAction(startAction, Left) || boolAction(stickClickAction, Right))
+			buttons |= DC_BTN_START;
+		const bool stickClick = boolAction(stickClickAction, Left);
+		if (stickClick && !stickClickWas)
+			recenterRequested = true;
+		stickClickWas = stickClick;
+	}
+	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
+	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
+	const bool active = sync && (glm::length(analog) > 0.12f || left > 0.02f || right > 0.02f);
+	if (active || padActive)
+	{
+		// (written while in use and once more at rest, so a Bluetooth pad's sticks aren't overwritten)
+		joyx[0] = (s16)std::clamp(dead(analog.x) * 32767.f, -32768.f, 32767.f);
+		joyy[0] = (s16)std::clamp(-dead(analog.y) * 32767.f, -32768.f, 32767.f);
+		lt[0] = (u16)std::clamp(left * 65535.f, 0.f, 65535.f);
+		rt[0] = (u16)std::clamp(right * 65535.f, 0.f, 65535.f);
+	}
+	padActive = active;
+	const u32 changed = buttons ^ lastButtons;
+	for (u32 bit = 1; bit != 0 && bit <= DC_BTN_BITMAPPED_LAST; bit <<= 1)
+		if (changed & bit)
+		{
+			if (buttons & bit)
+				kcode[0] &= ~bit;	// active low
+			else
+				kcode[0] |= bit;
+		}
+	lastButtons = buttons;
+	(void)time;
+}
+
 void updateLightgun(XrTime time)
 {
 	for (Gun& g : guns)
 		g.visible = false;
+	if (gamepadMode())
+	{
+		updateGamepad(time);
+		return;
+	}
 	if (!config::VrXrGun)
 		return;
 	if (newGame.exchange(false))
@@ -1860,6 +1981,7 @@ void term()
 	localSpace = aimSpaces[Left] = aimSpaces[Right] = gripSpaces[Left] = gripSpaces[Right] = XR_NULL_HANDLE;
 	actionSet = XR_NULL_HANDLE;
 	aimAction = handAction = triggerAction = startAction = skipAction = recenterAction = laserAction = hapticAction = stickAction = gripAction = XR_NULL_HANDLE;
+	padAAction = padBAction = padXAction = padYAction = stickClickAction = XR_NULL_HANDLE;
 	requestRefreshRate = nullptr;
 	setPerformanceLevel = nullptr;
 	sessionRunning = focused = drawingEye = viewsLogged = false;
