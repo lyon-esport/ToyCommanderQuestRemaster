@@ -251,6 +251,12 @@ struct GameProfile
 	// tcvr: a flat full-screen picture behind the 3D is put at the stock framing even when it is
 	// stretched (not texel for pixel): Toy Commander's menu backdrops (W 1e6, 640x480).
 	bool stretchedBackdrops = false;
+	// tcvr: menus and cutscenes flat (a frame without the gameplay HUD mark in gameHudBox): all of
+	// it on the 2D plane, its 3D at the stock framing (screen offsets times menuScale: the widening's
+	// factor), its depth order kept. 3D menus rebuilt life size wrapped around the player.
+	bool flatMenus = false;
+	ScreenBox gameHudBox { 0.f, 0.f, 0.f, 0.f };
+	float menuScale = 1.f;
 	// tcvr: the textures (VRAM addresses) of the game's 2D aiming marks: each is put at the depth
 	// of the 3D scene under its centre instead of on the 2D plane, so it sits on what it aims at
 	// from any eye position (a mark on a plane at another depth slides off its target when the
@@ -435,6 +441,11 @@ static std::vector<GameProfile> makeProfiles()
 	// The mission select's blue backdrop: one full-screen picture at W 1e6 behind 3D frames;
 	// in the widened view it wrapped the whole field of view.
 	p.stretchedBackdrops = true;
+	// Menus (title, save select, mission select) are 3D scenes made for a TV: flat on the 2D plane.
+	// In a mission the radar frame is always there: a flat HUD picture at 512,0..640,128.
+	p.flatMenus = true;
+	p.gameHudBox = { 512.f, 0.f, 640.f, 128.f };
+	p.menuScale = 2.537f;
 	p.snapAnyW = true;
 	// The gun sight: a ring (0x510f40, 64 px) and its centre dot (0x5063a0, 16 px), TR at W 1.111.
 	// (the game draws them as many pixels as stock, in a view 2.54 times as wide: tan(49.44 deg) /
@@ -1774,6 +1785,89 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 	}
 }
 
+// tcvr: a menu or cutscene frame (no gameplay HUD mark, see GameProfile::flatMenus) all on the
+// 2D plane: the 3D at the stock framing (screen offsets times menuScale, the widened view's own
+// shrink undone), the flat 2D layers and full-screen backdrops where the game put them; the depth
+// order kept in the plane's +-0.0015 (log of W). True when the frame was one.
+static bool flattenMenu(rend_context& ctx, const RenderPass& pass, const RenderPass& prev, float hudW,
+		int fbWidth, int fbHeight)
+{
+	const GameProfile *prof = activeProfile;
+	if (prof == nullptr || !prof->flatMenus)
+		return false;
+	struct Range { std::vector<PolyParam> *list; u32 from, to; };
+	const Range ranges[] {
+		{ &ctx.global_param_op, std::max(prev.op_count, 1u), pass.op_count },
+		{ &ctx.global_param_pt, prev.pt_count, pass.pt_count },
+		{ &ctx.global_param_tr, prev.tr_count, pass.tr_count },
+	};
+	auto flatPoly = [&](const PolyParam& pp, float& w, glm::vec2& lo, glm::vec2& hi) {
+		const float z = ctx.verts[pp.first].z;
+		w = z > 0.f && std::isfinite(z) ? 1.f / z : 0.f;
+		bool flat = w > 0.f;
+		lo = glm::vec2(1e30f);
+		hi = glm::vec2(-1e30f);
+		for (u32 i = pp.first; i < pp.first + pp.count; i++)
+		{
+			const Vertex& v = ctx.verts[i];
+			flat = flat && std::abs(v.z - z) <= z * 1e-5f;
+			lo = glm::min(lo, glm::vec2(v.x, v.y));
+			hi = glm::max(hi, glm::vec2(v.x, v.y));
+		}
+		return flat;
+	};
+	// the gameplay HUD mark: a flat 2D layer filling the profile's box
+	const ScreenBox& box = prof->gameHudBox;
+	for (const Range& r : ranges)
+		for (u32 n = r.from; n < r.to && n < r.list->size(); n++)
+		{
+			const PolyParam& pp = (*r.list)[n];
+			if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
+				continue;
+			float w;
+			glm::vec2 lo, hi;
+			if (flatPoly(pp, w, lo, hi) && w <= prof->snapMaxW && std::abs(lo.x - box.x0) < 2.f && std::abs(lo.y - box.y0) < 2.f
+					&& std::abs(hi.x - box.x1) < 2.f && std::abs(hi.y - box.y1) < 2.f)
+				return false;	// a mission frame: 3D as usual
+		}
+	const glm::vec2 c(fbWidth * 0.5f, fbHeight * 0.5f);
+	for (const Range& r : ranges)
+		for (u32 n = r.from; n < r.to && n < r.list->size(); n++)
+		{
+			const PolyParam& pp = (*r.list)[n];
+			if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
+				continue;
+			float w;
+			glm::vec2 lo, hi;
+			const bool flat = flatPoly(pp, w, lo, hi);
+			const bool fullScreen = lo.x <= 1.f && lo.y <= 1.f && hi.x >= fbWidth - 1.f && hi.y >= fbHeight - 1.f;
+			// 2D: a flat layer in the 2D band or a full-screen backdrop, drawn in screen pixels
+			const bool twoD = flat && (w <= prof->snapMaxW || fullScreen);
+			for (u32 i = pp.first; i < pp.first + pp.count; i++)
+			{
+				Vertex& v = ctx.verts[i];
+				if (!(v.z > 0.f) || !std::isfinite(v.z) || !std::isfinite(v.x) || !std::isfinite(v.y))
+					continue;
+				const float vw = 1.f / v.z;
+				if (!twoD)
+				{
+					v.x = c.x + (v.x - c.x) * prof->menuScale;
+					v.y = c.y + (v.y - c.y) * prof->menuScale;
+				}
+				// nearer (smaller W) in front: W 1 at the plane, W 1e8 at the back of the band
+				const float t = vw >= 1.f ? std::min(std::log10(vw) / 8.f, 1.f) : std::max(vw - 1.f, -1.f);
+				v.z = 1.f / (hudW + 0.0015f * t);
+			}
+		}
+	static bool logged;
+	if (!logged)
+	{
+		logged = true;
+		NOTICE_LOG(RENDERER, "VR: a menu frame (no gameplay HUD): flat on the 2D plane");
+	}
+	return true;
+}
+
 void dropShotMarker(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass)
 {
 	// (Naomi 2 polygons are still in model space here, and aren't reprojected anyway)
@@ -1798,7 +1892,9 @@ void dropShotMarker(rend_context& ctx, const RenderPass& pass, const RenderPass&
 		hideLetterbox(ctx, ctx.global_param_pt, previousPass.pt_count, pass.pt_count, hudW);
 		hideLetterbox(ctx, ctx.global_param_tr, previousPass.tr_count, pass.tr_count, hudW);
 	}
-	if (!snapFlatScreen(ctx, pass, previousPass, hudW))
+	if (flattenMenu(ctx, pass, previousPass, hudW, fbWidth, fbHeight))	// tcvr
+		;
+	else if (!snapFlatScreen(ctx, pass, previousPass, hudW))
 	{
 		// tcvr: aiming marks into the scene first (snapNear2D leaves them alone then)
 		placeReticles(ctx, pass, previousPass, activeProfile != nullptr ? activeProfile->snapMaxW : 1.05f,
