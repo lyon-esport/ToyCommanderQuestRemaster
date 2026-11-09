@@ -1610,7 +1610,21 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 			}
 			continue;
 		}
+		// In front of the nearest 3D under the whole mark (as it will be drawn: its stock size),
+		// not just under its centre: the game's translucent pass is depth-sorted, the ISP depth
+		// mode isn't honoured there, so anything nearer inside its footprint would cut it. A small
+		// mark (the centre dot) is still at its target's own depth.
 		float z = sceneZAt(ctx, pass, previousPass, centre, maxHudW * 2.f);
+		{
+			const glm::vec2 half = (hi - lo) * 0.5f * prof->reticleScale;
+			constexpr int Grid = 7;
+			for (int gy = 0; gy < Grid; gy++)
+				for (int gx = 0; gx < Grid; gx++)
+				{
+					const glm::vec2 p = centre + half * glm::vec2(gx * 2.f / (Grid - 1) - 1.f, gy * 2.f / (Grid - 1) - 1.f);
+					z = std::max(z, sceneZAt(ctx, pass, previousPass, p, maxHudW * 2.f));
+				}
+		}
 		if (z <= 0.f)
 			z = 1.f / 3000.f;
 		z *= 1.02f;		// a hair in front of the surface, not into it
