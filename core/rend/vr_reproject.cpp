@@ -255,7 +255,9 @@ struct GameProfile
 	// depth: 1 for a ring (nothing inside it may cut it), small for a frame around a target (its
 	// edges lie over the ground in front of the target, much nearer: the mark would sit there,
 	// and look shifted off the target from any eye not at the game camera).
-	struct Reticle { u32 tex = 0; float scale = 1.f; float posScale = 1.f; float area = 1.f; };
+	// Matched by texture, or (tex 0) by vertex colour and count: a texture the game moves around in
+	// VRAM from one load to the next (Toy Commander's lock square) is found by its look instead.
+	struct Reticle { u32 tex = 0; float scale = 1.f; float posScale = 1.f; float area = 1.f; u32 rgba = 0; u32 verts = 0; };
 	Reticle reticles[8] {};
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
@@ -420,12 +422,33 @@ static std::vector<GameProfile> makeProfiles()
 	// 0x6a91f0, W 1.000), about 22 px, at the game's size (user-checked). Projected by the game with
 	// the live (widened) view (0x8C061F60), so its place is right; its depth comes from the middle
 	// 40% only, the target itself, not the ground in front of it under its lower edge.
-	p.reticles[2] = { 0x6a91f0, 1.f, 1.f, 0.4f };
+	// (its texture moves: 0x6a91f0 in one load, 0xacafa8 in another; found by its pure green and 16
+	// vertices instead. Captured: in the game's own frame it is exactly on the locked mouse.)
+	p.reticles[2] = { 0, 1.f, 1.f, 0.4f, 0x00ff00ff, 16 };
 	list.push_back(p);
 	return list;
 }
 static const std::vector<GameProfile> profiles = makeProfiles();
 static const GameProfile *activeProfile;	// the game being played (or none)
+
+// tcvr: the active profile's aiming mark this polygon is (see GameProfile::reticles), or none
+static const GameProfile::Reticle *matchReticle(const rend_context& ctx, const PolyParam& pp)
+{
+	const GameProfile *prof = activeProfile;
+	if (prof == nullptr || pp.count == 0 || pp.first >= ctx.verts.size())
+		return nullptr;
+	const u32 tex = pp.tcw.TexAddr << 3;
+	const u8 *c = ctx.verts[pp.first].col;
+	const u32 rgba = ((u32)c[0] << 24) | ((u32)c[1] << 16) | ((u32)c[2] << 8) | c[3];
+	for (const auto& r : prof->reticles)
+	{
+		if (r.tex != 0 && r.tex == tex)
+			return &r;
+		if (r.tex == 0 && r.rgba != 0 && r.rgba == rgba && (r.verts == 0 || r.verts == pp.count))
+			return &r;
+	}
+	return nullptr;
+}
 
 const hands::Source *gameModelSource()
 {
@@ -917,15 +940,8 @@ static void place2DLayers(rend_context& ctx, const std::vector<PolyParam>& list,
 		if (i != pp.first + pp.count)
 			continue;
 		// tcvr: an aiming mark placeReticles put into the scene stays where it is
-		if (prof != nullptr && prof->reticles[0].tex != 0)
-		{
-			const u32 tex = pp.tcw.TexAddr << 3;
-			bool reticle = false;
-			for (const auto& r : prof->reticles)
-				reticle = reticle || (r.tex != 0 && r.tex == tex);
-			if (reticle)
-				continue;
-		}
+		if (matchReticle(ctx, pp) != nullptr)
+			continue;
 		const bool onTop = pp.isp.DepthMode == 7 && w < SnapMinW && onScreen;
 		const bool sprite = aligned && texelForPixel(ctx, pp);
 		if (!sprite && !onTop)
@@ -1589,7 +1605,7 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		glm::vec2 screenCentre)
 {
 	const GameProfile *prof = activeProfile;
-	if (prof == nullptr || prof->reticles[0].tex == 0)
+	if (prof == nullptr || (prof->reticles[0].tex == 0 && prof->reticles[0].rgba == 0))
 		return;
 	static std::vector<u32> logged;
 	const std::pair<std::vector<PolyParam>*, std::pair<u32, u32>> lists[] {
@@ -1616,9 +1632,8 @@ static void placeReticles(rend_context& ctx, const RenderPass& pass, const Rende
 		glm::vec2 centre = (lo + hi) * 0.5f;
 		float scale = 0.f;	// (0: not one of them)
 		float posScale = 1.f, area = 1.f;
-		for (const auto& r : prof->reticles)
-			if (r.tex != 0 && r.tex == tex)
-				scale = r.scale, posScale = r.posScale, area = r.area;
+		if (const GameProfile::Reticle *r = matchReticle(ctx, pp))
+			scale = r->scale, posScale = r->posScale, area = r->area;
 		if (scale > 0.f && posScale != 1.f)
 		{
 			// placed by the game with its stock projection: its offset from the screen centre

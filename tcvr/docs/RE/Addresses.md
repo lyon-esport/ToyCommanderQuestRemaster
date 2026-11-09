@@ -55,3 +55,6 @@ Every polygon of a frame: `touch files/capture.request` -> `files/polys.txt` (W 
 - Aiming marks (2D sprites; profile `reticles`, placed at the depth of the 3D under them):
   gun ring tex `0x510f40` (64 px, TR), centre dot `0x5063a0` (16 px, TR), both scaled 1/2.537 back to stock size;
   target-lock green square tex `0x6a91f0` (OP, 16-vertex outline, ~22 px, W 1.000, colour 00ff00), scale 1.
+- Lock square: its texture moves between loads (`0x6a91f0`, then `0xacafa8`): matched by colour 00ff00ff + 16 verts.
+  Capture d7_now: in the game's own frame the square is exactly on the locked mouse (square 296..320 x 226..250,
+  mouse polys 293..315 x 235..241). Left on the 2D plane (stock framing) it lands off target -> it must go into 3D.
