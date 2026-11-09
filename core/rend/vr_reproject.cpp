@@ -248,6 +248,9 @@ struct GameProfile
 	float snapSpreadW = 0.f;
 	// tcvr: how far the 2D plane is shown (game units; 0: vr.HudDepth)
 	float hudDepth = 0.f;
+	// tcvr: a flat full-screen picture behind the 3D is put at the stock framing even when it is
+	// stretched (not texel for pixel): Toy Commander's menu backdrops (W 1e6, 640x480).
+	bool stretchedBackdrops = false;
 	// tcvr: the textures (VRAM addresses) of the game's 2D aiming marks: each is put at the depth
 	// of the 3D scene under its centre instead of on the 2D plane, so it sits on what it aims at
 	// from any eye position (a mark on a plane at another depth slides off its target when the
@@ -429,6 +432,9 @@ static std::vector<GameProfile> makeProfiles()
 	// instead of 40: the same angle, farther (user: too close). Still in front of its own vehicle
 	// (W ~110 and up behind the plane).
 	p.hudDepth = 90.f;
+	// The mission select's blue backdrop: one full-screen picture at W 1e6 behind 3D frames;
+	// in the widened view it wrapped the whole field of view.
+	p.stretchedBackdrops = true;
 	p.snapAnyW = true;
 	// The gun sight: a ring (0x510f40, 64 px) and its centre dot (0x5063a0, 16 px), TR at W 1.111.
 	// (the game draws them as many pixels as stock, in a view 2.54 times as wide: tan(49.44 deg) /
@@ -968,7 +974,19 @@ static void place2DLayers(rend_context& ctx, const std::vector<PolyParam>& list,
 			continue;
 		const bool onTop = pp.isp.DepthMode == 7 && w < SnapMinW && onScreen;
 		const bool sprite = aligned && texelForPixel(ctx, pp);
-		if (!sprite && !onTop)
+		// tcvr: a stretched full-screen backdrop behind the 3D (profile stretchedBackdrops)
+		bool backdrop = false;
+		if (prof != nullptr && prof->stretchedBackdrops && w >= hudDepth && onScreen)
+		{
+			glm::vec2 lo(1e30f), hi(-1e30f);
+			for (u32 j = pp.first; j < pp.first + pp.count; j++)
+			{
+				lo = glm::min(lo, glm::vec2(ctx.verts[j].x, ctx.verts[j].y));
+				hi = glm::max(hi, glm::vec2(ctx.verts[j].x, ctx.verts[j].y));
+			}
+			backdrop = lo.x <= 1.f && lo.y <= 1.f && hi.x >= fbWidth - 1.f && hi.y >= fbHeight - 1.f;
+		}
+		if (!sprite && !onTop && !backdrop)
 			continue;
 		const char *how;
 		if (w < hudDepth)
