@@ -168,7 +168,8 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
                     pendingIntentUrl = gameUri.toString();
             }
         }
-        else if (getPackageName().endsWith(".vr")) {
+        // tcvr: the vr build is now com.dreamcast4ever.toycommandervr (no ".vr" suffix any more)
+        else if (getPackageName().endsWith(".vr") || getPackageName().equals("com.dreamcast4ever.toycommandervr")) {
             // hotd2-vr: started from the headset's app library. The Flycast menu can't be
             // shown in the headset, so boot the player's game directly, or show the setup
             // panel when it can't be found (or read) yet.
