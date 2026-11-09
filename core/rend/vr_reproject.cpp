@@ -380,6 +380,11 @@ static std::vector<GameProfile> makeProfiles()
 	p.viewRecordAddr = 0x0D5910;
 	p.fovScale = 2.f;	// (only says "widen": the patch's own factor is fixed)
 	p.fovPatch[0] = { 0x061098, 0x4421, 0x0009 };	// shar r4 -> nop
+	// The object cull at 0x8C060776 also drops what looks too small: 5 z^2 > r^2 fx fy (under
+	// ~5 px^2, the 5.0 literal at 0x8C060804). The wider view makes every object ~6.4 times
+	// smaller there, so more of it went (ceiling beams, things popping in): 5.0 -> 0.25, a bit
+	// less culling than stock even (things seen from farther).
+	p.fovPatch[1] = { 0x060806, 0x40A0, 0x3E80 };	// float 5.0 -> 0.25 (high half)
 	list.push_back(p);
 	return list;
 }

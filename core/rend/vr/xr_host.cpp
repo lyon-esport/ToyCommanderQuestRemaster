@@ -1404,7 +1404,10 @@ void updateGamepad(XrTime time)
 		right = floatAction(triggerAction, Right);
 		// right stick: the D-pad, 8 ways, with some hysteresis
 		static u32 dpadHeld;
-		const glm::vec2 rs = handStick(Right);
+		// with a grip held, the right stick sizes the world instead (up bigger, down smaller;
+		// kept in emu.cfg as vr.WorldScale), as in the gun mode
+		const glm::vec2 rightStick = handStick(Right);
+		const glm::vec2 rs = adjustWorldSize(time, rightStick) ? glm::vec2(0.f) : rightStick;
 		auto axis = [&](float v, u32 neg, u32 pos) {
 			const u32 was = dpadHeld & (neg | pos);
 			if (was == pos ? v > 0.4f : v > 0.6f)
@@ -1449,7 +1452,6 @@ void updateGamepad(XrTime time)
 				kcode[0] |= bit;
 		}
 	lastButtons = buttons;
-	(void)time;
 }
 
 void updateLightgun(XrTime time)
