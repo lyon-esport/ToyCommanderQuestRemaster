@@ -29,3 +29,19 @@ Scripts: `tcvr/re/find_screen.py`, `tcvr/re/find_proj.py`, `hotd2-vr/re/sh4dis.p
 - No stand-alone 4x4 perspective matrix found in RAM: the projection is probably folded into each object's
   matrix (FTRV), or done by a divide with a focal value. Next: find the 3D transform (FTRV / FSRRA / FDIV loops
   that write to the store queues at 0xE0000000) with Ghidra, or use a PC debug build (needs Visual Studio).
+
+## Camera / projection / culling (found 2026-11-09, dump d1_kitchen)
+| Address | Meaning |
+|---|---|
+| `0x8C0611D0` | `tan(angle)`: `lds r4,fpul; fsca fpul,dr0; fdiv fr1,fr0` (16-bit angle, 65536 = 360°) |
+| `0x8C061070` | builds a view record from x, y, w, h, an angle (stack) and aspect/near/far (fr4..fr6): `+32 = 2·tan(angle>>1)`, `+28 = +32 · fr4 · w/h` |
+| `0x8C061098` | `shar r4` (0x4421), the angle halving. **Patched to `nop` (0x0009)**: `tan(angle)` → about 2.5x wider; the culling follows |
+| `0x8C060F20` | makes the active view: `[0x8C0FD5EC]` = record pointer; `0x8C0FD5F0/F4` = x - (+20) - 0.5, y - (+24) - 0.5; `0x8C0FD604/608` = focal = w/(+28), h/(+32); `60C/610` = 1/focal; `5F8` far, `5FC` near, `600` = 1/near; `614/618` = plane terms; culling planes at `0x8C0FD62C` (4 x 12 bytes) |
+| `0x8C061F10` | projects a point: z > near, then `sx = (F0·z − 604·x)/z`, `sy = (F4·z − 608·y)/z` |
+| `0x8C060740..0x8C0607A0` | culls an object: 4 planes at `0x8C0FD62C`, then a size test with the focal values |
+| `0x8C0D5910` | the main 640x480 3D view record (also copies at `0x8C0C73EC`, `0x8C0C7650`): +28 = 1.63682, +32 = 0.92071 (49.4° x 78.6°), near 10, far 1e6. Used by the VR reprojection for the live focal |
+| `0x8C0D21DC` | radar view, 100x90 at (470, 370), 21.97° x 32.09° |
+| `0x8C0D593C` | a 128x128 view at (256, 0), near 1 (render to texture?) |
+
+Open: whether `0x8C0D5910` is the main view in every level and in split screen; the draw-distance / LOD that
+makes objects appear late (not the far plane: it is 1e6).

@@ -61,9 +61,23 @@ static bool plausible(float v, float lo, float hi) {
 	return std::isfinite(v) && std::abs(v) > lo && std::abs(v) < hi;
 }
 
+// tcvr: a game that keeps its camera as a view record (Toy Commander: ints x, y, width,
+// height at +4..+16, floats 2*tan(half angle) x and y at +28/+32): RAM offset, 0 = none.
+static u32 viewRecordAddr;
+
 // The game's focal length in DC pixels, per axis: viewport scale times projection scale.
 static glm::vec2 readGameFocal()
 {
+	if (viewRecordAddr != 0)
+	{
+		// focal = size / (2 tan(half angle)), as the game's own projection (0x8C060F20 in TC)
+		const u32 base = 0x8C000000u + viewRecordAddr;
+		const float w = (float)(s32)ReadMem32_nommu(base + 12);
+		const float h = (float)(s32)ReadMem32_nommu(base + 16);
+		const glm::vec2 focal(w / readFloat(viewRecordAddr + 28), h / readFloat(viewRecordAddr + 32));
+		if (plausible(focal.x, 10.f, 20000.f) && plausible(focal.y, 10.f, 20000.f))
+			return focal;
+	}
 	if (config::VrProjAddr > 0 && config::VrViewportAddr > 0)
 	{
 		const glm::vec2 focal(
@@ -237,6 +251,11 @@ struct GameProfile
 	// The player's own model from the game, in a file of its own (hands_rip.h): the agent's
 	// hands and pistol, the hero's staff, or none (the arcade gun).
 	hands::Source model {};
+	// tcvr: false for a game played with a pad (the headset's gamepad mode): no light gun
+	// is plugged into port A for it.
+	bool lightGun = true;
+	// tcvr: its main 3D view record (see viewRecordAddr), for the live focal length.
+	u32 viewRecordAddr = 0;
 };
 
 static std::vector<GameProfile> makeProfiles()
@@ -346,6 +365,22 @@ static std::vector<GameProfile> makeProfiles()
 	p.model.file = "staff-mok.bin";
 	p.model.staff = { { { 0xC1C000, 0xCB0800 }, { 0xD87000, 0xDA9800 } } };
 	list.push_back(p);
+	// tcvr: Toy Commander (PAL, MK-5102050), played with a pad (gamepad mode). Found from a
+	// RAM dump of the kitchen (tcvr/docs/RE/Addresses.md). Each view (the 640x480 3D view,
+	// the radar, render-to-texture) is a record: ints x, y, w, h at +4..+16, floats
+	// 2 tan(half angle) x, y at +28/+32, near +36, far +40. 0x8C061070 builds it from a
+	// 16-bit angle: tan(angle >> 1) (0x8C0611D0, FSCA) times 2 into +32, times the aspect
+	// into +28; 0x8C060F20 makes the projection (focal = w / +28, h / +32, at 0x8C0FD604/608)
+	// and the culling planes (0x8C0FD62C) from them. Stock 3D view: 49.4 x 78.6 degrees.
+	// The patch drops the "shr" of the angle: tan(angle) instead of tan(angle / 2), about
+	// 2.5 times as wide (49.4 -> 99 degrees vertical), and the game draws and culls with it.
+	p = GameProfile();
+	p.gameId = "MK-5102050";
+	p.lightGun = false;
+	p.viewRecordAddr = 0x0D5910;
+	p.fovScale = 2.f;	// (only says "widen": the patch's own factor is fixed)
+	p.fovPatch[0] = { 0x061098, 0x4421, 0x0009 };	// shar r4 -> nop
+	list.push_back(p);
 	return list;
 }
 static const std::vector<GameProfile> profiles = makeProfiles();
@@ -368,6 +403,7 @@ static void applyGameProfile(Event, void *)
 	std::fill(std::begin(markerTextures), std::end(markerTextures), 0u);
 	std::fill(std::begin(p2PromptTextures), std::end(p2PromptTextures), 0u);
 	activeProfile = nullptr;
+	viewRecordAddr = 0;
 	// Online (GGPO), what the VR mod writes into a game it has a profile for must be the
 	// same on both sides, whatever each player's settings or machine (a Quest, PCVR, a PC
 	// without a headset): the profile's view widening as on the headset, and light guns in
@@ -384,6 +420,7 @@ static void applyGameProfile(Event, void *)
 		if (settings.content.gameId != prof.gameId)
 			continue;
 		activeProfile = &prof;
+		viewRecordAddr = prof.viewRecordAddr;
 		if (config::VrProjAddr == 0)
 			config::VrProjAddr.override(prof.projAddr);
 		if (config::VrViewportAddr == 0)
@@ -409,7 +446,7 @@ static void applyGameProfile(Event, void *)
 		std::copy(std::begin(prof.markerTextures), std::end(prof.markerTextures), std::begin(markerTextures));
 		std::copy(std::begin(prof.p2PromptTextures), std::end(prof.p2PromptTextures), std::begin(p2PromptTextures));
 		const bool gunB = config::VrDualWield || netplay;
-		if (((xr::enabled() && config::VrXrGun) || netplay) && settings.platform.isConsole()
+		if (prof.lightGun && ((xr::enabled() && config::VrXrGun) || netplay) && settings.platform.isConsole()
 				&& (config::MapleMainDevices[0] != MDT_LightGun || (gunB && config::MapleMainDevices[1] != MDT_LightGun)))
 		{
 			// The right controller is a light gun: plug one into port A (a pad ignores
