@@ -86,8 +86,34 @@ static glm::vec2 readGameFocal()
 		glm::vec2 focal;
 		if (activeViewPtrAddr != 0)
 		{
+			// The record in use, as the candidate; switched to only once it has been the candidate
+			// for ~40 reads in a row (several frames): the pointer may change while the game builds
+			// a frame, and a camera flipping between frames shook the whole scene.
+			static u32 chosen, candidate;
+			static int seen;
+			u32 now = viewRecordAddr;
 			const u32 ptr = ReadMem32_nommu(0x8C000000u + activeViewPtrAddr);
 			if ((ptr & 0xFF000000u) == 0x8C000000u && (ptr & 0x00FFFFFFu) < RAM_SIZE - 64 && fromRecord(ptr & 0x00FFFFFFu, focal))
+				now = ptr & 0x00FFFFFFu;
+			if (now == chosen)
+				seen = 0;
+			else if (now == candidate)
+			{
+				if (++seen >= 40 || chosen == 0)
+				{
+					NOTICE_LOG(RENDERER, "VR: camera view record %06x -> %06x", chosen, now);
+					chosen = now;
+					seen = 0;
+				}
+			}
+			else
+			{
+				candidate = now;
+				seen = chosen == 0 ? 40 : 1;
+				if (chosen == 0)
+					chosen = now;
+			}
+			if (chosen != 0 && fromRecord(chosen, focal))
 				return focal;
 		}
 		if (fromRecord(viewRecordAddr, focal))
