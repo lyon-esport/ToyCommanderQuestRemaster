@@ -98,6 +98,11 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             prefs.edit().putString(Config.pref_home, homeDir).apply();
         }
 
+        // tcvr: back up VMU saves once per launch (before the emulator opens them)
+        try { VrSaves.backupOnLaunch(this); } catch (Throwable t) { Log.e("tcvr", "save backup failed", t); }
+        // tcvr: Download/ToyCommanderVR/Saves/import.request -> import the newest save folder there
+        try { VrSaves.importIfRequested(this); } catch (Throwable t) { Log.e("tcvr", "save import failed", t); }
+
         String result = JNIdc.initEnvironment((Emulator)getApplicationContext(), getFilesDir().getAbsolutePath(), homeDir,
                 Locale.getDefault().toString());
         if (result != null) {

@@ -40,7 +40,7 @@ public final class VrGames
 
     public static final class Scan
     {
-        /** The games found, the best first (The House of the Dead by its name). */
+        /** The games found, the best first (Toy Commander by its name). */
         public final List<Game> games = new ArrayList<>();
         /** The game to start when there's one, or null. */
         public File game;
@@ -121,11 +121,11 @@ public final class VrGames
         }
     }
 
-    /** The House of the Dead by its name, else whatever there is. */
+    /** Toy Commander by its name (tcvr: was House of the Dead), else whatever there is. */
     private static int score(File f)
     {
         String name = f.getName().toLowerCase(Locale.ROOT);
-        return name.contains("house of the dead") || name.contains("hotd") ? 1 : 0;
+        return name.contains("toy commander") || name.contains("toycommander") ? 1 : 0; // tcvr: was HOTD
     }
 
     /** An arcade set's title, when it is one the mod knows and its GD-ROM is next to it. */

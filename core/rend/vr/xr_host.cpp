@@ -526,7 +526,7 @@ bool init()
 #endif
 	createInfo.enabledExtensionCount = (u32)extensions.size();
 	createInfo.enabledExtensionNames = extensions.data();
-	strcpy(createInfo.applicationInfo.applicationName, "HOTD2 VR");
+	strcpy(createInfo.applicationInfo.applicationName, "Toy Commander VR"); // tcvr: app name
 	createInfo.applicationInfo.applicationVersion = 1;
 	strcpy(createInfo.applicationInfo.engineName, "Flycast");
 	createInfo.applicationInfo.engineVersion = 1;
@@ -1645,7 +1645,8 @@ static bool writeEye(GLuint fbo, int width, int height, const std::string& path,
 // of passes that weren't auto-sorted, are ranges of the index buffer by now (strips merged
 // into one, the others left empty); only auto-sorted translucent ones still point at vertices.
 // Hidden vertices (NaN) were left out of the indices, so they can't be counted here.
-static void writeOverlayList(const std::string& path, const glm::vec2& gun)
+// tcvr: all = every polygon (not only the 2D plane ones), for finding a game's HUD layers
+static void writeOverlayList(const std::string& path, const glm::vec2& gun, bool all = false)
 {
 	const rend_context *ctx = gles_vr_frame();
 	FILE *s = ctx != nullptr ? fopen(path.c_str(), "w") : nullptr;
@@ -1667,7 +1668,7 @@ static void writeOverlayList(const std::string& path, const glm::vec2& gun)
 	int lines = 0, mixedDumped = 0;
 	for (const auto& [list, name] : { std::pair(&ctx->global_param_op, "OP"), std::pair(&ctx->global_param_pt, "PT"),
 			std::pair(&ctx->global_param_tr, "TR") })
-		for (size_t n = 0; n < list->size() && lines < 400; n++)
+		for (size_t n = 0; n < list->size() && lines < (all ? 6000 : 400); n++)
 		{
 			const PolyParam& pp = (*list)[n];
 			vis.clear();
@@ -1706,7 +1707,7 @@ static void writeOverlayList(const std::string& path, const glm::vec2& gun)
 			const u8 *c = ctx->verts[vis[0]].col;
 			const bool bigBright = lo.x <= hi.x && hi.x - lo.x >= cam.dcSize.x * 0.5f && hi.y - lo.y >= cam.dcSize.y * 0.5f
 					&& c[0] >= 0xc0 && c[1] >= 0xc0;
-			if (overlay == 0 && !bigBright)
+			if (!all && overlay == 0 && !bigBright)
 				continue;
 			fprintf(s, "%s %zu: %zu verts (%u on 2D) at %.0f,%.0f..%.0f,%.0f W %.3f..%.3f tex %06x tsp %08x isp %08x col %02x%02x%02x%02x\n",
 					name, n, vis.size(), overlay, lo.x, lo.y, hi.x, hi.y, wMin, wMax,
@@ -1900,6 +1901,7 @@ void captureIfRequested(GLuint fbo, int width, int height)
 	if (!writeEye(fbo, width, height, dir + "/eye0.ppm", 1))
 		return;
 	NOTICE_LOG(RENDERER, "XR: captured the left eye to %s/eye0.ppm", dir.c_str());
+	writeOverlayList(dir + "/polys.txt", glm::vec2(-1.f), true);	// tcvr: every polygon, W and place
 
 	// ...and the picture the console's video output reads from VRAM right now, which is
 	// what a TV would show when the game draws with the CPU.

@@ -1,4 +1,7 @@
 // hotd2-vr: modified in 2026 by mikermak for the Quest VR mode (see "git log master..hotd2-vr").
+import java.time.Duration as TcvrDuration
+import java.time.LocalDateTime as TcvrDateTime
+import java.time.format.DateTimeFormatter as TcvrFormatter
 plugins {
     alias(libs.plugins.android.application)
 }
@@ -80,8 +83,8 @@ android {
             ndk {
                 abiFilters += "arm64-v8a"
             }
-            applicationIdSuffix = ".vr"
-            versionNameSuffix = "-vr"
+            // tcvr: application id set in androidComponents below (applicationIdSuffix removed)
+            // tcvr: versionName set in androidComponents below
         }
     }
     compileOptions {
@@ -106,6 +109,22 @@ android {
         }
         resources {
             excludes += "META-INF/DEPENDENCIES"
+        }
+    }
+}
+
+// tcvr: the vr build is "Toy Commander VR": its own application id (the Java namespace stays
+// com.flycast.emulator), versionName = build time (local) yyyyMMdd_HHmmss, versionCode = minutes
+// since 2026-01-01 00:00 local.
+androidComponents {
+    onVariants(selector().withBuildType("vr")) { variant ->
+        val now = TcvrDateTime.now()
+        val stamp = now.format(TcvrFormatter.ofPattern("yyyyMMdd_HHmmss"))
+        val minutes = TcvrDuration.between(TcvrDateTime.of(2026, 1, 1, 0, 0), now).toMinutes().toInt()
+        variant.applicationId.set("com.dreamcast4ever.toycommandervr")
+        variant.outputs.forEach { output ->
+            output.versionName.set(stamp)
+            output.versionCode.set(minutes)
         }
     }
 }

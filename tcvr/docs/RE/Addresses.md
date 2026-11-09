@@ -15,7 +15,7 @@ Disc: Toy Commander (Europe) (En,Fr,De,Es). Main executable: `1ST_READ.BIN` (ext
 6. Unlock flags
 
 ## Session 2026-11-09 — first RAM dump (kitchen mission, `dumps/d1_kitchen`, git-ignored)
-How to dump: `adb shell "run-as com.flycast.emulator.vr sh -c 'touch files/ram.request files/capture.request'"`,
+How to dump: `adb shell "run-as com.dreamcast4ever.toycommandervr sh -c 'touch files/ram.request files/capture.request'"`,
 then pull `files/ram.bin` (16 MB at 0x8C000000), `vram.bin`, `eye0.ppm` (left eye), `fb0.ppm`, `scene.txt`.
 Scripts: `tcvr/re/find_screen.py`, `tcvr/re/find_proj.py`, `hotd2-vr/re/sh4dis.py <start> <end> ram.bin`.
 

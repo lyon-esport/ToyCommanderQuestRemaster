@@ -54,7 +54,7 @@ public class VrSetupActivity extends Activity
         page.setPadding(dp(36), dp(28), dp(36), dp(28));
         page.setBackgroundColor(BACK);
 
-        TextView title = text("THE HOUSE OF THE DEAD 2 VR", 28, RED);
+        TextView title = text("TOY COMMANDER VR", 28, RED);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         page.addView(title);
         page.addView(text("Two steps before the first game.", 17, SOFT), spaced(4));
@@ -65,7 +65,7 @@ public class VrSetupActivity extends Activity
         allow.setOnClickListener(v -> askForAccess());
         page.addView(allow, spaced(10));
 
-        page.addView(heading("2.  Put your game on the headset"), spaced(24));
+        page.addView(heading("2.  Put your Toy Commander disc image on the headset"), spaced(24));
         page.addView(gameStatus = text("", 16, SOFT), spaced(6));
         Button again = button("Look again");
         again.setOnClickListener(v -> refresh());
@@ -76,9 +76,8 @@ public class VrSetupActivity extends Activity
         games.setOrientation(LinearLayout.VERTICAL);
         page.addView(games, spaced(20));
 
-        page.addView(text("Your own copies of the games: The House of the Dead 2 (European or US version) and The "
-                + "Maze of the Kings (arcade, as a MAME set: mok.zip with the folder mok next to it). Nothing of the "
-                + "games comes with this app. Unofficial fan project, not affiliated with Sega.", 13, SOFT), spaced(22));
+        page.addView(text("Bring your own copy of Toy Commander (Dreamcast disc image). Nothing of the "
+                + "game comes with this app. Unofficial fan project, not affiliated with Sega or No Cliche.", 13, SOFT), spaced(22));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(BACK);
@@ -106,7 +105,7 @@ public class VrSetupActivity extends Activity
         }
         else
         {
-            accessStatus.setText("The app looks for your game in the headset's Download folder. For that it needs "
+            accessStatus.setText("The app looks for your Toy Commander disc image in the headset's Download folder. For that it needs "
                     + "\"All files access\": tap Allow, switch it on, and come back here.");
             accessStatus.setTextColor(SOFT);
             allow.setVisibility(View.VISIBLE);
@@ -121,7 +120,7 @@ public class VrSetupActivity extends Activity
         }
         else
         {
-            String how = "Copy your game to the headset's Download folder: a .chd, a .gdi or a .cue with its "
+            String how = "Copy your Toy Commander disc image to the headset's Download folder (a subfolder such as Download/ToyCommanderVR is fine): a .chd, a .gdi or a .cue with its "
                     + ".bin files, or a .cdi. With SideQuest (Manage files), or connect the headset to a PC "
                     + "with USB, allow access in the headset, and open Quest > Internal shared storage > Download.";
             if (scan.incomplete != null)
