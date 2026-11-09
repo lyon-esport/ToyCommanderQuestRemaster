@@ -239,6 +239,9 @@ struct GameProfile
 	// 2D layers near the 2D plane (see snapNear2D): up to this W, at W in multiples of
 	// this step; the W of the letterbox bars (0: the 2D plane's).
 	float snapMaxW = 1.05f, snapStep = 0.01f;
+	// tcvr: snap every flat on-screen layer up to snapMaxW, whatever its W (no step test):
+	// for a game whose 3D never comes near the band (Toy Commander: HUD at 1.002-1.124, 3D from ~13)
+	bool snapAnyW = false;
 	float letterboxW = 0.f;
 	// The W of its 2D plane (0: vr.HudW, HOTD2's 1.0). Never a W its 3D can have: the
 	// headset's vertex shader pins every vertex near it onto the 2D plane.
@@ -385,6 +388,11 @@ static std::vector<GameProfile> makeProfiles()
 	// smaller there, so more of it went (ceiling beams, things popping in): 5.0 -> 0.25, a bit
 	// less culling than stock even (things seen from farther).
 	p.fovPatch[1] = { 0x060806, 0x40A0, 0x3E80 };	// float 5.0 -> 0.25 (high half)
+	// Its HUD is drawn flat at W 1.002, 1.111 and 1.124 (gauges, needles, fuel level; measured in
+	// the kitchen), its 3D from W ~13 on: every flat layer up to 2.0 goes on the 2D plane, so the
+	// gauges stay together and fixed instead of floating as 3D in front of the eyes.
+	p.snapMaxW = 2.f;
+	p.snapAnyW = true;
 	list.push_back(p);
 	return list;
 }
@@ -687,7 +695,8 @@ static void snapNear2D(rend_context& ctx, const std::vector<PolyParam>& list, u3
 		if (!(z > 0.f) || !std::isfinite(z))
 			continue;
 		const float w = 1.f / z;
-		if (w < SnapMinW || w > SnapMaxW || w == hudW || std::abs(w / step - std::round(w / step)) > 0.02f)
+		const bool anyW = prof != nullptr && prof->snapAnyW;	// tcvr
+		if (w < SnapMinW || w > SnapMaxW || w == hudW || (!anyW && std::abs(w / step - std::round(w / step)) > 0.02f))
 			continue;
 		u32 i = pp.first;
 		for (; i < pp.first + pp.count; i++)

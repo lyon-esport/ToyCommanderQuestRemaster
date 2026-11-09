@@ -45,3 +45,10 @@ Scripts: `tcvr/re/find_screen.py`, `tcvr/re/find_proj.py`, `hotd2-vr/re/sh4dis.p
 
 Open: whether `0x8C0D5910` is the main view in every level and in split screen; the draw-distance / LOD that
 makes objects appear late (not the far plane: it is 1e6).
+
+## HUD (dump d2_hud, kitchen, 2026-11-09)
+Every polygon of a frame: `touch files/capture.request` -> `files/polys.txt` (W range, screen box, texture per polygon).
+- HUD layers are flat (one W per polygon): W 1.002 (TR), 1.111 (OP+TR), 1.124 (TR: gauge needles/levels, tex 0x3d6f20).
+- 3D geometry: W from ~12.9 up (near plane 10). Nothing 3D between 1 and 12.
+- hotd2-vr only snapped flat layers up to W 1.05 and on 0.01 steps -> 1.111/1.124 were rebuilt as 3D right in front
+  of the eyes (gauges misaligned, moving with the head). Profile: `snapMaxW = 2.0`, `snapAnyW = true`.
