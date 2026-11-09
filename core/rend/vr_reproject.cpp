@@ -64,6 +64,11 @@ static bool plausible(float v, float lo, float hi) {
 // tcvr: a game that keeps its camera as a view record (Toy Commander: ints x, y, width,
 // height at +4..+16, floats 2*tan(half angle) x and y at +28/+32): RAM offset, 0 = none.
 static u32 viewRecordAddr;
+// tcvr: where the game keeps a pointer to the view record in use (RAM offset, 0 = none). When it
+// points to a full-screen view, that one is the camera of the frame (Toy Commander's menus use
+// their own, 0x8C0D21DC, focal ~595, not the missions' 0x8C0D5910); when it points to a smaller
+// one (a mission sets its radar view last), viewRecordAddr is.
+static u32 activeViewPtrAddr;
 
 // The game's focal length in DC pixels, per axis: viewport scale times projection scale.
 static glm::vec2 readGameFocal()
@@ -71,11 +76,21 @@ static glm::vec2 readGameFocal()
 	if (viewRecordAddr != 0)
 	{
 		// focal = size / (2 tan(half angle)), as the game's own projection (0x8C060F20 in TC)
-		const u32 base = 0x8C000000u + viewRecordAddr;
-		const float w = (float)(s32)ReadMem32_nommu(base + 12);
-		const float h = (float)(s32)ReadMem32_nommu(base + 16);
-		const glm::vec2 focal(w / readFloat(viewRecordAddr + 28), h / readFloat(viewRecordAddr + 32));
-		if (plausible(focal.x, 10.f, 20000.f) && plausible(focal.y, 10.f, 20000.f))
+		auto fromRecord = [](u32 offset, glm::vec2& focal) {
+			const u32 base = 0x8C000000u + offset;
+			const float w = (float)(s32)ReadMem32_nommu(base + 12);
+			const float h = (float)(s32)ReadMem32_nommu(base + 16);
+			focal = glm::vec2(w / readFloat(offset + 28), h / readFloat(offset + 32));
+			return w >= 600.f && plausible(focal.x, 10.f, 20000.f) && plausible(focal.y, 10.f, 20000.f);
+		};
+		glm::vec2 focal;
+		if (activeViewPtrAddr != 0)
+		{
+			const u32 ptr = ReadMem32_nommu(0x8C000000u + activeViewPtrAddr);
+			if ((ptr & 0xFF000000u) == 0x8C000000u && (ptr & 0x00FFFFFFu) < RAM_SIZE - 64 && fromRecord(ptr & 0x00FFFFFFu, focal))
+				return focal;
+		}
+		if (fromRecord(viewRecordAddr, focal))
 			return focal;
 	}
 	if (config::VrProjAddr > 0 && config::VrViewportAddr > 0)
@@ -294,6 +309,8 @@ struct GameProfile
 	bool lightGun = true;
 	// tcvr: its main 3D view record (see viewRecordAddr), for the live focal length.
 	u32 viewRecordAddr = 0;
+	// tcvr: the pointer to the view record in use (see activeViewPtrAddr)
+	u32 activeViewPtrAddr = 0;
 };
 
 static std::vector<GameProfile> makeProfiles()
@@ -416,6 +433,10 @@ static std::vector<GameProfile> makeProfiles()
 	p.gameId = "MK-5102050";
 	p.lightGun = false;
 	p.viewRecordAddr = 0x0D5910;
+	// The view in use: 0x8C060F20 stores its record pointer at 0x8C0FD5EC. Menus draw with their own
+	// 640x480 view (0x8C0D21DC, focal ~595 after a mission; read 0x8C0D5910 instead, the menu was
+	// rebuilt 3.5 times too wide: too big).
+	p.activeViewPtrAddr = 0x0FD5EC;
 	p.fovScale = 2.f;	// (only says "widen": the patch's own factor is fixed)
 	p.fovPatch[0] = { 0x061098, 0x4421, 0x0009 };	// shar r4 -> nop
 	// The object cull at 0x8C060776 also drops what looks too small: 5 z^2 > r^2 fx fy (under
@@ -506,6 +527,7 @@ static void applyGameProfile(Event, void *)
 	std::fill(std::begin(p2PromptTextures), std::end(p2PromptTextures), 0u);
 	activeProfile = nullptr;
 	viewRecordAddr = 0;
+	activeViewPtrAddr = 0;
 	// Online (GGPO), what the VR mod writes into a game it has a profile for must be the
 	// same on both sides, whatever each player's settings or machine (a Quest, PCVR, a PC
 	// without a headset): the profile's view widening as on the headset, and light guns in
@@ -523,6 +545,7 @@ static void applyGameProfile(Event, void *)
 			continue;
 		activeProfile = &prof;
 		viewRecordAddr = prof.viewRecordAddr;
+		activeViewPtrAddr = prof.activeViewPtrAddr;
 		if (config::VrProjAddr == 0)
 			config::VrProjAddr.override(prof.projAddr);
 		if (config::VrViewportAddr == 0)

@@ -58,3 +58,6 @@ Every polygon of a frame: `touch files/capture.request` -> `files/polys.txt` (W 
 - Lock square: its texture moves between loads (`0x6a91f0`, then `0xacafa8`): matched by colour 00ff00ff + 16 verts.
   Capture d7_now: in the game's own frame the square is exactly on the locked mouse (square 296..320 x 226..250,
   mouse polys 293..315 x 235..241). Left on the 2D plane (stock framing) it lands off target -> it must go into 3D.
+- `[0x8C0FD5EC]` = pointer to the view record in use (set by 0x8C060F20). In menus (after a mission) it points to
+  `0x8C0D21DC`, a 640x480 view with focal ~595 (dump d11_menu_after); in missions the radar view is set last.
+  The VR focal now comes from this record when it is full screen, else from 0x8C0D5910 (mission view).
