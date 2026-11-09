@@ -1831,6 +1831,16 @@ static bool flattenMenu(rend_context& ctx, const RenderPass& pass, const RenderP
 				return false;	// a mission frame: 3D as usual
 		}
 	const glm::vec2 c(fbWidth * 0.5f, fbHeight * 0.5f);
+	// The widening's shrink for the camera of this frame: the patch makes the game use tan(a)
+	// for tan(a/2), so its 3D is tan(a) / tan(a/2) times smaller on the screen than stock (2.54 for
+	// the missions' 49.4 degrees, more for the menus' and cutscenes' wider cameras).
+	float k = prof->menuScale;
+	{
+		const glm::vec2 focal = readGameFocal();
+		const float tanLive = fbHeight * 0.5f / focal.y;
+		if (std::isfinite(tanLive) && tanLive > 0.05f && tanLive < 50.f)
+			k = tanLive / std::tan(std::atan(tanLive) * 0.5f);
+	}
 	for (const Range& r : ranges)
 		for (u32 n = r.from; n < r.to && n < r.list->size(); n++)
 		{
@@ -1841,18 +1851,20 @@ static bool flattenMenu(rend_context& ctx, const RenderPass& pass, const RenderP
 			glm::vec2 lo, hi;
 			const bool flat = flatPoly(pp, w, lo, hi);
 			const bool fullScreen = lo.x <= 1.f && lo.y <= 1.f && hi.x >= fbWidth - 1.f && hi.y >= fbHeight - 1.f;
-			// 2D: a flat layer in the 2D band or a full-screen backdrop, drawn in screen pixels
-			const bool twoD = flat && (w <= prof->snapMaxW || fullScreen);
+			// Only what the 3D camera drew (W beyond the 2D band) was shrunk by the widening: the
+			// 2D layers, the full-screen backdrops and the menus' own models drawn at W ~1 (the
+			// save select's memory cards) are in place already.
+			const bool viaCamera = w > prof->snapMaxW && !(flat && fullScreen);
 			for (u32 i = pp.first; i < pp.first + pp.count; i++)
 			{
 				Vertex& v = ctx.verts[i];
 				if (!(v.z > 0.f) || !std::isfinite(v.z) || !std::isfinite(v.x) || !std::isfinite(v.y))
 					continue;
 				const float vw = 1.f / v.z;
-				if (!twoD)
+				if (viaCamera)
 				{
-					v.x = c.x + (v.x - c.x) * prof->menuScale;
-					v.y = c.y + (v.y - c.y) * prof->menuScale;
+					v.x = c.x + (v.x - c.x) * k;
+					v.y = c.y + (v.y - c.y) * k;
 				}
 				// nearer (smaller W) in front: W 1 at the plane, W 1e8 at the back of the band
 				const float t = vw >= 1.f ? std::min(std::log10(vw) / 8.f, 1.f) : std::max(vw - 1.f, -1.f);
