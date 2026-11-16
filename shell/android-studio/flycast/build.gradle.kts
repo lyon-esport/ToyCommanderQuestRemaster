@@ -12,6 +12,16 @@ fun gitVersionName(): String {
     }.standardOutput.asText.get().trim()
 }
 
+// tcvr: player builds of Toy Commander VR (-Ptcvr.release): signed with the project's release
+// key and not debuggable. The key stays private: TCVR_SIGNING_PROPERTIES names a properties file
+// outside the repository (storeFile, storePassword, keyAlias, keyPassword). See tcvr/docs/Release.md.
+val tcvrRelease = project.hasProperty("tcvr.release")
+val tcvrSigning: java.util.Properties? = System.getenv("TCVR_SIGNING_PROPERTIES")
+    ?.takeIf { it.isNotEmpty() && file(it).isFile }
+    ?.let { path -> java.util.Properties().apply { file(path).inputStream().use { load(it) } } }
+if (tcvrRelease && tcvrSigning == null)
+    throw GradleException("-Ptcvr.release needs TCVR_SIGNING_PROPERTIES (see tcvr/docs/Release.md)")
+
 android {
     namespace = "com.flycast.emulator"
     ndkVersion = "29.0.14206865"
@@ -45,6 +55,14 @@ android {
         getByName("debug") {
             storeFile = file("../debug.keystore")
         }
+        if (tcvrSigning != null) {
+            create("tcvr") {
+                storeFile = file(tcvrSigning.getProperty("storeFile"))
+                storePassword = tcvrSigning.getProperty("storePassword")
+                keyAlias = tcvrSigning.getProperty("keyAlias")
+                keyPassword = tcvrSigning.getProperty("keyPassword")
+            }
+        }
         create("release") {
             storeFile = file("../playstore.jks")
             storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
@@ -66,9 +84,10 @@ android {
         // key and installed next to (never over) a regular Flycast.
         create("vr") {
             initWith(getByName("release"))
-            signingConfig = signingConfigs.getByName("debug")
-            // run-as for copying games into app storage and reading logs
-            isDebuggable = true
+            // tcvr: the release key for player builds (-Ptcvr.release), else the debug key
+            signingConfig = signingConfigs.getByName(if (tcvrRelease) "tcvr" else "debug")
+            // run-as for copying games into app storage and reading logs (not in player builds)
+            isDebuggable = !tcvrRelease
             // ...but a debuggable variant builds native code as Debug (-O0: ~20 fps).
             // The last CMAKE_BUILD_TYPE on the command line wins.
             externalNativeBuild {
