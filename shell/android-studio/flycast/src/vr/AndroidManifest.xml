@@ -34,6 +34,10 @@
         tools:replace="android:label">
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|quest3s" />
         <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
+        <!-- tcvr: the system splash while the app starts (assets/vr_splash.png, made by
+             tcvr/tools/make_splash.py), instead of a black headset -->
+        <meta-data android:name="com.oculus.ossplash" android:value="true" />
+        <meta-data android:name="com.oculus.ossplash.background" android:value="black" />
 
         <!-- launch in VR; also openable with a game file, as the regular app -->
         <activity-alias
