@@ -665,7 +665,6 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 			const u8 *p = &rgba[i * 4];
 			src[i] = ((u32)p[3] << 24) | ((u32)p[0] << 16) | ((u32)p[1] << 8) | p[2];
 		}
-		free(rgba);
 		xbrz::scale(factor, src.data(), dst.data(), w, h, alpha ? xbrz::ColorFormat::ARGB : xbrz::ColorFormat::RGB, xbrz::ScalerCfg());
 		std::vector<u8> out(dst.size() * 4);
 		for (size_t i = 0; i < dst.size(); i++)
@@ -684,17 +683,30 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 		}
 		char name[16];
 		snprintf(name, sizeof(name), "%08x.png", hash);
+		auto writePng = [](const std::string& file, int pw, int ph, const u8 *pixels) {
+			bool ok = false;
+			if (FILE *f = nowide::fopen(file.c_str(), "wb"))
+			{
+				stbi_flip_vertically_on_write(1);
+				ok = stbi_write_png_to_func([](void *context, void *data, int size) {
+						fwrite(data, 1, size, (FILE *)context);
+					}, f, pw, ph, STBI_rgb_alpha, pixels, 0) != 0;
+				ok = fclose(f) == 0 && ok;
+			}
+			return ok;
+		};
+		// the original next to it (<game id>-orig/, not read by the game): the review compares the
+		// HD picture with the real original (tcvr/docs/TextureReview.md)
+		{
+			const std::string origDir = cache->dir.substr(0, cache->dir.size() - 1) + "-orig/";
+			if (!file_exists(origDir))
+				make_directory(origDir);
+			writePng(origDir + name, w, h, rgba);
+		}
+		free(rgba);
 		const std::string path = cache->dir + name;
 		const std::string tmp = path + ".tmp";
-		bool written = false;
-		if (FILE *f = nowide::fopen(tmp.c_str(), "wb"))
-		{
-			stbi_flip_vertically_on_write(1);
-			written = stbi_write_png_to_func([](void *context, void *data, int size) {
-					fwrite(data, 1, size, (FILE *)context);
-				}, f, w * factor, h * factor, STBI_rgb_alpha, out.data(), 0) != 0;
-			written = fclose(f) == 0 && written;
-		}
+		const bool written = writePng(tmp, w * factor, h * factor, out.data());
 		if (written && std::rename(tmp.c_str(), path.c_str()) == 0)
 		{
 			cache->added(hash, path);

@@ -17,8 +17,11 @@ original texture for them.
    ```
 
    It copies the cache to the private hub (`AI/TextureReview/<game id>/cache/` (from the headset's `texcache/v2/<game id>/`)) and writes
-   `AI/TextureReview/<game id>/review/index.html`: one card per texture, the original on the left
-   (shrunk back from the HD copy) and the HD one on the right, at the same size.
+   `AI/TextureReview/<game id>/review/index.html`: one card per texture, the real original on the
+   left (the game keeps a copy in `texcache/v2/<game id>-orig/`) and the HD one on the right, at the
+   same size, with a **difference score**: the HD picture shrunk back and compared with the original
+   (mean colour difference and % of pixels changed a lot). Upscales that changed or lost details
+   score high; cards are sorted worst first and marked "check" over the threshold (6 by default).
 3. **Review** the page in a browser. Click **Reject** on every texture that looks worse. The
    top box lists the rejected hashes; **Copy rejected list** puts them on the clipboard. Save them
    to a text file (one hash per line).

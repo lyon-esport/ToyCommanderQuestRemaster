@@ -13,9 +13,11 @@ OUT="${TCVR_PRIVATE_ROOT:-..}/AI/TextureReview/$GAME"
 PY="${PYTHON:-python}"
 case "${1:-}" in
   pull)
-    mkdir -p "$OUT/cache"
+    mkdir -p "$OUT/cache" "$OUT/cache-orig"
     "$ADB" shell ls "$DEV_DIR" >/dev/null || { echo "No cache on the headset yet ($DEV_DIR)"; exit 1; }
     "$ADB" pull "$DEV_DIR/." "$OUT/cache" >/dev/null
+    # the originals, kept next to the cache since 2026-11-16 (older caches have none)
+    "$ADB" pull "$DEV_DIR-orig/." "$OUT/cache-orig" >/dev/null 2>&1 || true
     "$PY" tcvr/re/texcache_review.py "$OUT/cache" --out "$OUT/review"
     echo "Open $OUT/review/index.html"
     ;;
