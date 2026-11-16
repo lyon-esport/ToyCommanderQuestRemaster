@@ -680,6 +680,13 @@ bool BaseTextureCacheData::Update()
 	protectVRam();
 
 	UploadToGPU(upscaled_w, upscaled_h, (const u8 *)temp_tex_buffer, IsMipmapped(), mipmapped);
+	// tcvr: the upscale cache (VR): this texture upscaled once, in the background
+	if (config::VrUpscaleCache > 1 && !config::DumpTextures && upscaled_w == width)
+	{
+		if (!custom_texture.enabled())
+			ComputeHash();
+		custom_texture.cacheUpscaled(this, upscaled_w, upscaled_h, temp_tex_buffer);
+	}
 	if (config::DumpTextures)
 	{
 		ComputeHash();

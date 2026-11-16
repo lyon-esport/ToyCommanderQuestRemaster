@@ -8,6 +8,7 @@
 #include "cfg/option.h"
 #include "emulator.h"
 #include "hw/pvr/Renderer_if.h"
+#include "rend/CustomTexture.h"
 #include "log/Log.h"
 #include "stdclass.h"
 
@@ -83,6 +84,9 @@ const std::vector<Choice>& choices()
 			[] { return (float)config::AnisotropicFiltering; }, [](float v) { saveOption(config::AnisotropicFiltering, v); } },
 		{ "Sharper far textures", { 0.f, -0.5f, -1.f }, { "Off", "Low (-0.5)", "High (-1.0)" },
 			[] { return (float)config::VrTexLodBias; }, [](float v) { saveOption(config::VrTexLodBias, v); } },
+		// the upscale cache (CustomTexture.cpp): each texture upscaled once, then reused
+		{ "HD textures (upscale cache)", { 0.f, 2.f, 4.f }, { "Off", "2x", "4x" },
+			[] { return (float)config::VrUpscaleCache; }, [](float v) { saveOption(config::VrUpscaleCache, v); } },
 		// supersampling: more pixels per eye than the headset's recommended size, sharper
 		{ "Resolution multiplier", { 1.f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f, 1.6f }, { "100%", "110%", "120%", "130%", "140%", "150%", "160%" },
 			[] { return (float)config::VrXrResolution; }, [](float v) { saveOption(config::VrXrResolution, v); } },
@@ -336,12 +340,15 @@ void drawMenu(const glm::mat4& viewProj)
 		const bool hasValue = i == WorldSize || (i >= FirstChoice && i < exportLine());
 		if (sel)
 			s = hasValue ? "<   " + s + "   >" : ">  " + s + "  <";
-		panel.lines.push_back({ s, 0.038f, sel ? (confirming == i ? yellow : white) : grey });
+		panel.lines.push_back({ s, 0.034f, sel ? (confirming == i ? yellow : white) : grey });
 	}
 	char rates[96];
-	snprintf(rates, sizeof(rates), "Headset %.0f fps   Game %.0f fps%s", headsetFps, gameFps, pausedGame ? " (paused)" : "");
+	int upscaled, queued, cached;
+	custom_texture.getUpscaleCacheProgress(upscaled, queued, cached);
+	snprintf(rates, sizeof(rates), "Headset %.0f fps   Game %.0f fps%s   HD textures %d", headsetFps, gameFps,
+			pausedGame ? " (paused)" : "", cached);
 	const bool showStatus = !status.empty() && Clock::now() < statusUntil;
-	panel.lines.push_back({ showStatus ? status : std::string(rates), 0.034f, showStatus ? yellow : grey });
+	panel.lines.push_back({ showStatus ? status : std::string(rates), 0.031f, showStatus ? yellow : grey });
 	// in front of where the head looked when it opened
 	drawPanel(viewProj * glm::rotate(glm::mat4(1.f), placedYaw, glm::vec3(0.f, 1.f, 0.f)), panel);
 }
