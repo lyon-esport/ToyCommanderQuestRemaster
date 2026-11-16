@@ -2,6 +2,7 @@
 # The HD texture review (tcvr/docs/TextureReview.md).
 #   tcvr/tools/texcache-review.sh pull            copy the headset's cache and build the review page
 #   tcvr/tools/texcache-review.sh reject <file>   send a list of rejected hashes (one per line) to the headset
+#   tcvr/tools/texcache-review.sh tune <file>     make tuned HD textures from the review's requests, send them
 #   tcvr/tools/texcache-review.sh clear           empty the headset's HD cache (at the game's next start)
 # The review folder holds images made from the player's disc: it lives in the private hub
 # (${TCVR_PRIVATE_ROOT:-..}/AI/TextureReview/<game id>/), never in git.
@@ -12,6 +13,7 @@ GAME="${TCVR_GAME_ID:-MK-5102050}"
 DEV_DIR="/sdcard/Android/data/$TCVR_PACKAGE/files/data/texcache/v2/$GAME"
 OUT="${TCVR_PRIVATE_ROOT:-..}/AI/TextureReview/$GAME"
 INBOX="/sdcard/Download/ToyCommanderVR/TextureReview"
+PACK="/sdcard/Download/ToyCommanderVR/Textures/$GAME"
 PY="${PYTHON:-python}"
 case "${1:-}" in
   pull)
@@ -35,10 +37,20 @@ case "${1:-}" in
     tr -d '\r' < "$LIST" | "$ADB" shell "cat > $INBOX/rejected.txt"
     echo "$(grep -c . "$OUT/rejected.txt") rejected in total; restart the game to apply"
     ;;
+  tune)
+    # the review's requests (hash crisp|sharp|relief|original ...): tuned HD textures made here
+    # from the pulled cache, shown on a before/after sheet, and copied to the headset's
+    # Download/ToyCommanderVR/Textures/<game id>/, which the game reads ahead of its HD cache
+    LIST="${2:?file with the request list from the review page}"
+    "$PY" tcvr/re/texcache_tune.py "$LIST" "$OUT/cache" "$OUT/cache-orig" "$OUT/tuned" --sheet "$OUT/tuned_sheet.png"
+    "$ADB" shell mkdir -p "$PACK"
+    "$ADB" push "$OUT/tuned/." "$PACK/" >/dev/null
+    echo "Sheet: $OUT/tuned_sheet.png; restart the game to use the tuned textures"
+    ;;
   clear)
     # empties the HD cache (HD and original copies); it fills again as textures appear
     "$ADB" shell "mkdir -p $INBOX && echo clear > $INBOX/clear.request"
     echo "The cache is cleared at the game's next start"
     ;;
-  *) echo "usage: $0 pull | reject <file> | clear"; exit 2 ;;
+  *) echo "usage: $0 pull | tune <file> | reject <file> | clear"; exit 2 ;;
 esac

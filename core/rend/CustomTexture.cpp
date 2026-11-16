@@ -232,6 +232,67 @@ private:
 	std::set<u32> rejected;
 };
 
+// tcvr: textures tuned in the review (tcvr/docs/TextureReview.md: crisp edges, sharper, more
+// relief), made on the laptop and copied to Download/ToyCommanderVR/Textures/<game id>/ (a folder
+// adb can write and the app reads with its file access). Before the upscale cache: they replace
+// its automatic HD versions.
+class TunedTextureSource : public BaseCustomTextureSource
+{
+public:
+	explicit TunedTextureSource(const std::string& gameId)
+#ifdef __ANDROID__
+		: dir("/sdcard/Download/ToyCommanderVR/Textures/" + gameId + "/") {}
+#else
+		: dir(get_writable_data_path("TunedTextures/") + gameId + "/") {}
+#endif
+	bool shouldReplace() const override { return true; }
+	bool loadMap() override
+	{
+		std::lock_guard<std::mutex> _(mutex);
+		map.clear();
+		if (!file_exists(dir))
+			return false;
+		hostfs::DirectoryTree tree(dir);
+		for (const hostfs::FileInfo& item : tree)
+		{
+			if (get_file_extension(item.name) != "png")
+				continue;
+			char *end;
+			const u32 hash = (u32)strtoll(item.name.c_str(), &end, 16);
+			if (*end == '.')
+				map[hash] = item.path;
+		}
+		NOTICE_LOG(RENDERER, "tcvr: %zu tuned textures in %s", map.size(), dir.c_str());
+		return !map.empty();
+	}
+	size_t getTextureCount() const override { std::lock_guard<std::mutex> _(mutex); return map.size(); }
+	u8* loadCustomTexture(u32 hash, int& width, int& height) override
+	{
+		std::string path;
+		{
+			std::lock_guard<std::mutex> _(mutex);
+			auto it = map.find(hash);
+			if (it == map.end())
+				return nullptr;
+			path = it->second;
+		}
+		hostfs::File *file = hostfs::storage().openFile(path, "rb");
+		if (file == nullptr)
+			return nullptr;
+		int n;
+		stbi_set_flip_vertically_on_load_thread(1);
+		u8 *data = stbi_load_from_file(file, &width, &height, &n, STBI_rgb_alpha);
+		delete file;
+		return data;
+	}
+	bool isTextureReplaced(u32 hash) override { std::lock_guard<std::mutex> _(mutex); return map.count(hash) != 0; }
+
+private:
+	const std::string dir;
+	mutable std::mutex mutex;
+	std::map<u32, std::string> map;
+};
+
 static UpscaleCacheSource *upscaleCache;		// owned by custom_texture's sources
 static std::unique_ptr<WorkerThread> upscaleThread;
 static std::mutex upscaleMutex;
@@ -355,7 +416,9 @@ bool CustomTexture::init()
 			// The first source added has highest priority.
 			// Add your source after the default `CustomTextureSource`(data/textures/<game id> folder), so end-users can override your textures.
 			addSource(std::make_unique<CustomTextureSource>(game_id));
-			// tcvr: after it, so a texture pack the player adds wins over the upscale cache
+			// tcvr: after it, so a texture pack the player adds wins: the reviewed textures, then
+			// the upscale cache
+			addSource(std::make_unique<TunedTextureSource>(game_id));
 			auto cache = std::make_unique<UpscaleCacheSource>(game_id);
 			upscaleCache = cache.get();
 			addSource(std::move(cache));

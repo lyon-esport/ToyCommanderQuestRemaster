@@ -22,21 +22,28 @@ original texture for them.
    same size, with a **difference score**: the HD picture shrunk back and compared with the original
    (mean colour difference and % of pixels changed a lot). Upscales that changed or lost details
    score high; cards are sorted worst first and marked "check" over the threshold (6 by default).
-3. **Review** the page in a browser. Click **Reject** on every texture that looks worse. The
-   top box lists the rejected hashes; **Copy rejected list** puts them on the clipboard. Save them
-   to a text file (one hash per line).
-4. **Send the list to the headset:**
+3. **Review** the page in a browser. Each card shows the original, the automatic HD version and,
+   once you pick something, a live preview of the result. Per texture, choose:
+   - **Crisp edges**: clean borders and less blur (shapes, bars, lettering, HUD pieces);
+   - **Sharper**: sharper details;
+   - **More relief**: more local contrast, so walls, stone and wood look less flat;
+   - **Original**: no HD version at all.
+   Choices combine (e.g. Sharper + More relief). **Copy request list** puts lines like
+   `66183f22 relief` on the clipboard; save them to a text file.
+4. **Make and send the tuned textures:**
 
    ```bash
-   bash tcvr/tools/texcache-review.sh reject rejected-list.txt
+   bash tcvr/tools/texcache-review.sh tune requests.txt
    ```
 
-   The list goes to the review inbox `Download/ToyCommanderVR/TextureReview/` on the headset (the
-   cache folder belongs to the app: adb can't write or delete there). At its next start the game
-   adds the hashes to the cache's `rejected.txt` and deletes those HD files itself. The hub keeps
-   the full list.
-5. **Restart the game.** The log says `upscale cache: N textures in ... (M rejected in review)`;
-   the rejected textures use their originals and are never upscaled again.
+   It builds the tuned HD textures on the laptop (`tcvr/re/texcache_tune.py`, same filters as the
+   preview), writes a before/after sheet (`AI/TextureReview/<game id>/tuned_sheet.png`: original,
+   automatic HD, tuned), and copies them to `Download/ToyCommanderVR/Textures/<game id>/` on the
+   headset. The game reads that folder ahead of its automatic HD cache.
+5. **Restart the game.** The log says `N tuned textures in ...`.
+
+To drop a texture from the HD cache entirely without tuning it, `texcache-review.sh reject <list>`
+(one hash per line) still works: the game keeps the original and never upscales it again.
 
 To start the cache over (after a fix to the upscaler, or to get originals saved for an older
 cache): `bash tcvr/tools/texcache-review.sh clear`, then restart the game. It also forgets the rejected list: send the hub's list again (step 4).
