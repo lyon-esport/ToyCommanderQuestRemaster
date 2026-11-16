@@ -21,9 +21,8 @@ add() { local v="$1"; [[ -n "$v" && ${#v} -ge 4 ]] || return 0; grep -qixF -- "$
 echo "Seeding $deny (values are not printed):"
 add "${USERNAME:-${USER:-}}" "OS user name"
 add "${COMPUTERNAME:-$(hostname 2>/dev/null || true)}" "machine name"
-[[ -f tcvr/tools/env.local.sh ]] && source tcvr/tools/env.local.sh
-add "${TCVR_HEADSET_IP:-}" "headset IP (TCVR_HEADSET_IP)"
 if [[ -f tcvr/tools/env.sh ]]; then source tcvr/tools/env.sh >/dev/null 2>&1 || true; fi
+add "${TCVR_HEADSET_IP:-}" "headset IP (TCVR_HEADSET_IP)"
 if [[ -n "${ADB:-}" && -x "${ADB}" ]]; then
   while read -r id state _; do
     [[ "$state" == device ]] || continue

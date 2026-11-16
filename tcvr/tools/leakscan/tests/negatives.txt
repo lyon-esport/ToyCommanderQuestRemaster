@@ -17,3 +17,4 @@ storePassword System.getenv("TCVR_STORE_PASSWORD")
 password = "${PASSWORD}"
 a/b/c paths and s/foo/bar/ regex
 ip 192.168.1.50 in a doc example leakscan:allow
+ANDROID_HOME=/x/path/to/Android/Sdk

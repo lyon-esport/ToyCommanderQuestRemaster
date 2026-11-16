@@ -9,8 +9,8 @@
 - keys, tokens, passwords, keystores and other secret files.
 
 Use placeholders in code and docs (`<headset-ip>`, `<serial>`, `$ANDROID_HOME`, `~/...`,
-the RFC 5737 documentation range `192.0.2.x`) and keep real values in untracked files:
-`tcvr/tools/env.local.sh` (see `env.local.sh.example`) for the dev scripts.
+the RFC 5737 documentation range `192.0.2.x`) and keep real values out of the repo: the dev
+scripts read them from the private hub's `tools/local.env` (see `tcvr/tools/env.sh`).
 
 The check is `tcvr/tools/leakscan/leakscan.pl`: plain regular expressions in Perl, which ships
 with Git for Windows, so it costs nothing and needs no install. It reads only what is new
@@ -37,15 +37,9 @@ with the repo (the old hand-copied `.git/hooks/pre-commit` is replaced by
 git client on the machine: Git Bash, VS Code, Android Studio, Copilot, Claude Code.
 
 It also seeds a **personal denylist** in `.git/leakscan-denylist` (inside `.git`, so it can never
-be committed): your Windows user name, machine name, `TCVR_HEADSET_IP` and the serials of the
+be committed): your Windows user name, machine name, `TCVR_HEADSET_IP` (from `env.sh`) and the serials of the
 headsets adb sees. Add any other exact value, one per line. `LEAKSCAN_DENYLIST=<file>` points
 at an extra list.
-
-Then move your machine values out of tracked files:
-
-```bash
-cp tcvr/tools/env.local.sh.example tcvr/tools/env.local.sh   # then edit it
-```
 
 Check it works: `bash tcvr/tools/leakscan/tests/run.sh` prints `leakscan self-test: OK`.
 
@@ -83,7 +77,7 @@ and shows Claude the findings.
 
 It prints each finding with its rule and where it is (`<commit> <file>:<line>`). Then:
 
-- **A real leak:** replace the value with a placeholder or an `env.local.sh` variable. If it is
+- **A real leak:** replace the value with a placeholder or a variable set in the hub's `tools/local.env`. If it is
   already in a commit, amend or rebase that commit: a later commit that deletes the line leaves
   it in history.
 - **A false positive:** add `leakscan:allow` on that line, or a regex to `.leakscan-allow`

@@ -150,7 +150,7 @@ my @rules = (
     ['windows-path', qr/(?<![\w\\\/.%-])([A-Za-z]:(?:\\\\|\\|\/)[^\s"'`<>|*?,;)\]}]+)/,
         sub { (my $rest = $_[0]) =~ s/^[A-Za-z]:(?:\\\\|\\|\/)//; $rest !~ $STD_WIN_DIR && $rest !~ /^(?:path|to|your|x|\.\.\.|<)/i && $rest !~ /^Users(?:\\\\|\\|\/)*$/i }],
     ['windows-path', qr/(?:^|[\s"'=(:-])(\/(?:mnt\/)?[a-zA-Z]\/[A-Za-z_][^\s"'`<>|*?,;)\]}]*)/,
-        sub { (my $rest = $_[0]) =~ s/^\/(?:mnt\/)?[a-zA-Z]\///; $rest !~ $STD_WIN_DIR && $_[0] !~ /^\/[a-z]\/(?:[a-z]\/|[a-z]$)/ }],
+        sub { (my $rest = $_[0]) =~ s/^\/(?:mnt\/)?[a-zA-Z]\///; $rest !~ $STD_WIN_DIR && $rest !~ /^(?:path|to|your|<|\.\.\.)/i && $_[0] !~ /^\/[a-z]\/(?:[a-z]\/|[a-z]$)/ }],
     ['unc-path', qr/(?<![\\\w])(\\\\[A-Za-z][\w.-]+\\[\w\$.-]+)/],
     ['home-path', qr/((?:\/home|\/Users|(?i:\\Users|\\\\Users))[\\\/]+([^\\\/\s"'`<>|]+))/,  # leakscan:allow
         sub { $_[1] !~ $PLACEHOLDER_USER && $_[1] !~ /^(?:Public|Default|Shared|All Users)$/i }],
@@ -405,7 +405,7 @@ for my $f (@findings) {
 print STDERR <<'EOT';
 
 Replace each value with a placeholder (<headset-ip>, <serial>, $ANDROID_HOME, ~/...) or read
-it from an untracked local file (for example tcvr/tools/env.local.sh). For history, amend or
+it from a private, untracked file (the hub's tools/local.env). For history, amend or
 rebase the commit; a later commit that deletes the line does not remove it from history.
 A real false positive: add `leakscan:allow` on that line, or a regex to .leakscan-allow.
 Help: tcvr/docs/LeakScan.md
