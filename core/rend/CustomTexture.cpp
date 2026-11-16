@@ -90,6 +90,21 @@ public:
 			return false;
 		std::lock_guard<std::mutex> _(mutex);
 		map.clear();
+		// tcvr: textures rejected in the review (tcvr/docs/TextureReview.md): one hex hash per line;
+		// the game keeps their originals and never upscales them again
+		rejected.clear();
+		if (FILE *f = nowide::fopen((dir + "rejected.txt").c_str(), "r"))
+		{
+			char line[64];
+			while (fgets(line, sizeof(line), f) != nullptr)
+			{
+				char *end;
+				const u32 hash = (u32)strtoul(line, &end, 16);
+				if (end != line && line[0] != '#')
+					rejected.insert(hash);
+			}
+			fclose(f);
+		}
 		hostfs::DirectoryTree tree(dir);
 		for (const hostfs::FileInfo& item : tree)
 		{
@@ -97,10 +112,10 @@ public:
 				continue;
 			char *end;
 			const u32 hash = (u32)strtoll(item.name.c_str(), &end, 16);
-			if (*end == '.')
+			if (*end == '.' && rejected.count(hash) == 0)
 				map[hash] = item.path;
 		}
-		NOTICE_LOG(RENDERER, "tcvr: upscale cache: %zu textures in %s", map.size(), dir.c_str());
+		NOTICE_LOG(RENDERER, "tcvr: upscale cache: %zu textures in %s (%zu rejected in review)", map.size(), dir.c_str(), rejected.size());
 		return !map.empty();
 	}
 	size_t getTextureCount() const override { std::lock_guard<std::mutex> _(mutex); return map.size(); }
@@ -124,6 +139,7 @@ public:
 		return data;
 	}
 	bool isTextureReplaced(u32 hash) override { std::lock_guard<std::mutex> _(mutex); return map.count(hash) != 0; }
+	bool isRejected(u32 hash) const { std::lock_guard<std::mutex> _(mutex); return rejected.count(hash) != 0; }
 	// a new file in the cache: used from the next time the game loads that texture
 	void added(u32 hash, const std::string& path) { std::lock_guard<std::mutex> _(mutex); map[hash] = path; }
 	const std::string dir;
@@ -150,6 +166,7 @@ private:
 	const std::string oldDir;
 	mutable std::mutex mutex;
 	std::map<u32, std::string> map;
+	std::set<u32> rejected;
 };
 
 static UpscaleCacheSource *upscaleCache;		// owned by custom_texture's sources
@@ -624,7 +641,7 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 		logged = true;
 		return;
 	}
-	if (isTextureReplaced(texture))
+	if (isTextureReplaced(texture) || upscaleCache->isRejected(texture->texture_hash))
 		return;
 	{
 		std::lock_guard<std::mutex> _(upscaleMutex);
