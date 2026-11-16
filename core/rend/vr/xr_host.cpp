@@ -110,6 +110,11 @@ XrAction padAAction, padBAction, padXAction, padYAction, stickClickAction;
 PFN_xrRequestDisplayRefreshRateFB requestRefreshRate;
 PFN_xrGetDisplayRefreshRateFB getRefreshRate;	// tcvr: the rate in use (log)
 PFN_xrPerfSettingsSetPerformanceLevelEXT setPerformanceLevel;
+// tcvr: fixed foveated rendering (vr.Foveation; XR_FB_foveation and friends)
+PFN_xrCreateFoveationProfileFB createFoveationProfile;
+PFN_xrDestroyFoveationProfileFB destroyFoveationProfile;
+PFN_xrUpdateSwapchainFB updateSwapchain;
+int foveationApplied = -1;	// the level the eye buffers have (-1: new eye buffers, not asked yet)
 
 bool initTried;
 bool sessionRunning;
@@ -488,6 +493,38 @@ void destroySwapchains()
 			xrDestroySwapchain(c.chain);
 		c = EyeChain();
 	}
+	foveationApplied = -1;
+}
+
+// tcvr: fixed foveated rendering (frame-rate plan, item 6): the runtime renders the lens
+// edges, which the lenses blur anyway, with fewer pixels. Level 0 (off) to 3 (high).
+void applyFoveation(int level)
+{
+	if (createFoveationProfile == nullptr || destroyFoveationProfile == nullptr || updateSwapchain == nullptr)
+		return;
+	static const XrFoveationLevelFB levels[] { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_LOW_FB,
+			XR_FOVEATION_LEVEL_MEDIUM_FB, XR_FOVEATION_LEVEL_HIGH_FB };
+	XrFoveationLevelProfileCreateInfoFB levelInfo { XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB };
+	levelInfo.level = levels[std::clamp(level, 0, 3)];
+	levelInfo.verticalOffset = 0.f;
+	levelInfo.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
+	XrFoveationProfileCreateInfoFB profileInfo { XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB };
+	profileInfo.next = &levelInfo;
+	XrFoveationProfileFB profile = XR_NULL_HANDLE;
+	if (!XRCHECK(createFoveationProfile(session, &profileInfo, &profile)))
+		return;
+	bool ok = true;
+	for (EyeChain& c : chains)
+		if (c.chain != XR_NULL_HANDLE)
+		{
+			XrSwapchainStateFoveationFB state { XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB };
+			state.profile = profile;
+			ok = XRCHECK(updateSwapchain(c.chain, (const XrSwapchainStateBaseHeaderFB *)&state)) && ok;
+		}
+	// (the swapchains keep the setting: the profile can go)
+	destroyFoveationProfile(profile);
+	NOTICE_LOG(RENDERER, "XR: fixed foveated rendering %s%s", level <= 0 ? "off" : level == 1 ? "low" : level == 2 ? "medium" : "high",
+			ok ? "" : " (refused by the runtime)");
 }
 
 bool init()
@@ -536,6 +573,14 @@ bool init()
 		extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
 	if (perfSettings)
 		extensions.push_back(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
+	const bool foveation = has(XR_FB_FOVEATION_EXTENSION_NAME) && has(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME)
+			&& has(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
+	if (foveation)
+	{
+		extensions.push_back(XR_FB_FOVEATION_EXTENSION_NAME);
+		extensions.push_back(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME);
+		extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
+	}
 
 	XrInstanceCreateInfo createInfo { XR_TYPE_INSTANCE_CREATE_INFO };
 #ifdef __ANDROID__
@@ -560,6 +605,14 @@ bool init()
 	}
 	if (perfSettings)
 		xrGetInstanceProcAddr(instance, "xrPerfSettingsSetPerformanceLevelEXT", (PFN_xrVoidFunction *)&setPerformanceLevel);
+	if (foveation)
+	{
+		xrGetInstanceProcAddr(instance, "xrCreateFoveationProfileFB", (PFN_xrVoidFunction *)&createFoveationProfile);
+		xrGetInstanceProcAddr(instance, "xrDestroyFoveationProfileFB", (PFN_xrVoidFunction *)&destroyFoveationProfile);
+		xrGetInstanceProcAddr(instance, "xrUpdateSwapchainFB", (PFN_xrVoidFunction *)&updateSwapchain);
+	}
+	else
+		NOTICE_LOG(RENDERER, "XR: no fixed foveated rendering in this runtime");
 	XrInstanceProperties instanceProps { XR_TYPE_INSTANCE_PROPERTIES };
 	if (XR_SUCCEEDED(xrGetInstanceProperties(instance, &instanceProps)))
 		NOTICE_LOG(RENDERER, "XR: runtime %s", instanceProps.runtimeName);
@@ -2165,6 +2218,9 @@ void term()
 	requestRefreshRate = nullptr;
 	getRefreshRate = nullptr;
 	setPerformanceLevel = nullptr;
+	createFoveationProfile = nullptr;
+	destroyFoveationProfile = nullptr;
+	updateSwapchain = nullptr;
 	sessionRunning = focused = drawingEye = viewsLogged = false;
 	sessionLost = exiting = false;
 	originSet = recenterRequested = false;
@@ -2239,6 +2295,18 @@ bool frame()
 		}
 		if (!sessionRunning)
 			appliedRate = 0.f;
+	}
+	// tcvr: fixed foveated rendering (vr.Foveation), on the current eye buffers (new ones after
+	// an MSAA or resolution change get it again)
+	{
+		const int level = std::clamp((int)config::VrFoveation, 0, 3);
+		if (updateSwapchain != nullptr && chains[0].chain != XR_NULL_HANDLE && level != foveationApplied)
+		{
+			// (off is the runtime's default: nothing to ask for on new eye buffers)
+			if (level != 0 || foveationApplied > 0)
+				applyFoveation(level);
+			foveationApplied = level;
+		}
 	}
 
 	XrFrameWaitInfo waitInfo { XR_TYPE_FRAME_WAIT_INFO };
@@ -2479,6 +2547,15 @@ bool frame()
 		{
 			captureIfRequested(c.fbos[index], c.width, c.height);
 			ringCapture(c.fbos[index], c.width, c.height, !showPanel && gles_vr_have_frame());
+		}
+		// tcvr: the eye's depth and stencil are done with (the layer is colour only): the GPU can
+		// drop them from its tile memory instead of writing them out (and, with MSAA, every
+		// sample of them) to the eye buffer's memory each frame (frame-rate plan, item 1)
+		if (glInvalidateFramebuffer != nullptr)
+		{
+			static const GLenum discard[] { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
+			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+			glInvalidateFramebuffer(GL_FRAMEBUFFER, 2, discard);
 		}
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		XrSwapchainImageReleaseInfo release { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };

@@ -83,6 +83,9 @@ const std::vector<Choice>& choices()
 		// supersampling: more pixels per eye than the headset's recommended size, sharper
 		{ "Resolution multiplier", { 1.f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f, 1.6f }, { "100%", "110%", "120%", "130%", "140%", "150%", "160%" },
 			[] { return (float)config::VrXrResolution; }, [](float v) { saveOption(config::VrXrResolution, v); } },
+		// tcvr: fixed foveated rendering: fewer pixels at the lens edges, more frame rate
+		{ "Fixed foveation (edges)", { 0.f, 1.f, 2.f, 3.f }, { "Off", "Low", "Medium", "High" },
+			[] { return (float)config::VrFoveation; }, [](float v) { saveOption(config::VrFoveation, v); } },
 	};
 	return list;
 }
