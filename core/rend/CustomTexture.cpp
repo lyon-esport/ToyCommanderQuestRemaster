@@ -72,16 +72,20 @@ private:
 
 // tcvr: the upscale cache (vr.UpscaleCache): textures upscaled with xBRZ from the player's own
 // disc as the game first shows them, kept as PNG files in the app's storage
-// (data/texcache/<game id>/<hash>.png) and used in place of the originals from then on, also
+// (data/texcache/v2/<game id>/<hash>.png) and used in place of the originals from then on, also
 // on later launches. Nothing of it leaves the device.
+// v2: the first version (data/texcache/<game id>/) saved the packed mipmap chain of mipmapped
+// textures instead of their full-size picture; its files are deleted once, then rebuilt.
 class UpscaleCacheSource : public BaseCustomTextureSource
 {
 public:
 	explicit UpscaleCacheSource(const std::string& gameId)
-		: dir(get_writable_data_path("texcache/") + gameId + "/") {}
+		: dir(get_writable_data_path("texcache/v2/") + gameId + "/"),
+		  oldDir(get_writable_data_path("texcache/") + gameId + "/") {}
 	bool shouldReplace() const override { return config::VrUpscaleCache > 1; }
 	bool loadMap() override
 	{
+		deleteOldCache();
 		if (!file_exists(dir))
 			return false;
 		std::lock_guard<std::mutex> _(mutex);
@@ -125,6 +129,25 @@ public:
 	const std::string dir;
 
 private:
+	// the v1 cache holds broken pictures (see above): delete its files, they're all regenerable
+	void deleteOldCache()
+	{
+		if (!file_exists(oldDir))
+			return;
+		int count = 0;
+		{
+			hostfs::DirectoryTree tree(oldDir);
+			for (const hostfs::FileInfo& item : tree)
+			{
+				const std::string ext = get_file_extension(item.name);
+				if ((ext == "png" || ext == "tmp") && nowide::remove(item.path.c_str()) == 0)
+					count++;
+			}
+		}
+		NOTICE_LOG(RENDERER, "tcvr: upscale cache: deleted %d files of the old cache in %s", count, oldDir.c_str());
+	}
+
+	const std::string oldDir;
 	mutable std::mutex mutex;
 	std::map<u32, std::string> map;
 };
@@ -592,6 +615,15 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 	// animated), nothing big (memory and time)
 	if (w * h > 256 * 256 || w < 8 || h < 8 || texture->tcw.PixelFmt == PixelYUV || texture->Updates > 1)
 		return;
+	// the caller passes the full-size picture only (never a mipmap chain or a cropped texture)
+	if ((u32)w != texture->width || (u32)h != texture->height)
+	{
+		static bool logged;
+		if (!logged)
+			WARN_LOG(RENDERER, "tcvr: upscale cache: size mismatch %dx%d vs %dx%d, skipped", w, h, texture->width, texture->height);
+		logged = true;
+		return;
+	}
 	if (isTextureReplaced(texture))
 		return;
 	{
@@ -630,6 +662,7 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 		if (!file_exists(cache->dir))
 		{
 			make_directory(get_writable_data_path("texcache/"));
+			make_directory(get_writable_data_path("texcache/v2/"));
 			make_directory(cache->dir);
 		}
 		char name[16];
