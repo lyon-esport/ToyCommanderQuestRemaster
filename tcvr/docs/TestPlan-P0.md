@@ -94,6 +94,8 @@ Capture the menu with `files/capture.request` (left eye) or a screenshot.
 | E2 | Anisotropic filtering Off → 16x. | Ground textures at a grazing angle sharper; fps noted. | capture of the same view per value; fps |
 | E3 | Sharper far textures Off → Low → High. | Distant textures sharper; High may shimmer while moving (note it). | captures; fps |
 | E4 | Resolution multiplier 100% → 160%, one step at a time. | Sharper picture as it grows; eye buffers capped at the runtime's maximum (logcat size stops growing); fps drops at some point: note where it falls below 72. | logcat `XR: eye buffers WxH` per step; fps per value |
+| E7 | Refresh rate 72 → 90 → 120 Hz in the menu (first check `adb shell getprop debug.oculus.refreshRate` is empty: a developer override pins the display). | logcat `XR: refresh rate N Hz requested, display now N Hz` shows the new rate; VrApi `FPS=N/N`; note fps and game speed at each rate. | logcat |
+| E8 | Show frame rate = On. | A small label at the bottom right of the view, head-locked: "N fps | game N"; Off removes it. | capture |
 | E5 | Restart the app. | The chosen values are kept (emu.cfg `vr.Msaa`, `rend.AnisotropicFiltering`, `vr.TexLodBias`, `vr.XrResolution`, `vr.ComfortVignette`). | emu.cfg |
 | E6 | Pick the best quality that holds 72 fps in the busiest level tried. | A recommended default set for the release. | table in the results |
 | F7 | Export saves + A. | Status line "Saves exported to Download/ToyCommanderVR/Saves/<time>"; the folder has the VMU files. | `adb shell ls` of the folder |
