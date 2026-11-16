@@ -9,6 +9,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -52,6 +55,9 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
 
     protected SharedPreferences prefs;
     private AudioBackend audioBackend;
+    private AudioManager vrAudioManager;
+    private AudioFocusRequest vrAudioFocusRequest;
+    private boolean vrAudioFocusGranted;
     protected Handler handler = new Handler();
     private boolean audioPermissionRequested = false;
     private boolean storagePermissionGranted = false;
@@ -281,12 +287,14 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         super.onPause();
         resumedCalled = false;
         handleStateChange(true);
+        releaseVrAudioFocus();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         resumedCalled = true;
+        requestVrAudioFocus();
         handleStateChange(false);
     }
 
@@ -294,10 +302,42 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
+            requestVrAudioFocus();
             handleStateChange(false);
         } else {
             handleStateChange(true);
         }
+    }
+
+    private void requestVrAudioFocus() {
+        if (!resumedCalled || vrAudioFocusGranted
+                || !(getPackageName().endsWith(".vr") || getPackageName().equals("com.dreamcast4ever.toycommandervr")))
+            return;
+        if (vrAudioManager == null)
+            vrAudioManager = (AudioManager)getSystemService(AUDIO_SERVICE);
+        if (vrAudioManager == null)
+            return;
+        if (vrAudioFocusRequest == null) {
+            vrAudioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_GAME)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build())
+                    .setOnAudioFocusChangeListener(change -> {
+                        vrAudioFocusGranted = change == AudioManager.AUDIOFOCUS_GAIN;
+                        Log.i("flycast", "VR audio focus changed: " + change);
+                    }, handler)
+                    .build();
+        }
+        int result = vrAudioManager.requestAudioFocus(vrAudioFocusRequest);
+        vrAudioFocusGranted = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        Log.i("flycast", "VR audio focus request: " + result);
+    }
+
+    private void releaseVrAudioFocus() {
+        if (vrAudioManager != null && vrAudioFocusRequest != null)
+            vrAudioManager.abandonAudioFocusRequest(vrAudioFocusRequest);
+        vrAudioFocusGranted = false;
     }
 
     @Override
