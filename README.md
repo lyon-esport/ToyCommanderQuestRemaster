@@ -27,7 +27,7 @@ Meta Touch controllers act as a Dreamcast pad:
 | Left trigger / right trigger | L / R triggers |
 | A, B (right) / X, Y (left) | A, B / X, Y |
 | Left ≡ (menu), short press | Start (the game's menu) |
-| Left ≡ (menu), long press | VR menu (planned) |
+| Left ≡ (menu), long press or double press | VR menu (planned) |
 | Right thumbstick click | Recenter the view |
 | Hold a grip, then right thumbstick up / down | Make the world bigger / smaller (saved) |
 
