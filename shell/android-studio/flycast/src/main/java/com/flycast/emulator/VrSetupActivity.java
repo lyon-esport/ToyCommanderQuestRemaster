@@ -117,9 +117,7 @@ public class VrSetupActivity extends Activity
                 found.append(scan.games.size() == 1 ? "" : "\n").append(shortPath(g.file));
             String wrong = wrongVersionText(scan);
             if (wrong != null)
-                found.append("
-
-").append(wrong);
+                found.append("\n\n").append(wrong);
             gameStatus.setText(found);
             gameStatus.setTextColor(GOOD);
         }
@@ -158,8 +156,7 @@ public class VrSetupActivity extends Activity
         StringBuilder s = new StringBuilder();
         for (VrGames.Game g : scan.wrongVersion)
             s.append("Found ").append(shortPath(g.file)).append(", but it isn't the European Toy Commander disc (its game ID is ")
-                    .append(g.gameId.isEmpty() ? "missing" : g.gameId).append(").
-");
+                    .append(g.gameId.isEmpty() ? "missing" : g.gameId).append(").\n");
         s.append("Toy Commander VR only runs Toy Commander (Europe) (En,Fr,De,Es), game ID ").append(VrGames.SUPPORTED_GAME_ID)
                 .append(": every VR setting is made for that version. Copy that disc image to the Download folder.");
         return s.toString();
