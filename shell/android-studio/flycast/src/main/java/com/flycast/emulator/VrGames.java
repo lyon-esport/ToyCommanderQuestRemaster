@@ -30,11 +30,19 @@ public final class VrGames
     {
         public final String title;
         public final File file;
+        /** tcvr: its game ID when known before starting it (see knownGameId), else null */
+        public final String gameId;
 
         Game(String title, File file)
         {
+            this(title, file, null);
+        }
+
+        Game(String title, File file, String gameId)
+        {
             this.title = title;
             this.file = file;
+            this.gameId = gameId;
         }
     }
 
@@ -49,6 +57,8 @@ public final class VrGames
         public final List<String> missing = new ArrayList<>();
         /** A packed game, when there's no disc image. */
         public File archive;
+        /** tcvr: disc images of another version than the one the VR build runs (with their game ID). */
+        public final List<Game> wrongVersion = new ArrayList<>();
     }
 
     /** The arcade sets the VR mod knows: MAME name, title, and the GD-ROM image next to it. */
@@ -85,7 +95,7 @@ public final class VrGames
                 if (!found.contains(f))
                     found.add(f);
         }
-        collect(found, scan);
+        collect(context, found, scan);
         if (!scan.games.isEmpty())
             scan.game = scan.games.get(0).file;
         return scan;
@@ -158,7 +168,7 @@ public final class VrGames
         return name.isEmpty() ? f.getName() : name;
     }
 
-    private static void collect(List<File> found, Scan scan)
+    private static void collect(Context context, List<File> found, Scan scan)
     {
         List<File> discs = new ArrayList<>();
         for (File f : found)
@@ -187,6 +197,13 @@ public final class VrGames
                 }
                 continue;
             }
+            // tcvr: another version of the game (or another game) can't start: the panel says why
+            String id = knownGameId(context, f);
+            if (isWrongVersion(id))
+            {
+                scan.wrongVersion.add(new Game(discTitle(f), f, id));
+                continue;
+            }
             discs.add(f);
         }
         // The House of the Dead first, then the rest
@@ -213,12 +230,20 @@ public final class VrGames
     static List<String> missingTracks(File image)
     {
         List<String> missing = new ArrayList<>();
+        for (String track : listedTracks(image))
+            if (track(image, track) == null)
+                missing.add(track);
+        return missing;
+    }
+
+    /** The track files a .cue or .gdi lists, in order (empty for other images, or unreadable). */
+    static List<String> listedTracks(File image)
+    {
+        List<String> tracks = new ArrayList<>();
         String lower = image.getName().toLowerCase(Locale.ROOT);
         boolean cue = lower.endsWith(".cue");
         if (!cue && !lower.endsWith(".gdi"))
-            return missing;
-        File dir = image.getParentFile();
-        String[] names = dir != null ? dir.list() : null;
+            return tracks;
         try (BufferedReader in = new BufferedReader(new FileReader(image)))
         {
             String line;
@@ -240,21 +265,120 @@ public final class VrGames
                         track = fileName(parts[4]);
                 }
                 first = false;
-                if (track == null || track.isEmpty())
-                    continue;
-                boolean there = new File(dir, track).isFile();
-                if (!there && names != null)
-                    for (String n : names)
-                        if (n.equalsIgnoreCase(track))
-                            there = true;
-                if (!there)
-                    missing.add(track);
+                if (track != null && !track.isEmpty() && !tracks.contains(track))
+                    tracks.add(track);
             }
         }
         catch (Exception e) {
             // unreadable: let the emulator have a go
         }
-        return missing;
+        return tracks;
+    }
+
+    /** A track listed by an image, next to it (letter case aside), or null. */
+    private static File track(File image, String name)
+    {
+        File dir = image.getParentFile();
+        File f = new File(dir, name);
+        if (f.isFile())
+            return f;
+        String[] names = dir != null ? dir.list() : null;
+        if (names != null)
+            for (String n : names)
+                if (n.equalsIgnoreCase(name))
+                    return new File(dir, n);
+        return null;
+    }
+
+    /**
+     * tcvr: the game ID (product number) in a disc image's boot header (IP.BIN), or null when it
+     * can't be read here (.chd and .cdi are left to the emulator, which checks every disc).
+     * IP.BIN starts the first data track of the high-density area: "SEGA SEGAKATANA" at the start
+     * of its first sector (2048-byte sectors) or after the 16-byte sync and header (2352-byte raw
+     * sectors), the product number at 0x40.
+     */
+    public static String readGameId(File image)
+    {
+        for (String name : listedTracks(image))
+        {
+            File f = track(image, name);
+            if (f == null || f.length() < 2352)
+                continue;
+            byte[] sector = new byte[2352];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f))
+            {
+                int read = 0;
+                while (read < sector.length)
+                {
+                    int n = in.read(sector, read, sector.length - read);
+                    if (n < 0)
+                        break;
+                    read += n;
+                }
+                if (read < sector.length)
+                    continue;
+            }
+            catch (Exception e) {
+                continue;
+            }
+            for (int at : new int[] { 0, 16, 24 })
+                if (new String(sector, at, 16, java.nio.charset.StandardCharsets.ISO_8859_1).equals("SEGA SEGAKATANA "))
+                    return new String(sector, at + 0x40, 10, java.nio.charset.StandardCharsets.ISO_8859_1).trim();
+        }
+        return null;
+    }
+
+    /** tcvr: the game ID the VR build runs (Toy Commander, Europe): see TCVR_SUPPORTED_GAME_ID in core/emulator.h. */
+    public static final String SUPPORTED_GAME_ID = "MK-5102050";
+
+    /** tcvr: what is known of a disc image's game ID (read here, or reported by the emulator), or null. */
+    public static String knownGameId(Context context, File image)
+    {
+        String id = readGameId(image);
+        if (id != null)
+            return id;
+        return refusedDiscs(context).getProperty(discKey(image));
+    }
+
+    /** tcvr: a disc the emulator refused (another game ID), kept for the setup panel (another process). */
+    public static void rememberRefused(Context context, File image, String gameId)
+    {
+        java.util.Properties p = refusedDiscs(context);
+        p.setProperty(discKey(image), gameId == null ? "" : gameId);
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(new File(context.getFilesDir(), REFUSED)))
+        {
+            p.store(out, "tcvr: discs refused by the emulator (path|size|modified = game ID)");
+        }
+        catch (Exception e) {
+            android.util.Log.w("flycast", "tcvr: can't keep the refused disc", e);
+        }
+    }
+
+    private static final String REFUSED = "vr-refused-discs.properties";
+
+    private static java.util.Properties refusedDiscs(Context context)
+    {
+        java.util.Properties p = new java.util.Properties();
+        try (java.io.FileInputStream in = new java.io.FileInputStream(new File(context.getFilesDir(), REFUSED)))
+        {
+            p.load(in);
+        }
+        catch (Exception e) {
+            // none yet
+        }
+        return p;
+    }
+
+    /** The same file only while unchanged: a new copy under the same name is checked again. */
+    private static String discKey(File image)
+    {
+        return image.getAbsolutePath() + "|" + image.length() + "|" + image.lastModified();
+    }
+
+    /** tcvr: a disc image known to be another version than the one the VR build runs. */
+    public static boolean isWrongVersion(String gameId)
+    {
+        return gameId != null && !gameId.equals(SUPPORTED_GAME_ID);
     }
 
     /** A file name at the start of the rest of a line, quoted or not. */

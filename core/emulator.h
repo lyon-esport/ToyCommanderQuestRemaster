@@ -31,6 +31,13 @@
 #include <time.h>
 
 void loadGameSpecificSettings();
+#ifdef USE_OPENXR
+// tcvr: the only disc the VR build runs: Toy Commander (Europe). Every address in its VR profile
+// (core/rend/vr_reproject.cpp) is this version's, and multiplayer will need the same disc everywhere.
+constexpr const char *TCVR_SUPPORTED_GAME_ID = "MK-5102050";
+// Told when another disc is refused (the platform shows the player why), before the load fails.
+extern void (*vrUnsupportedGameHook)(const std::string& gameId);
+#endif
 void SaveSettings();
 
 int flycast_init(int argc, char* argv[]);

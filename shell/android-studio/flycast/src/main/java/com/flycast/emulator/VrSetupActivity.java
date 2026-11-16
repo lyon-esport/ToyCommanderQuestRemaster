@@ -115,6 +115,11 @@ public class VrSetupActivity extends Activity
             StringBuilder found = new StringBuilder(scan.games.size() == 1 ? "Found: " : "Found, pick one below:");
             for (VrGames.Game g : scan.games)
                 found.append(scan.games.size() == 1 ? "" : "\n").append(shortPath(g.file));
+            String wrong = wrongVersionText(scan);
+            if (wrong != null)
+                found.append("
+
+").append(wrong);
             gameStatus.setText(found);
             gameStatus.setTextColor(GOOD);
         }
@@ -126,13 +131,15 @@ public class VrSetupActivity extends Activity
             if (scan.incomplete != null)
                 how = "Found " + shortPath(scan.incomplete) + ", but not the files it lists next to it: "
                         + TextUtils.join(", ", scan.missing) + ". Copy those to the same folder.";
+            else if (!scan.wrongVersion.isEmpty())
+                how = wrongVersionText(scan);
             else if (scan.archive != null)
                 how = "Found " + shortPath(scan.archive) + ": that's packed. Unpack it first (on a PC), then "
                         + "copy what comes out of it to the Download folder.";
             else if (!access)
                 how += " Then allow the access above.";
             gameStatus.setText(how);
-            gameStatus.setTextColor(scan.incomplete != null || scan.archive != null ? RED : SOFT);
+            gameStatus.setTextColor(scan.incomplete != null || scan.archive != null || !scan.wrongVersion.isEmpty() ? RED : SOFT);
         }
         games.removeAllViews();
         for (VrGames.Game g : scan.games)
@@ -141,6 +148,21 @@ public class VrSetupActivity extends Activity
             play.setOnClickListener(v -> play(g.file));
             games.addView(play, spaced(8));
         }
+    }
+
+    /** tcvr: the disc images that are another version than Toy Commander (Europe), and what to do; null: none. */
+    private String wrongVersionText(VrGames.Scan scan)
+    {
+        if (scan.wrongVersion.isEmpty())
+            return null;
+        StringBuilder s = new StringBuilder();
+        for (VrGames.Game g : scan.wrongVersion)
+            s.append("Found ").append(shortPath(g.file)).append(", but it isn't the European Toy Commander disc (its game ID is ")
+                    .append(g.gameId.isEmpty() ? "missing" : g.gameId).append(").
+");
+        s.append("Toy Commander VR only runs Toy Commander (Europe) (En,Fr,De,Es), game ID ").append(VrGames.SUPPORTED_GAME_ID)
+                .append(": every VR setting is made for that version. Copy that disc image to the Download folder.");
+        return s.toString();
     }
 
     private void askForAccess()
