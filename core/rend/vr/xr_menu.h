@@ -1,8 +1,9 @@
 /*
 	tcvr: the VR menu (Toy Commander VR, backlog P0-3), drawn by the emulator over the game.
 
-	The left controller's menu button opens it and pauses the game (the last picture stays,
-	head-tracked); it closes with the same button, B, or Resume. Either stick moves through it
+	The left controller's menu button held 0.6 s opens it (a short press is the game's Start) and
+	pauses the game (the last picture stays, head-tracked); it closes with a press of the same
+	button, B, or Resume. Either stick moves through it
 	(up/down: the line, left/right: the value), A picks. It holds what the game's own menus
 	can't: recenter, world size, comfort, the image sharpness settings one by one (to compare
 	quality and frame rate in the headset), save export/import and quit. Settings are kept in
@@ -19,7 +20,7 @@ namespace vr::xr
 
 struct MenuInput
 {
-	bool toggle = false;		// the left menu button, pressed now (edge)
+	bool toggle = false;		// open (left menu button held) or close (pressed) now
 	glm::vec2 stick { 0.f };	// the stronger of the two sticks
 	bool accept = false;		// A, pressed now
 	bool back = false;			// B, pressed now
