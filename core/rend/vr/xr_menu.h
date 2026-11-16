@@ -1,7 +1,7 @@
 /*
 	tcvr: the VR menu (Toy Commander VR, backlog P0-3), drawn by the emulator over the game.
 
-	The left controller's menu button held 0.6 s opens it (a short press is the game's Start) and
+	The left controller's menu button held 0.6 s or pressed twice opens it (a short press is the game's Start) and
 	pauses the game (the last picture stays, head-tracked); it closes with a press of the same
 	button, B, or Resume. Either stick moves through it
 	(up/down: the line, left/right: the value), A picks. It holds what the game's own menus

@@ -1446,7 +1446,7 @@ void updateGamepad(XrTime time)
 	{
 		logged = true;
 		NOTICE_LOG(INPUT, "XR: gamepad mode for [%s]: left stick = analog, right stick = D-pad, triggers = L/R, "
-				"A B X Y = A B X Y, left menu button = Start (held 0.6 s: VR menu), right stick click = recenter",
+				"A B X Y = A B X Y, left menu button = Start (held 0.6 s or pressed twice: VR menu), right stick click = recenter",
 				settings.content.gameId.c_str());
 	}
 	u32 buttons = 0;
@@ -1496,23 +1496,32 @@ void updateGamepad(XrTime time)
 	// tcvr: the VR menu on the left menu button (backlog P0-3): while it is open, the
 	// controllers drive it and the game gets nothing (all let go)
 	{
-		static bool menuWas, aWas, bWas, longFired;
-		static std::chrono::steady_clock::time_point pressedAt, startUntil;
+		static bool menuWas, aWas, bWas, longFired, startPending;
+		static std::chrono::steady_clock::time_point pressedAt, startUntil, startDue;
 		const bool menuButton = sync && boolAction(startAction, Left);
 		const bool aButton = sync && boolAction(padAAction);
 		const bool bButton = sync && boolAction(padBAction);
 		MenuInput in = scriptedMenuInput();
-		// The left menu button: a short press is the game's Start (sent for 0.15 s when let go;
-		// with the VR menu open it closes it), held 0.6 s it opens the VR menu
+		// The left menu button (Manu, 2026-11-16): a short press is the game's Start, held 0.6 s
+		// or pressed twice it opens the VR menu; with the VR menu open, a press closes it.
+		// A single press waits out the double-press window (0.25 s) before Start is sent (0.15 s).
 		const auto now = std::chrono::steady_clock::now();
 		if (menuButton && !menuWas)
 		{
 			pressedAt = now;
 			longFired = false;
+			if (startPending && now < startDue && !menuOpen())
+			{
+				// the second press: the VR menu, no Start
+				startPending = false;
+				longFired = true;	// (its release does nothing)
+				in.toggle = true;
+			}
 		}
 		if (menuButton && !longFired && now - pressedAt >= std::chrono::milliseconds(600))
 		{
 			longFired = true;
+			startPending = false;
 			if (!menuOpen())
 				in.toggle = true;
 		}
@@ -1521,7 +1530,15 @@ void updateGamepad(XrTime time)
 			if (menuOpen())
 				in.toggle = true;
 			else
-				startUntil = now + std::chrono::milliseconds(150);
+			{
+				startPending = true;
+				startDue = now + std::chrono::milliseconds(250);
+			}
+		}
+		if (startPending && now >= startDue)
+		{
+			startPending = false;
+			startUntil = now + std::chrono::milliseconds(150);
 		}
 		if (now < startUntil)
 			buttons |= DC_BTN_START;
