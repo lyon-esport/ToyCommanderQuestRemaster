@@ -83,7 +83,8 @@ const std::vector<Choice>& choices()
 			[] { return (float)config::AnisotropicFiltering; }, [](float v) { saveOption(config::AnisotropicFiltering, v); } },
 		{ "Sharper far textures", { 0.f, -0.5f, -1.f }, { "Off", "Low (-0.5)", "High (-1.0)" },
 			[] { return (float)config::VrTexLodBias; }, [](float v) { saveOption(config::VrTexLodBias, v); } },
-		{ "Eye resolution", { 0.8f, 0.9f, 1.f, 1.1f, 1.2f, 1.3f }, { "80%", "90%", "100%", "110%", "120%", "130%" },
+		// supersampling: more pixels per eye than the headset's recommended size, sharper
+		{ "Resolution multiplier", { 1.f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f, 1.6f }, { "100%", "110%", "120%", "130%", "140%", "150%", "160%" },
 			[] { return (float)config::VrXrResolution; }, [](float v) { saveOption(config::VrXrResolution, v); } },
 	};
 	return list;
