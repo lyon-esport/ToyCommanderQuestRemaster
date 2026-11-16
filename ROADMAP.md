@@ -1,73 +1,96 @@
 # Roadmap
 
-What's next for The House of the Dead 2 VR, in order. Most of it comes straight from the
-comments on the first video. Thanks for all of them.
+What's next for Toy Commander VR, in order. Priorities use MoSCoW: **P0** Must (first
+distributable test build), **P1** Should, **P2** Could, **P3** Won't have now.
+Last reorganized 2026-11-16. The House of the Dead 2 VR roadmap this fork started from is
+kept in [ROADMAP.hotd2-vr.md](ROADMAP.hotd2-vr.md).
 
-## 1. Download and play (built, being tested)
+## Decisions so far
 
-Until now you had to build the app yourself, copy the game in with `adb` and rip the hands
-on a PC. That's too much. Now: download one file, drop your game on the headset, play.
+- **VR menu:** drawn by the emulator as an overlay on top of the game (left ≡ button),
+  pausing it. The game's own menus are not hijacked.
+- **Aiming:** the weapons aim with the vehicle, as in the original game. The head only
+  turns the view and never feeds the game's aiming.
+- **360° head camera:** required for the first release (P0).
+- **PAL only:** the memory-patch profile targets the European release (`MK-5102050`).
 
-- **A ready-made APK** on the [Releases](https://github.com/mikermak/hotd2-vr/releases) page,
-  installable with SideQuest (no command line). Signed with one fixed key, so updates install
-  over the old version and keep your settings and saves. It contains nothing of the game.
-- **Your game from the Download folder.** Copy your own `.chd`, `.gdi`, `.cue` or `.cdi` to the
-  headset's Download folder (SideQuest, or USB from Windows Explorer). The app asks once for
-  file access and finds it, whatever the file is called.
-- **A setup screen in the headset** that says what it found and what's still missing, instead
-  of a black screen.
-- **The agent's hands without a PC.** The first time you start the game, the app takes the
-  hands and pistol from your own copy, on the headset, once: it plays itself to the game over
-  scene, fast, behind a panel. No Python, no script. B skips it (the red arcade gun then).
-- **Quest 2 and Quest Pro.** The app was locked to Quest 3 and 3S. It doesn't use anything
-  those headsets lack, so now it runs on them too. Quest 2 owners: tell me how it runs. If
-  needed, there'll be a lighter preset.
-- **No more floating "Player 2" text** in one-player games.
+Still open: whether pitch and roll follow the head in planes, where the gun sight is drawn
+when the player looks away from the vehicle's heading, and the public name and icon (see P0-7).
 
-## 2. PCVR (built, being tested)
+## Done
 
-The same mod on a PC: SteamVR, Quest Link / Air Link, Virtual Desktop. Same renderer,
-same hands and slide reload. On the PC the game can also render at a higher resolution.
+- One APK with no game data. The disc image is found in Download, and an in-headset setup
+  panel asks for file access.
+- Stereo VR at 72 fps with head tracking (3DOF + 6DOF). Recenter: left stick click.
+- Meta Touch controllers act as a Dreamcast pad (see [Controls](README.md#controls)).
+- Saves: automatic backup at launch, export / import, and import through `import.request`
+  (see [tcvr/docs/Saves.md](tcvr/docs/Saves.md)).
+- English by default. Version names are `YYYYMMDD_HHMMSS`.
+- Wider game view (FOV and culling patch), HUD on the 2D plane.
+- 3D aiming marks (gun ring, lock square, bomber mark).
+- Audio stall and speed fix (validated on the headset, being pushed).
 
-- The OpenXR part has a Windows version (desktop OpenGL instead of Android's GLES).
-- Controller bindings for Quest Touch, Index, Vive and Windows Mixed Reality.
-- A zip with the program: unpack, point it at your game, play.
+## Phase 1 – P0: playable, distributable test build
 
-## 3. Two guns (built, being tested)
+| # | Item |
+|---|---|
+| P0-1 | **PAL version check at launch:** accept only `MK-5102050` (plus a file hash if possible), with a clear message on the setup panel otherwise. |
+| P0-2 | **60 Hz for the PAL game:** check whether it runs at 50 Hz, and force 60 Hz if it can. |
+| P0-3 | **VR menu overlay** on the left ≡ button, pausing the game: recenter, world size, export / import saves, quit at the bottom. The right stick click stays Start. |
+| P0-4 | **End-to-end save test:** play, save, quit, relaunch, load, export, import. |
+| P0-5 | **Control model written down:** vehicle aiming (decided); pitch / roll in planes and sight placement still to define. |
+| P0-6 | **Release readiness:** release keystore and signing, sideloading (SideQuest / `adb`), an `Install.md` for players, and the GPL source published with each APK. |
+| P0-7 | **Public name and icon** that avoid the "Toy Commander" trademark and Sega's logo. Needed before any public release; private test builds are not affected. **Undecided.** |
+| P0-8 | **360° view:** head orientation drives the game camera. Find the camera through the four vehicle views, inject yaw, then adjust FOV and sorting margin. The vehicle keeps steering and aiming. Critical path for the release. |
+| P0-9 | **Basic comfort with the 360° camera:** vignette when turning, recenter in the VR menu. |
 
-One player, a gun in each hand: the left gun is player 2. Both health bars, both scores.
-This is also the first step towards real two-player games.
+## Phase 2 – P1: should have
 
-## 4. Two players, two headsets (in progress)
+| # | Item |
+|---|---|
+| P1-3 | Other comfort options: stable horizon when planes bank, world scale in the menu, a clear "snap rotation" for vehicles (the view offset, not the vehicle). |
+| P1-4 | Fixed-camera missions and cutscenes keep their own view; the intro video plays on a flat screen or can be skipped. |
+| P1-5 | Xbox Bluetooth controller, with automatic switching between it and the Touch controllers. |
+| P1-6 | Quit to Meta Home at the bottom of the VR menu (built with P0-3). |
+| P1-7 | Sharper image: 4x MSAA, anisotropic filtering, negative LOD bias, slight supersampling. |
+| P1-8 | Launch feedback: system splash and a loading panel (searching for the game, checking the version, starting). |
+| P1-9 | Performance targets: 72 Hz minimum on Quest 3, a decision on Quest 2, CPU and thermal budget. |
+| P1-10 | Touch controller mapping documented for players and shown in the VR menu. |
+| P1-11 | Audio follows the head once the camera turns; decide on spatial audio. |
 
-Two Quests in the same game, each player looking around from their own head, standing side
-by side like at the cabinet.
+## Phase 3 – P2: could have
 
-Where it stands (October 2026): the netplay itself works. Two copies stay the exact same game
-frame by frame, also on a bad connection (100 ms, lost packets), with their own saves, and a
-Quest hosting a game keeps full speed while it corrects mispredicted frames. A system menu or
-the Guardian in the headset no longer ends the game for both. Still to come: connecting from
-the headset (a waiting screen, a room code), seeing the other player. A Quest and a PC don't
-play together yet: they round floating point differently, so their games would drift apart.
+| # | Item |
+|---|---|
+| P2-1 | Graphics presets in the VR menu (Performance / Balanced / Quality / Custom), fixed foveated rendering. |
+| P2-2 | Smooth camera turn following the vehicle. |
+| P2-3 | Cockpit view and a farther 3rd-person view. |
+| P2-4 | Head-locked HUD as an option. |
+| P2-5 | LAN multiplayer, up to 4 headsets: each runs the 4-way split screen, only inputs are exchanged, each headset shows its own player. Gates: head orientation in netplay inputs if it changes game state, split-screen detail acceptable, CPU budget for 4 views. Rollback (GGPO) or lockstep to be decided. |
+| P2-6 | All original languages (Fr / De / Es). |
+| P2-7 | Unlock all levels. |
+| P2-8 | Update check from GitHub Releases in the VR menu. |
+| P2-9 | Texture packs from a folder, real-time xBRZ as a first test. |
 
-- Flycast's rollback netplay (GGPO): both headsets run the same game and only send each
-  other their gun inputs. Several fixes in Flycast were needed to keep them exactly in sync.
-- First on the same Wi-Fi, finding each other by themselves (no typing IP addresses).
-- You see the other player's hands and gun next to you.
-- Then over the internet, with a room code.
+## P3: not now
 
-This is the biggest step, so it comes last. It needs both headsets to stay exactly in sync,
-which has to be tested well before it goes out.
+- Online play over the Internet with room codes.
+- On-device AI texture upscaling (a PC companion tool is the fallback).
+- Normal and relief maps generated from the textures.
+- Gyro and accelerometer piloting.
+- Refresh rate selector (cheap, could join P2-1).
+- VR menu in other languages.
+- PC VR build of Toy Commander (possible, inherited from HOTD2 VR; the Windows PCVR CI
+  already builds the emulator).
+- Static recompilation as a "true remaster".
 
-## Later, maybe
+## Suggested order
 
-- **The Maze of the Kings** (NAOMI): built, being tested.
-- Other Dreamcast and NAOMI light gun games (Confidential Mission, Death Crimson OX, Ninja
-  Assault, Gun Survivor 2) run on the same Flycast base, so they're the most likely next games.
-- The House of the Dead 1 is an arcade (Model 2) and Saturn game, not a Dreamcast one, so it
-  would be a separate project. [port0r](https://github.com/jacquesdupontd/port0r) is
-  already working on it.
-- Hold the trigger for auto fire, for the trigger fingers.
+1. Push the validated audio fixes.
+2. P0-1 and P0-2, then P0-3 (with P1-6), then P0-4.
+3. Start P0-8 and P0-9 as early as possible: they are the critical path. Write down the rest
+   of P0-5 before injecting the camera.
+4. P1-7, P1-8 and P1-9 in parallel with the camera work.
+5. P0-6 and P0-7 before the first APK leaves the team.
 
-No dates: this is a hobby project. Requests and Quest 2 test reports are welcome in the
-[issues](https://github.com/mikermak/hotd2-vr/issues).
+No dates: this is a hobby project.
