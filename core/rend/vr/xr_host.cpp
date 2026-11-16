@@ -108,6 +108,7 @@ XrAction aimAction, handAction, triggerAction, startAction, skipAction, recenter
 // tcvr: the gamepad mode's own buttons (A, B on the right; X, Y on the left; stick clicks)
 XrAction padAAction, padBAction, padXAction, padYAction, stickClickAction;
 PFN_xrRequestDisplayRefreshRateFB requestRefreshRate;
+PFN_xrGetDisplayRefreshRateFB getRefreshRate;	// tcvr: the rate in use (log)
 PFN_xrPerfSettingsSetPerformanceLevelEXT setPerformanceLevel;
 
 bool initTried;
@@ -553,7 +554,10 @@ bool init()
 	if (!XRCHECK(xrCreateInstance(&createInfo, &instance)))
 		return false;
 	if (refreshRates)
+	{
 		xrGetInstanceProcAddr(instance, "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction *)&requestRefreshRate);
+		xrGetInstanceProcAddr(instance, "xrGetDisplayRefreshRateFB", (PFN_xrVoidFunction *)&getRefreshRate);
+	}
 	if (perfSettings)
 		xrGetInstanceProcAddr(instance, "xrPerfSettingsSetPerformanceLevelEXT", (PFN_xrVoidFunction *)&setPerformanceLevel);
 	XrInstanceProperties instanceProps { XR_TYPE_INSTANCE_PROPERTIES };
@@ -2159,6 +2163,7 @@ void term()
 	aimAction = handAction = triggerAction = startAction = skipAction = recenterAction = laserAction = hapticAction = stickAction = gripAction = XR_NULL_HANDLE;
 	padAAction = padBAction = padXAction = padYAction = stickClickAction = XR_NULL_HANDLE;
 	requestRefreshRate = nullptr;
+	getRefreshRate = nullptr;
 	setPerformanceLevel = nullptr;
 	sessionRunning = focused = drawingEye = viewsLogged = false;
 	sessionLost = exiting = false;
@@ -2224,9 +2229,12 @@ bool frame()
 		const float rate = (float)config::VrXrRefreshRate;
 		if (sessionRunning && requestRefreshRate && rate != appliedRate)
 		{
-			if (appliedRate != 0.f)
-				NOTICE_LOG(RENDERER, "XR: refresh rate %.0f Hz requested", rate);
 			XRCHECK(requestRefreshRate(session, rate));
+			float now = 0.f;
+			if (getRefreshRate)
+				getRefreshRate(session, &now);
+			// (a developer override, the debug.oculus.refreshRate property, wins over the request)
+			NOTICE_LOG(RENDERER, "XR: refresh rate %.0f Hz requested, display now %.0f Hz", rate, now);
 			appliedRate = rate;
 		}
 		if (!sessionRunning)
@@ -2462,10 +2470,10 @@ bool frame()
 			snprintf(line, sizeof(line), "%.0f fps  |  game %.0f", headsetFps, gameFps);
 			const glm::vec3 headPos = (relativePosition(views[0].pose.position) + relativePosition(views[1].pose.position)) * 0.5f;
 			const glm::mat4 head = glm::translate(glm::mat4(1.f), headPos) * glm::mat4_cast(relativeRotation(views[0].pose.orientation));
-			const glm::mat4 at = head * glm::translate(glm::mat4(1.f), glm::vec3(0.26f, -0.22f, -0.9f));
+			const glm::mat4 at = head * glm::translate(glm::mat4(1.f), glm::vec3(0.30f, -0.27f, -0.9f));
 			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
 			glViewport(0, 0, c.width, c.height);
-			drawLabel(eyeProjection(views[i].fov) * view * at, line, 0.16f);
+			drawLabel(eyeProjection(views[i].fov) * view * at, line, 0.24f);
 		}
 		if (i == 0)
 		{
