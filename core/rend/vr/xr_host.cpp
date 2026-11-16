@@ -470,6 +470,22 @@ bool initSwapchains()
 	return true;
 }
 
+// tcvr: the eye buffers go (their settings changed: vr.Msaa, vr.XrResolution); initSwapchains
+// makes new ones
+void destroySwapchains()
+{
+	for (EyeChain& c : chains)
+	{
+		if (!c.fbos.empty())
+			glDeleteFramebuffers((GLsizei)c.fbos.size(), c.fbos.data());
+		if (c.depthStencil != 0)
+			glDeleteRenderbuffers(1, &c.depthStencil);
+		if (c.chain != XR_NULL_HANDLE)
+			xrDestroySwapchain(c.chain);
+		c = EyeChain();
+	}
+}
+
 bool init()
 {
 	initTried = true;
@@ -2043,6 +2059,29 @@ bool frame()
 		// Not shown (yet): keep the emulator's frames moving without spinning.
 		rend_vr_drain(10);
 		return false;
+	}
+
+	// tcvr: sharpness settings changed while running (the VR menu, or emu.cfg): new eye buffers,
+	// between frames, so the player can compare them at once
+	{
+		static int appliedMsaa = -1;
+		static float appliedResolution = -1.f;
+		const int msaa = config::VrMsaa;
+		const float resolution = config::VrXrResolution;
+		if (appliedMsaa != -1 && (msaa != appliedMsaa || resolution != appliedResolution) && chains[0].chain != XR_NULL_HANDLE)
+		{
+			NOTICE_LOG(RENDERER, "XR: eye buffer settings changed (MSAA %d, resolution x%.2f): new eye buffers", msaa, resolution);
+			destroySwapchains();
+			if (!initSwapchains())
+			{
+				ERROR_LOG(RENDERER, "XR: new eye buffers failed, starting the session again");
+				sessionLost = true;
+			}
+		}
+		appliedMsaa = msaa;
+		appliedResolution = resolution;
+		if (sessionLost)
+			return false;
 	}
 
 	XrFrameWaitInfo waitInfo { XR_TYPE_FRAME_WAIT_INFO };

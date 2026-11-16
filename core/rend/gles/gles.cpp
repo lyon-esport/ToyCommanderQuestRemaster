@@ -180,6 +180,7 @@ uniform lowp vec3 sp_FOG_COL_RAM,sp_FOG_COL_VERT;
 uniform highp float sp_FOG_DENSITY;
 uniform sampler2D tex,fog_table;
 uniform lowp float trilinear_alpha;
+uniform mediump float lodBias;
 uniform lowp vec4 fog_clamp_min;
 uniform lowp vec4 fog_clamp_max;
 #if pp_Palette != 0
@@ -324,9 +325,9 @@ void main()
 	{
 		#if pp_Palette == 0
 		  #if TARGET_GL == GLES2 || TARGET_GL == GL2 || DIV_POS_Z == 1
-			lowp vec4 texcol = texture(tex, vtx_uv.xy);
+			lowp vec4 texcol = texture(tex, vtx_uv.xy, lodBias);
 		  #else
-			lowp vec4 texcol = textureProj(tex, vtx_uv);
+			lowp vec4 texcol = textureProj(tex, vtx_uv, lodBias);
 		  #endif
 		#elif pp_Palette == 1
 			lowp vec4 texcol = palettePixel(vtx_uv);
@@ -892,6 +893,7 @@ bool CompilePipelineShader(PipelineShader* s)
 	s->palette_index = glGetUniformLocation(s->program, "palette_index");
 
 	s->trilinear_alpha = glGetUniformLocation(s->program, "trilinear_alpha");
+	s->lodBias = glGetUniformLocation(s->program, "lodBias");
 	
 	if (s->fog_clamping)
 	{
