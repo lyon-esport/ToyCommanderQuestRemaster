@@ -11,7 +11,11 @@
 */
 #include "xr_gun.h"
 #include "xr_hands.h"
+// tcvr: the Toy Commander VR build leaves the CC BY 4.0 model out (TCVR_NO_GUN_MODEL, CMake
+// option TCVR_GUN_MODEL off), so its binaries stay GPL-2.0-or-later; the arcade gun isn't drawn
+#ifndef TCVR_NO_GUN_MODEL
 #include "gun_model.h"
+#endif
 #include "rend/gles/gles.h"
 #include "rend/gles/glcache.h"
 #include "cfg/option.h"
@@ -41,8 +45,10 @@ void logGlErrors(const char *pass)
 		ERROR_LOG(RENDERER, "VR %s OpenGL error 0x%04x", pass, error);
 }
 
+#ifndef TCVR_NO_GUN_MODEL
 static_assert(GunMuzzle.x == gunmodel::Muzzle[0] && GunMuzzle.y == gunmodel::Muzzle[1] && GunMuzzle.z == gunmodel::Muzzle[2],
 		"GunMuzzle (xr_gun.h) must match the baked model");
+#endif
 
 struct Material
 {
@@ -98,6 +104,9 @@ float shotRandom(unsigned n, unsigned k)
 
 bool initModel()
 {
+#ifdef TCVR_NO_GUN_MODEL
+	return false;	// (no model in this build)
+#endif
 	if (modelProgram != 0)
 		return true;
 	OpenGlSource vertex;
@@ -167,6 +176,7 @@ void main()
 	mEmissive = glGetUniformLocation(modelProgram, "emissive");
 	mLight = glGetUniformLocation(modelProgram, "muzzleLight");
 
+#ifndef TCVR_NO_GUN_MODEL
 	// interleaved position, normal
 	std::vector<float> verts(gunmodel::VertexCount * 6);
 	for (unsigned i = 0; i < gunmodel::VertexCount; i++)
@@ -191,6 +201,7 @@ void main()
 	glEnableVertexAttribArray(VERTEX_NORM_ARRAY);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	bindVertexArray(0);
+#endif
 	return true;
 }
 
@@ -274,6 +285,7 @@ void drawModel(const glm::mat4& viewProj, const glm::vec3& eyePos, const glm::ma
 	bindVertexArray(modelVao);
 	glEnableVertexAttribArray(VERTEX_POS_ARRAY);
 	glEnableVertexAttribArray(VERTEX_NORM_ARRAY);
+#ifndef TCVR_NO_GUN_MODEL
 	for (const gunmodel::Part& part : gunmodel::Parts)
 	{
 		const Material *m = &Materials[0].material;
@@ -286,6 +298,7 @@ void drawModel(const glm::mat4& viewProj, const glm::vec3& eyePos, const glm::ma
 		glUniform3f(mEmissive, m->emissive.r, m->emissive.g, m->emissive.b);
 		glDrawElements(GL_TRIANGLES, (GLsizei)part.count, GL_UNSIGNED_SHORT, (const void *)(part.first * sizeof(unsigned short)));
 	}
+#endif
 	bindVertexArray(0);
 }
 

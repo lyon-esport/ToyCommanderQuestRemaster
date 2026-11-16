@@ -52,8 +52,8 @@ Details: [tcvr/docs/Saves.md](tcvr/docs/Saves.md).
   third-party credits: [README.hotd2-vr.md](README.hotd2-vr.md#credits-and-licences).
 - [OpenXR loader](https://github.com/KhronosGroup/OpenXR-SDK) by Khronos, Apache-2.0.
 - Roboto (on the headset's panels) by Google, Apache-2.0.
-- "Namco Arcade Gun" model by [Martoscar](https://sketchfab.com/Martoscar), CC BY 4.0
-  (inherited from HOTD2 VR, see below).
+- "Namco Arcade Gun" model by [Martoscar](https://sketchfab.com/Martoscar), CC BY 4.0: in
+  the source tree, inherited from HOTD2 VR, but not in Toy Commander VR builds (see below).
 - Toy Commander VR: Lyon e-Sport.
 
 ## License and source
@@ -62,9 +62,12 @@ This project's code is licensed under the GNU General Public License, version 2 
 option) any later version, like Flycast; see [LICENSE](LICENSE). Changed Flycast files carry
 a note.
 
-The build still compiles in the CC BY 4.0 gun model from HOTD2 VR (`core/rend/vr/gun_model.h`).
-CC BY 4.0 is compatible with GPL-3.0 but not GPL-2.0, so **binaries that include it are
-distributed under GPL-3.0**, which the "or later" clause allows.
+The source tree keeps HOTD2 VR's arcade gun model (`core/rend/vr/gun_model.h`) under its own
+licence, CC BY 4.0. Toy Commander VR builds **leave it out** (CMake option `TCVR_GUN_MODEL`,
+off by default; Toy Commander is played with a pad and never shows the gun), so **the APKs are
+distributed under GPL-2.0-or-later**, like Flycast. CC BY 4.0 is compatible with GPL-3.0 but not
+GPL-2.0: a build made with `-DTCVR_GUN_MODEL=ON` includes the model and is then distributed under
+GPL-3.0, which the "or later" clause allows.
 
 **Source offer:** whoever receives an APK or other binary of this project is entitled to its
 complete corresponding source code. Each released build is published together with the
