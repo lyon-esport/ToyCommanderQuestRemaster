@@ -11,6 +11,7 @@ Covers the four P0 changes made without the headset, each in its own PR:
 | E. Image sharpness: LOD bias, MSAA and eye resolution switched live | P1-7 | `tcvr/sharpness` |
 | F. VR menu on the left ≡ (overlay), with a toggle per sharpness setting | P0-3, P1-6 | `tcvr/vr-menu` (on top of E and C) |
 | G. Launch splash and loading panel | P1-8 | `tcvr/launch-feedback` |
+| H. HD texture upscale cache (built once from the player's disc) | P2-9 | `tcvr/texture-upscale` (on top of F) |
 
 Test build: the local branch `tcvr/test-p0` = `main` + the audio fixes (PR #2) + all the branches above.
 Record the APK's version and SHA-256 with each result. A test passes only with the evidence listed.
@@ -92,13 +93,24 @@ Capture the menu with `files/capture.request` (left eye) or a screenshot.
 | E1 | Game behind the menu = Running; then change MSAA Off → 2x → 4x. | Each change rebuilds the eye buffers within a frame (a short blink at most); edges visibly smoother at 4x. Note the headset and game fps on the menu line for each value. | logcat `XR: eye buffer settings changed (MSAA 4 ...)` then `XR: eye buffers WxH, 4x MSAA`; fps per value |
 | E2 | Anisotropic filtering Off → 16x. | Ground textures at a grazing angle sharper; fps noted. | capture of the same view per value; fps |
 | E3 | Sharper far textures Off → Low → High. | Distant textures sharper; High may shimmer while moving (note it). | captures; fps |
-| E4 | Eye resolution 80% → 130%. | Sharper picture as it grows; fps drops at some point (note where it falls below 72). | logcat eye buffer size; fps per value |
+| E4 | Resolution multiplier 100% → 160%, one step at a time (Game behind the menu = Running). | Sharper picture as it grows; eye buffers capped at the runtime's maximum (logcat size stops growing); fps drops at some point: note where it falls below 72. | logcat `XR: eye buffers WxH` per step; fps per value |
 | E5 | Restart the app. | The chosen values are kept (emu.cfg `vr.Msaa`, `rend.AnisotropicFiltering`, `vr.TexLodBias`, `vr.XrResolution`, `vr.ComfortVignette`). | emu.cfg |
 | E6 | Pick the best quality that holds 72 fps in the busiest level tried. | A recommended default set for the release. | table in the results |
 | F7 | Export saves + A. | Status line "Saves exported to Download/ToyCommanderVR/Saves/<time>"; the folder has the VMU files. | `adb shell ls` of the folder |
 | F8 | Import saves + A, then A again. | "Saves imported. Restarting..."; the app restarts by itself within ~2 s and the game boots with those saves. | logcat; tester's note |
 | F9 | Quit game + A, A. | Back to Horizon Home; the app's process is gone. | `adb shell pidof com.dreamcast4ever.toycommandervr` empty |
 | F10 | Vignette off while the menu is open (stick moves with menu open). | No vignette. | capture |
+
+## H. HD texture upscale cache
+
+| # | Steps | Expected | Evidence |
+|---|---|---|---|
+| H1 | Fresh install (or delete `files/.../texcache/`), default settings (2x). Play the first mission 3 minutes. | Game runs as before (no new stutter); logcat `tcvr: upscale cache: 1 textures upscaled 2x`, then every 50; the menu's status line "HD textures N" grows. | logcat; menu capture |
+| H2 | `"$ADB" shell run-as com.dreamcast4ever.toycommandervr find . -path '*texcache*' -name '*.png' \| wc -l` and `du -sh` on the folder. | PNG files appear; size noted (MB per level). | command output |
+| H3 | Quit and relaunch, same mission. | logcat `tcvr: upscale cache: N textures in ...` at start; textures visibly sharper (no blocky pixels) from the first frame; fewer new textures upscaled. | captures before/after at the same spot |
+| H4 | Menu: HD textures Off / 2x / 4x. | Off: originals next time the textures load (next level); 4x: new textures cached at 4x (already cached ones stay 2x). | captures; logcat |
+| H5 | Look for artefacts: text, HUD digits, transparent edges, the radar. | Note any texture that looks worse upscaled (its hash from the cache file names, if needed). | captures |
+| H6 | Performance: headset/game fps with cache on vs off in the same scene. | No loss once the cache is built. | fps |
 
 ## G. Launch splash and loading panel
 
