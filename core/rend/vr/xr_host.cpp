@@ -17,6 +17,7 @@
 #include "xr_gun.h"
 #include "xr_hands.h"
 #include "xr_panel.h"
+#include "xr_vignette.h"	// tcvr: comfort vignette
 #include "hands_rip.h"
 #include "rend/gles/gles.h"
 #ifdef __ANDROID__
@@ -1432,6 +1433,8 @@ void updateGamepad(XrTime time)
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
+	// tcvr: the left stick steers the vehicle: the view turns without the head (comfort vignette)
+	noteSteering(sync ? dead(analog.x) : 0.f);
 	const bool active = sync && (glm::length(analog) > 0.12f || left > 0.02f || right > 0.02f);
 	if (active || padActive)
 	{
@@ -1983,6 +1986,7 @@ void term()
 		// still on the render thread with the context current: our own GL objects first
 		termGun();
 		termPanel();
+		termVignette();
 		for (EyeChain& c : chains)
 		{
 			if (!c.fbos.empty())
@@ -2105,6 +2109,17 @@ bool frame()
 					: "Reload: grab the back of the pistol with your other hand and pull.", 0.047f, grey },
 		};
 	const bool showPanel = !panel.lines.empty();
+	// tcvr: the comfort vignette's strength for this frame (eased over time; none on a panel or in menus)
+	float vignette;
+	{
+		static std::chrono::steady_clock::time_point last;
+		const auto now = std::chrono::steady_clock::now();
+		const double dt = last == std::chrono::steady_clock::time_point() ? 0.0 : std::chrono::duration<double>(now - last).count();
+		last = now;
+		if (showPanel || vr::isMenuFrame() || !gamepadMode())
+			noteSteering(0.f);
+		vignette = updateVignette(dt);
+	}
 
 	XrViewState viewState { XR_TYPE_VIEW_STATE };
 	XrViewLocateInfo locateInfo { XR_TYPE_VIEW_LOCATE_INFO };
@@ -2240,6 +2255,12 @@ bool frame()
 					drawGunGlow(viewProj, eyePos, g.view, first);
 					first = false;
 				}
+		}
+		if (!showPanel && vignette > 0.f && gles_vr_have_frame())
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+			glViewport(0, 0, c.width, c.height);
+			drawVignette(eyeProjection(views[i].fov), vignette);
 		}
 		if (i == 0)
 		{
