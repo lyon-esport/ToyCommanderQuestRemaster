@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Versioned pre-push hook (enabled by tcvr/tools/install-hooks.sh through core.hooksPath).
+# Scans every commit that is not on a remote yet: added lines, new file names, commit messages.
+# git passes: $1 = remote name, $2 = URL; stdin = "<local ref> <local sha> <remote ref> <remote sha>" lines.
+root="$(git rev-parse --show-toplevel)" || exit 1
+cd "$root" || exit 1
+source tcvr/tools/leakscan/find-perl.sh || exit 1
+exec "$PERL" tcvr/tools/leakscan/leakscan.pl --pre-push "${1:-origin}"

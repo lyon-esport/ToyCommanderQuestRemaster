@@ -1,0 +1,10 @@
+# leakscan allowlist (see tcvr/docs/LeakScan.md).
+# One Perl regex per line, matched against the reported value, or `path:<glob>` to skip a file.
+# Keep this short: every entry is a hole. Prefer `leakscan:allow` on the single line instead.
+
+# Bot identities used by upstream CI workflows.
+^github-actions@github\.com$
+^41898282\+github-actions\[bot\]@users\.noreply\.github\.com$
+
+# The scanner's own self-test uses fake sample values on purpose.
+path:tcvr/tools/leakscan/tests/**

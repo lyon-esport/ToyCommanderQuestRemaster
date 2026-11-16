@@ -1,0 +1,44 @@
+name: Leak scan
+
+# Backstop for tcvr/tools/hooks/pre-push: refuses personal or environment-specific data
+# (local paths, IP/MAC addresses, device serials, hostnames, e-mails, keys) in new commits,
+# commit messages and PR text. Findings are masked in the log. Help: tcvr/docs/LeakScan.md
+
+on:
+  push:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  leakscan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Self-test
+        run: bash tcvr/tools/leakscan/tests/run.sh
+
+      - name: Scan new commits
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ -z "$BASE" || "$BASE" =~ ^0+$ ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            BASE="$(git merge-base origin/main "$HEAD")"   # new branch: everything not on main
+          fi
+          perl tcvr/tools/leakscan/leakscan.pl --mask --range "$BASE..$HEAD"
+
+      - name: Scan PR title and description
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s\n%s\n' "$TITLE" "$BODY" | perl tcvr/tools/leakscan/leakscan.pl --mask --text "PR description"

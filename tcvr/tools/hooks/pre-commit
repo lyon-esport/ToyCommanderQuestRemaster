@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Versioned pre-commit hook (enabled by tcvr/tools/install-hooks.sh through core.hooksPath).
+# 1. game data / AI files / big files (tcvr/tools/pre-commit)
+# 2. personal or environment-specific data in the staged lines (leakscan)
+root="$(git rev-parse --show-toplevel)" || exit 1
+cd "$root" || exit 1
+rc=0
+bash tcvr/tools/pre-commit || rc=1
+source tcvr/tools/leakscan/find-perl.sh || exit 1
+"$PERL" tcvr/tools/leakscan/leakscan.pl --staged || rc=1
+exit $rc
