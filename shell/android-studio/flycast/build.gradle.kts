@@ -2,6 +2,7 @@
 import java.time.Duration as TcvrDuration
 import java.time.LocalDateTime as TcvrDateTime
 import java.time.format.DateTimeFormatter as TcvrFormatter
+import java.util.Properties as TcvrProperties
 plugins {
     alias(libs.plugins.android.application)
 }
@@ -16,9 +17,9 @@ fun gitVersionName(): String {
 // key and not debuggable. The key stays private: TCVR_SIGNING_PROPERTIES names a properties file
 // outside the repository (storeFile, storePassword, keyAlias, keyPassword). See tcvr/docs/Release.md.
 val tcvrRelease = project.hasProperty("tcvr.release")
-val tcvrSigning: java.util.Properties? = System.getenv("TCVR_SIGNING_PROPERTIES")
+val tcvrSigning: TcvrProperties? = System.getenv("TCVR_SIGNING_PROPERTIES")
     ?.takeIf { it.isNotEmpty() && file(it).isFile }
-    ?.let { path -> java.util.Properties().apply { file(path).inputStream().use { load(it) } } }
+    ?.let { path -> TcvrProperties().apply { file(path).inputStream().use { stream -> load(stream) } } }
 if (tcvrRelease && tcvrSigning == null)
     throw GradleException("-Ptcvr.release needs TCVR_SIGNING_PROPERTIES (see tcvr/docs/Release.md)")
 
