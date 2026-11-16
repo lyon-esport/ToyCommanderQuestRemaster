@@ -54,6 +54,10 @@ Findings:
    "Fixed foveation (edges)" Off/Low/Medium/High, applied live and again to new eye buffers
    (MSAA or resolution change). Default Off.
 
+Items 1 and 2 can be switched off to compare or to rule them out of a bug: `vr.UploadOnce` and
+`vr.DiscardDepth` (both on by default), VR menu lines "Upload frame once (perf)" and
+"Discard eye depth (perf)", after the foveation line; both take effect on the next headset frame.
+
 ## Still to do (plan items)
 
 - Depth layer (`XR_KHR_composition_layer_depth`) and Application SpaceWarp (`XR_FB_space_warp`).

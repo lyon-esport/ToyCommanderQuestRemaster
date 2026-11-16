@@ -2551,7 +2551,8 @@ bool frame()
 		// tcvr: the eye's depth and stencil are done with (the layer is colour only): the GPU can
 		// drop them from its tile memory instead of writing them out (and, with MSAA, every
 		// sample of them) to the eye buffer's memory each frame (frame-rate plan, item 1)
-		if (glInvalidateFramebuffer != nullptr)
+		// (vr.DiscardDepth off: kept, as before, to compare)
+		if (config::VrDiscardDepth && glInvalidateFramebuffer != nullptr)
 		{
 			static const GLenum discard[] { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
 			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);

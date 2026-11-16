@@ -492,6 +492,8 @@ extern Option<bool> VrDropShotMarker;
 extern Option<bool> VrDropShotFlash;
 extern Option<float> VrTexLodBias;
 extern Option<int> VrFoveation;
+extern Option<bool> VrUploadOnce;
+extern Option<bool> VrDiscardDepth;
 extern Option<bool> VrShowFps;
 extern Option<float> VrComfortVignette;
 extern Option<bool> CustomTextures;

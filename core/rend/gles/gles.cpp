@@ -1377,7 +1377,8 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 	// (2-4 headset frames per game picture): its vertices and indices go to the GPU once per
 	// game picture, not again for every eye. Rewriting a buffer the GPU is still reading made
 	// the driver stall or copy it (frame-rate plan, item 2).
-	if (!vrEye || !gles_vr_frame_uploaded())
+	// (vr.UploadOnce off: every eye again, as before, to compare)
+	if (!vrEye || !config::VrUploadOnce || !gles_vr_frame_uploaded())
 	{
 		//move vertex to gpu
 		//Main VBO
