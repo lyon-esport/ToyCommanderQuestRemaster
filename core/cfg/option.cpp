@@ -123,6 +123,7 @@ Option<bool> VrAimWidened("vr.AimWidened", false);	// aim on the widened view (t
 Option<bool> VrWidenFov("vr.WidenFov", true);	// widen through the game's field of view when its profile knows where
 Option<bool> VrDropShotMarker("vr.DropShotMarker", true);	// hide the game's own 2D shot marker after shots into 3D
 Option<bool> VrDropShotFlash("vr.DropShotFlash", true);	// hide a bright full-screen flash right after any shot
+Option<bool> VrShowFps("vr.ShowFps", false);	// tcvr: frame-rate counter at the bottom right of the view
 Option<float> VrTexLodBias("vr.TexLodBias", 0.f);	// tcvr: texture mipmap bias, negative = sharper far textures (e.g. -0.5; 0: stock)
 Option<float> VrComfortVignette("vr.ComfortVignette", 0.6f);	// tcvr: darken the view's edges while it turns on its own, 0..1 (0: off)
 Option<bool> CustomTextures("rend.CustomTextures");

@@ -36,6 +36,8 @@ MenuAction updateMenu(const MenuInput& input, float headYaw);
 void drawMenu(const glm::mat4& viewProj);
 // Counts headset frames, for the frame rate the menu shows.
 void noteHeadsetFrame();
+// The headset's and the game's frames per second over the last second (the frame-rate counter).
+void frameRates(float& headset, float& game);
 // The menu goes (session ending): the game runs again if the menu paused it.
 void closeMenu();
 

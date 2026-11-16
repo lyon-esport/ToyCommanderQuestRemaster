@@ -78,6 +78,12 @@ const std::vector<Choice>& choices()
 		// the upscale cache (CustomTexture.cpp): each texture upscaled once, then reused
 		{ "HD textures (upscale cache)", { 0.f, 2.f, 4.f }, { "Off", "2x", "4x" },
 			[] { return (float)config::VrUpscaleCache; }, [](float v) { saveOption(config::VrUpscaleCache, v); } },
+		// the headset's display rate (applied live by xr_host); the game itself stays at 60 Hz
+		{ "Refresh rate", { 72.f, 90.f, 120.f }, { "72 Hz", "90 Hz", "120 Hz" },
+			[] { return (float)config::VrXrRefreshRate; }, [](float v) { saveOption(config::VrXrRefreshRate, v); } },
+		// the frame-rate counter at the bottom right of the view
+		{ "Show frame rate", { 0.f, 1.f }, { "Off", "On" },
+			[] { return config::VrShowFps ? 1.f : 0.f; }, [](float v) { config::VrShowFps.set(v > 0.5f); config::VrShowFps.save(); } },
 		// supersampling: more pixels per eye than the headset's recommended size, sharper
 		{ "Resolution multiplier", { 1.f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f, 1.6f }, { "100%", "110%", "120%", "130%", "140%", "150%", "160%" },
 			[] { return (float)config::VrXrResolution; }, [](float v) { saveOption(config::VrXrResolution, v); } },
@@ -234,6 +240,12 @@ std::string lineText(int line)
 bool menuOpen()
 {
 	return open;
+}
+
+void frameRates(float& headset, float& game)
+{
+	headset = headsetFps;
+	game = gameFps;
 }
 
 void closeMenu()

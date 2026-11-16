@@ -2218,6 +2218,20 @@ bool frame()
 		if (sessionLost)
 			return false;
 	}
+	// tcvr: the display rate chosen in the VR menu (vr.XrRefreshRate), applied while running
+	{
+		static float appliedRate;
+		const float rate = (float)config::VrXrRefreshRate;
+		if (sessionRunning && requestRefreshRate && rate != appliedRate)
+		{
+			if (appliedRate != 0.f)
+				NOTICE_LOG(RENDERER, "XR: refresh rate %.0f Hz requested", rate);
+			XRCHECK(requestRefreshRate(session, rate));
+			appliedRate = rate;
+		}
+		if (!sessionRunning)
+			appliedRate = 0.f;
+	}
 
 	XrFrameWaitInfo waitInfo { XR_TYPE_FRAME_WAIT_INFO };
 	XrFrameState frameState { XR_TYPE_FRAME_STATE };
@@ -2438,6 +2452,20 @@ bool frame()
 			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
 			glViewport(0, 0, c.width, c.height);
 			drawMenu(eyeProjection(views[i].fov) * view);
+		}
+		// tcvr: the frame-rate counter (vr.ShowFps), head-locked at the bottom right of the view
+		if (!showPanel && config::VrShowFps)
+		{
+			float headsetFps, gameFps;
+			frameRates(headsetFps, gameFps);
+			char line[48];
+			snprintf(line, sizeof(line), "%.0f fps  |  game %.0f", headsetFps, gameFps);
+			const glm::vec3 headPos = (relativePosition(views[0].pose.position) + relativePosition(views[1].pose.position)) * 0.5f;
+			const glm::mat4 head = glm::translate(glm::mat4(1.f), headPos) * glm::mat4_cast(relativeRotation(views[0].pose.orientation));
+			const glm::mat4 at = head * glm::translate(glm::mat4(1.f), glm::vec3(0.26f, -0.22f, -0.9f));
+			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+			glViewport(0, 0, c.width, c.height);
+			drawLabel(eyeProjection(views[i].fov) * view * at, line, 0.16f);
 		}
 		if (i == 0)
 		{
