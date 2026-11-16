@@ -308,6 +308,14 @@ static void loadSpecialSettings()
 			NOTICE_LOG(BOOT, "Forcing PAL broadcasting");
 			config::Broadcast.override(1);
 		}
+		// tcvr: Toy Commander (Europe) at 60 Hz. In PAL it runs at 50 Hz, which judders on the
+		// headset's 72 Hz and slows everything timed in frames. The disc follows the system's
+		// broadcast setting (flash and HLE BIOS), so NTSC gives 60 Hz with the European content.
+		if (prod_id == "MK-5102050" && config::VrForce60Hz)
+		{
+			NOTICE_LOG(BOOT, "tcvr: forcing NTSC broadcasting (60 Hz) for Toy Commander (Europe)");
+			config::Broadcast.override(0);
+		}
 		if (prod_id == "T1102M"				// Densha de Go! 2
 				|| prod_id == "T00000A"		// The Ring of the Nibelungen (demo, hack)
 				|| prod_id == "T15124N 00"	// Worms Pinball (prototype)

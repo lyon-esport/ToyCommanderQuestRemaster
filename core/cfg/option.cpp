@@ -123,6 +123,7 @@ Option<bool> VrAimWidened("vr.AimWidened", false);	// aim on the widened view (t
 Option<bool> VrWidenFov("vr.WidenFov", true);	// widen through the game's field of view when its profile knows where
 Option<bool> VrDropShotMarker("vr.DropShotMarker", true);	// hide the game's own 2D shot marker after shots into 3D
 Option<bool> VrDropShotFlash("vr.DropShotFlash", true);	// hide a bright full-screen flash right after any shot
+Option<bool> VrForce60Hz("vr.Force60Hz", true);	// tcvr: run Toy Commander (Europe) at 60 Hz (NTSC broadcast), not 50 Hz PAL
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");

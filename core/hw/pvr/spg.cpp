@@ -187,6 +187,34 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 			replay_input();
 #endif
 
+#ifdef USE_OPENXR
+			// tcvr: the video mode and rates, every 10 s, in release builds too (logcat, tag
+			// flycast): is the game at 60 Hz (NTSC/VGA) or 50 Hz (PAL), and how many frames it draws
+			{
+				static u32 vblanks;
+				static u32 lastFrameCount;
+				static u64 since;
+				vblanks++;
+				const u64 nowMs = getTimeMs();
+				if (since == 0)
+				{
+					since = nowMs;
+					lastFrameCount = FrameCount;
+					vblanks = 0;
+				}
+				else if (nowMs - since >= 10000)
+				{
+					const double secs = (nowMs - since) / 1000.0;
+					const char *mode = SPG_CONTROL.isPAL() ? "PAL" : SPG_CONTROL.isNTSC() ? "NTSC" : "VGA";
+					const char *scan = SPG_CONTROL.interlace ? "480i" : SPG_CONTROL.isPAL() || SPG_CONTROL.isNTSC() ? "240p" : "480p";
+					NOTICE_LOG(PVR, "tcvr: video %s %s, %.2f vblanks/s, %.2f game frames/s", mode, scan,
+							vblanks / secs, (FrameCount - lastFrameCount) / secs);
+					since = nowMs;
+					lastFrameCount = FrameCount;
+					vblanks = 0;
+				}
+			}
+#endif
 #if !defined(NDEBUG) || defined(DEBUGFAST)
 			vblk_cnt++;
 			if (getTimeMs() - last_fps >= 2000)
