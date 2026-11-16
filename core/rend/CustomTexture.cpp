@@ -27,6 +27,7 @@
 #include "xbrz/xbrz.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <set>
 
@@ -86,6 +87,7 @@ public:
 	bool loadMap() override
 	{
 		deleteOldCache();
+		processReviewInbox();
 		if (!file_exists(dir))
 			return false;
 		std::lock_guard<std::mutex> _(mutex);
@@ -112,8 +114,12 @@ public:
 				continue;
 			char *end;
 			const u32 hash = (u32)strtoll(item.name.c_str(), &end, 16);
-			if (*end == '.' && rejected.count(hash) == 0)
+			if (*end != '.')
+				continue;
+			if (rejected.count(hash) == 0)
 				map[hash] = item.path;
+			else
+				nowide::remove(item.path.c_str());	// (only the app may delete its files)
 		}
 		NOTICE_LOG(RENDERER, "tcvr: upscale cache: %zu textures in %s (%zu rejected in review)", map.size(), dir.c_str(), rejected.size());
 		return !map.empty();
@@ -145,6 +151,63 @@ public:
 	const std::string dir;
 
 private:
+	// tcvr: the review's requests, in a folder adb and the app can both write (the cache folder is
+	// the app's own: adb can neither add nor delete files there). tcvr/tools/texcache-review.sh puts
+	// rejected.txt (hashes to add to the cache's list) or clear.request (empty the cache) there.
+	void processReviewInbox()
+	{
+#ifdef __ANDROID__
+		const std::string inbox = "/sdcard/Download/ToyCommanderVR/TextureReview/";
+#else
+		const std::string inbox = get_writable_data_path("TextureReview/");
+#endif
+		const std::string origDir = dir.substr(0, dir.size() - 1) + "-orig/";
+		if (file_exists(inbox + "clear.request"))
+		{
+			int count = 0;
+			for (const std::string& d : { dir, origDir })
+			{
+				if (!file_exists(d))
+					continue;
+				hostfs::DirectoryTree tree(d);
+				for (const hostfs::FileInfo& item : tree)
+					if (get_file_extension(item.name) == "png" && nowide::remove(item.path.c_str()) == 0)
+						count++;
+			}
+			// (the rejected list too: the review sends the full list again after a clear)
+			nowide::remove((dir + "rejected.txt").c_str());
+			nowide::remove((inbox + "clear.request").c_str());
+			NOTICE_LOG(RENDERER, "tcvr: upscale cache: cleared on request (%d files)", count);
+		}
+		const std::string incoming = inbox + "rejected.txt";
+		if (FILE *in = nowide::fopen(incoming.c_str(), "r"))
+		{
+			if (!file_exists(dir))
+			{
+				make_directory(get_writable_data_path("texcache/"));
+				make_directory(get_writable_data_path("texcache/v2/"));
+				make_directory(dir);
+			}
+			int count = 0;
+			if (FILE *out = nowide::fopen((dir + "rejected.txt").c_str(), "a"))
+			{
+				char line[64];
+				while (fgets(line, sizeof(line), in) != nullptr)
+					if (line[0] != '#' && line[0] != '\n' && line[0] != '\r')
+					{
+						fputs(line, out);
+						if (line[strlen(line) - 1] != '\n')
+							fputc('\n', out);
+						count++;
+					}
+				fclose(out);
+			}
+			fclose(in);
+			nowide::remove(incoming.c_str());
+			NOTICE_LOG(RENDERER, "tcvr: upscale cache: %d textures rejected in review added", count);
+		}
+	}
+
 	// the v1 cache holds broken pictures (see above): delete its files, they're all regenerable
 	void deleteOldCache()
 	{

@@ -31,13 +31,18 @@ original texture for them.
    bash tcvr/tools/texcache-review.sh reject rejected-list.txt
    ```
 
-   It merges the list with the headset's `rejected.txt`, deletes those HD files, and keeps the
-   merged list in the hub.
+   The list goes to the review inbox `Download/ToyCommanderVR/TextureReview/` on the headset (the
+   cache folder belongs to the app: adb can't write or delete there). At its next start the game
+   adds the hashes to the cache's `rejected.txt` and deletes those HD files itself. The hub keeps
+   the full list.
 5. **Restart the game.** The log says `upscale cache: N textures in ... (M rejected in review)`;
    the rejected textures use their originals and are never upscaled again.
 
-To undo a rejection, remove its line from the hub's `rejected.txt` and run step 4 with an empty
-list; the texture is upscaled again the next time the game shows it.
+To start the cache over (after a fix to the upscaler, or to get originals saved for an older
+cache): `bash tcvr/tools/texcache-review.sh clear`, then restart the game. It also forgets the rejected list: send the hub's list again (step 4).
+
+To undo a rejection, clear the cache and send the hub's list again without that line (the
+cache's own list is rebuilt from what is sent after a clear).
 
 ## Rules
 
