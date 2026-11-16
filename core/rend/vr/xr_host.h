@@ -34,11 +34,16 @@ const Eye *currentEye();
 // The render context is going away (app in the background, renderer restart): drop the
 // session bound to it. The next frame() starts a new one on the new context.
 void term();
+// tcvr: where the head looks, relative to the recenter direction (the game camera's forward):
+// yaw (radians, positive to the left) and pitch (radians, positive up), at the last headset
+// frame. Any thread. For the head-driven game camera (backlog P0-8).
+glm::vec2 headYawPitch();
 #else
 inline bool enabled() { return false; }
 inline bool frame() { return false; }
 inline const Eye *currentEye() { return nullptr; }
 inline void term() {}
+inline glm::vec2 headYawPitch() { return glm::vec2(0.f); }
 #endif
 
 }
