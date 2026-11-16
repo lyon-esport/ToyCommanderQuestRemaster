@@ -37,6 +37,8 @@ public class VrSetupActivity extends Activity
 {
     /** The game picked here, for the VR activity (a path). */
     public static final String EXTRA_GAME = "hotd2vr.game";
+    /** tcvr: start this game again at once (the VR menu's save import), from this panel's own process. */
+    public static final String EXTRA_RELAUNCH = "tcvr.relaunch";
 
     private static final int RED = Color.rgb(217, 32, 26), TEXT = Color.rgb(230, 230, 230),
             SOFT = Color.rgb(160, 160, 164), GOOD = Color.rgb(96, 200, 110), BACK = Color.rgb(18, 18, 20);
@@ -49,6 +51,13 @@ public class VrSetupActivity extends Activity
     protected void onCreate(Bundle savedInstanceState)
     {
         super.onCreate(savedInstanceState);
+        // tcvr: a restart asked by the game (VR menu, saves imported): end its process, start it again
+        String relaunch = getIntent() != null ? getIntent().getStringExtra(EXTRA_RELAUNCH) : null;
+        if (relaunch != null && new File(relaunch).isFile())
+        {
+            play(new File(relaunch));
+            return;
+        }
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(36), dp(28), dp(36), dp(28));
