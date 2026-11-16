@@ -1446,7 +1446,7 @@ void updateGamepad(XrTime time)
 	{
 		logged = true;
 		NOTICE_LOG(INPUT, "XR: gamepad mode for [%s]: left stick = analog, right stick = D-pad, triggers = L/R, "
-				"A B X Y = A B X Y, menu or right stick click = Start, left stick click = recenter",
+				"A B X Y = A B X Y, left menu button = Start (held 0.6 s: VR menu), right stick click = recenter",
 				settings.content.gameId.c_str());
 	}
 	u32 buttons = 0;
@@ -1486,10 +1486,9 @@ void updateGamepad(XrTime time)
 		if (boolAction(padBAction)) buttons |= DC_BTN_B;
 		if (boolAction(padXAction)) buttons |= DC_BTN_X;
 		if (boolAction(padYAction)) buttons |= DC_BTN_Y;
-		// Start: the right stick click (tcvr: the left menu button opens the VR menu)
-		if (boolAction(stickClickAction, Right))
-			buttons |= DC_BTN_START;
-		const bool stickClick = boolAction(stickClickAction, Left);
+		// tcvr (Manu, 2026-11-16): recenter on the right stick click; Start on the left menu
+		// button (a short press, below), which opens the VR menu when held
+		const bool stickClick = boolAction(stickClickAction, Right);
 		if (stickClick && !stickClickWas)
 			recenterRequested = true;
 		stickClickWas = stickClick;
@@ -1497,12 +1496,35 @@ void updateGamepad(XrTime time)
 	// tcvr: the VR menu on the left menu button (backlog P0-3): while it is open, the
 	// controllers drive it and the game gets nothing (all let go)
 	{
-		static bool menuWas, aWas, bWas;
+		static bool menuWas, aWas, bWas, longFired;
+		static std::chrono::steady_clock::time_point pressedAt, startUntil;
 		const bool menuButton = sync && boolAction(startAction, Left);
 		const bool aButton = sync && boolAction(padAAction);
 		const bool bButton = sync && boolAction(padBAction);
 		MenuInput in = scriptedMenuInput();
-		in.toggle = in.toggle || (menuButton && !menuWas);
+		// The left menu button: a short press is the game's Start (sent for 0.15 s when let go;
+		// with the VR menu open it closes it), held 0.6 s it opens the VR menu
+		const auto now = std::chrono::steady_clock::now();
+		if (menuButton && !menuWas)
+		{
+			pressedAt = now;
+			longFired = false;
+		}
+		if (menuButton && !longFired && now - pressedAt >= std::chrono::milliseconds(600))
+		{
+			longFired = true;
+			if (!menuOpen())
+				in.toggle = true;
+		}
+		if (!menuButton && menuWas && !longFired)
+		{
+			if (menuOpen())
+				in.toggle = true;
+			else
+				startUntil = now + std::chrono::milliseconds(150);
+		}
+		if (now < startUntil)
+			buttons |= DC_BTN_START;
 		in.accept = in.accept || (aButton && !aWas);
 		in.back = in.back || (bButton && !bWas);
 		if (sync)
