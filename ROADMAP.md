@@ -7,8 +7,7 @@ kept in [ROADMAP.hotd2-vr.md](ROADMAP.hotd2-vr.md).
 
 ## Decisions so far
 
-- **VR menu:** drawn by the emulator as an overlay on top of the game (left ≡ button),
-  pausing it. The game's own menus are not hijacked.
+- **VR menu:** drawn by the emulator as an overlay on top of the game, pausing it. The game's own menus are not hijacked.
 - **Aiming:** the weapons aim with the vehicle, as in the original game. The head only
   turns the view and never feeds the game's aiming.
 - **360° head camera:** required for the first release (P0).
@@ -21,7 +20,7 @@ when the player looks away from the vehicle's heading, and the public name and i
 
 - One APK with no game data. The disc image is found in Download, and an in-headset setup
   panel asks for file access.
-- Stereo VR at 72 fps with head tracking (3DOF + 6DOF). Recenter: left stick click.
+- Stereo VR at 72 fps with head tracking (3DOF + 6DOF). Recenter: right stick click.
 - Meta Touch controllers act as a Dreamcast pad (see [Controls](README.md#controls)).
 - Saves: automatic backup at launch, export / import, and import through `import.request`
   (see [tcvr/docs/Saves.md](tcvr/docs/Saves.md)).
@@ -36,7 +35,7 @@ when the player looks away from the vehicle's heading, and the public name and i
 |---|---|
 | P0-1 | **PAL version check at launch:** accept only `MK-5102050` (plus a file hash if possible), with a clear message on the setup panel otherwise. |
 | P0-2 | **60 Hz for the PAL game:** check whether it runs at 50 Hz, and force 60 Hz if it can. |
-| P0-3 | **VR menu overlay** on the left ≡ button, pausing the game: recenter, world size, export / import saves, quit at the bottom. The right stick click stays Start. |
+| P0-3 | **VR menu overlay**, pausing the game: recenter, world size, export / import saves, quit at the bottom. Start is only the left ≡ button; the right stick click recenters. |
 | P0-4 | **End-to-end save test:** play, save, quit, relaunch, load, export, import. |
 | P0-5 | **Control model written down:** vehicle aiming (decided); pitch / roll in planes and sight placement still to define. |
 | P0-6 | **Release readiness:** release keystore and signing, sideloading (SideQuest / `adb`), an `Install.md` for players, and the GPL source published with each APK. |
