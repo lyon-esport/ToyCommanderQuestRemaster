@@ -4,6 +4,7 @@ package com.flycast.emulator;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -185,6 +186,52 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
                 pendingIntentUrl = game;
         }
         Log.i("flycast", "BaseGLActivity.onCreate done");
+    }
+
+    // tcvr: called from native code (the VR menu, core/rend/vr/xr_menu.h), on the render thread:
+    // 0 export the saves to Download, 1 import the newest exported saves and start the game
+    // again, 2 quit. Returns the line the menu shows.
+    public String onVrMenuRequest(int request)
+    {
+        Context ctx = getApplicationContext();
+        switch (request)
+        {
+        case 0: {
+            String result = VrSaves.exportToDownload(ctx);
+            if (result.startsWith("ERROR"))
+                return result.substring(Math.min(result.length(), 7));
+            String root = Environment.getExternalStorageDirectory().getAbsolutePath();
+            return "Saves exported to " + (result.startsWith(root) ? result.substring(root.length() + 1) : result);
+        }
+        case 1: {
+            String result = VrSaves.importLatestFromDownload(ctx);
+            if (result.startsWith("ERROR"))
+                return result.substring(Math.min(result.length(), 7));
+            Log.i("flycast", "tcvr: " + result + ", restarting");
+            // the app again in a moment, from a fresh process (the emulator keeps the saves open)
+            Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+            if (launch != null)
+            {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                android.app.PendingIntent pending = android.app.PendingIntent.getActivity(ctx, 1, launch,
+                        android.app.PendingIntent.FLAG_CANCEL_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+                android.app.AlarmManager alarms = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
+                if (alarms != null)
+                    alarms.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 1500, pending);
+            }
+            handler.postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 500);
+            return "Saves imported. Restarting...";
+        }
+        case 2:
+            Log.i("flycast", "tcvr: quit from the VR menu");
+            handler.post(() -> {
+                finishAndRemoveTask();
+                handler.postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 500);
+            });
+            return "Quitting...";
+        default:
+            return "Unknown request";
+        }
     }
 
 	// Called from native code

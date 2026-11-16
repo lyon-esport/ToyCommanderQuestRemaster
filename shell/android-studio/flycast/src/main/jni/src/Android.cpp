@@ -20,6 +20,9 @@
 #include "http_client.h"
 #include "achievements/achievements.h"
 #include "android_locale.h"
+#ifdef USE_OPENXR
+#include "rend/vr/xr_menu.h"
+#endif
 
 #include <android/log.h>
 #include <android/native_window.h>
@@ -524,8 +527,29 @@ void SaveAndroidSettings()
     jni::env()->CallVoidMethod(g_emulator, saveAndroidSettingsMid, (jstring)homeDirectory);
 }
 
+#ifdef USE_OPENXR
+// tcvr: what the VR menu asks of the app (xr_menu.h): BaseGLActivity.onVrMenuRequest
+static std::string vrMenuRequest(vr::xr::MenuRequest request)
+{
+	if (g_activity == nullptr)
+		return "Not available";
+	JNIEnv *env = jni::env();
+	jmethodID mid = env->GetMethodID(env->GetObjectClass(g_activity), "onVrMenuRequest", "(I)Ljava/lang/String;");
+	if (mid == nullptr)
+	{
+		env->ExceptionClear();
+		return "Not available";
+	}
+	jni::String result(env->CallObjectMethod(g_activity, mid, (jint)request));
+	return result.to_string();
+}
+#endif
+
 extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_BaseGLActivity_register(JNIEnv *env, jobject obj, jobject activity)
 {
+#ifdef USE_OPENXR
+    vr::xr::menuRequestHook = vrMenuRequest;
+#endif
     if (g_activity != nullptr) {
         env->DeleteGlobalRef(g_activity);
         g_activity = nullptr;

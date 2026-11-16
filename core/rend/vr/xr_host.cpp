@@ -18,6 +18,7 @@
 #include "xr_hands.h"
 #include "xr_panel.h"
 #include "xr_vignette.h"	// tcvr: comfort vignette
+#include "xr_menu.h"		// tcvr: the VR menu
 #include "hands_rip.h"
 #include "rend/gles/gles.h"
 #ifdef __ANDROID__
@@ -1391,6 +1392,51 @@ glm::vec2 handStick(int hand)
 	return glm::vec2(stick.currentState.x, stick.currentState.y);
 }
 
+static const std::string& debugDir();
+
+// tcvr: test aid: the VR menu driven from a file, for tests over adb with nobody at the
+// controllers. "files/menu.request" holds one word: toggle, up, down, left, right, accept or
+// back (echo toggle > files/menu.request). Checked ten times a second, deleted when read.
+MenuInput scriptedMenuInput()
+{
+	MenuInput in;
+	static std::chrono::steady_clock::time_point nextCheck;
+	static int release;		// a stick step is held for one check, then let go
+	const auto now = std::chrono::steady_clock::now();
+	static glm::vec2 stick;
+	if (now < nextCheck)
+	{
+		in.stick = stick;
+		return in;
+	}
+	nextCheck = now + std::chrono::milliseconds(100);
+	if (release > 0 && --release == 0)
+		stick = glm::vec2(0.f);
+	const std::string path = debugDir() + "/menu.request";
+	if (FILE *f = fopen(path.c_str(), "r"))
+	{
+		char word[32] {};
+		const int n = fscanf(f, "%31s", word);
+		fclose(f);
+		nowide::remove(path.c_str());
+		const std::string w = n == 1 ? word : "";
+		if (w == "toggle") in.toggle = true;
+		else if (w == "accept") in.accept = true;
+		else if (w == "back") in.back = true;
+		else if (w == "up") stick = glm::vec2(0.f, 1.f);
+		else if (w == "down") stick = glm::vec2(0.f, -1.f);
+		else if (w == "left") stick = glm::vec2(-1.f, 0.f);
+		else if (w == "right") stick = glm::vec2(1.f, 0.f);
+		else
+			WARN_LOG(INPUT, "XR: menu.request not understood: %s", word);
+		if (glm::length(stick) > 0.f)
+			release = 1;
+		NOTICE_LOG(INPUT, "XR: scripted menu input: %s", word);
+	}
+	in.stick = stick;
+	return in;
+}
+
 void updateGamepad(XrTime time)
 {
 	static u32 lastButtons;		// DC_* bits we hold down (1 = pressed)
@@ -1439,13 +1485,57 @@ void updateGamepad(XrTime time)
 		if (boolAction(padBAction)) buttons |= DC_BTN_B;
 		if (boolAction(padXAction)) buttons |= DC_BTN_X;
 		if (boolAction(padYAction)) buttons |= DC_BTN_Y;
-		// Start: the left menu button for now (it opens the VR menu later), or the right stick click
-		if (boolAction(startAction, Left) || boolAction(stickClickAction, Right))
+		// Start: the right stick click (tcvr: the left menu button opens the VR menu)
+		if (boolAction(stickClickAction, Right))
 			buttons |= DC_BTN_START;
 		const bool stickClick = boolAction(stickClickAction, Left);
 		if (stickClick && !stickClickWas)
 			recenterRequested = true;
 		stickClickWas = stickClick;
+	}
+	// tcvr: the VR menu on the left menu button (backlog P0-3): while it is open, the
+	// controllers drive it and the game gets nothing (all let go)
+	{
+		static bool menuWas, aWas, bWas;
+		const bool menuButton = sync && boolAction(startAction, Left);
+		const bool aButton = sync && boolAction(padAAction);
+		const bool bButton = sync && boolAction(padBAction);
+		MenuInput in = scriptedMenuInput();
+		in.toggle = in.toggle || (menuButton && !menuWas);
+		in.accept = in.accept || (aButton && !aWas);
+		in.back = in.back || (bButton && !bWas);
+		if (sync)
+		{
+			const glm::vec2 l = handStick(Left), r = handStick(Right);
+			const glm::vec2 strongest = glm::length(r) > glm::length(l) ? r : l;
+			if (glm::length(strongest) > glm::length(in.stick))
+				in.stick = strongest;
+		}
+		menuWas = menuButton;
+		aWas = aButton;
+		bWas = bButton;
+		const bool wasOpen = menuOpen();
+		const glm::vec3 forward = relativeRotation(views[0].pose.orientation) * glm::vec3(0.f, 0.f, -1.f);
+		if (updateMenu(in, std::atan2(-forward.x, -forward.z)) == MenuAction::Recenter)
+			recenterRequested = true;
+		if (wasOpen || menuOpen())
+		{
+			// (A or B that closed it stays out of the game until let go)
+			buttons = 0;
+			analog = glm::vec2(0.f);
+			left = right = 0.f;
+			sync = true;	// written once, at rest
+		}
+		static bool swallow;
+		if (wasOpen && !menuOpen())
+			swallow = true;
+		if (swallow)
+		{
+			if (aButton || bButton)
+				buttons &= ~(DC_BTN_A | DC_BTN_B);
+			else
+				swallow = false;
+		}
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
@@ -2001,6 +2091,7 @@ void term()
 		NOTICE_LOG(RENDERER, "XR: render context going away, closing the session");
 		// still on the render thread with the context current: our own GL objects first
 		termGun();
+		closeMenu();
 		termPanel();
 		termVignette();
 		for (EyeChain& c : chains)
@@ -2155,7 +2246,8 @@ bool frame()
 		const auto now = std::chrono::steady_clock::now();
 		const double dt = last == std::chrono::steady_clock::time_point() ? 0.0 : std::chrono::duration<double>(now - last).count();
 		last = now;
-		if (showPanel || vr::isMenuFrame() || !gamepadMode())
+		noteHeadsetFrame();
+		if (showPanel || vr::isMenuFrame() || !gamepadMode() || menuOpen())
 			noteSteering(0.f);
 		vignette = updateVignette(dt);
 	}
@@ -2300,6 +2392,12 @@ bool frame()
 			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
 			glViewport(0, 0, c.width, c.height);
 			drawVignette(eyeProjection(views[i].fov), vignette);
+		}
+		if (!showPanel && menuOpen())
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+			glViewport(0, 0, c.width, c.height);
+			drawMenu(eyeProjection(views[i].fov) * view);
 		}
 		if (i == 0)
 		{
