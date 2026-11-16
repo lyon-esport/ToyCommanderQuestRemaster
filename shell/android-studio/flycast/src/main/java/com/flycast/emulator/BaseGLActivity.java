@@ -200,26 +200,24 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             String result = VrSaves.exportToDownload(ctx);
             if (result.startsWith("ERROR"))
                 return result.substring(Math.min(result.length(), 7));
-            String root = Environment.getExternalStorageDirectory().getAbsolutePath();
-            return "Saves exported to " + (result.startsWith(root) ? result.substring(root.length() + 1) : result);
+            int download = result.indexOf("/Download/");
+            return "Saves exported to " + (download >= 0 ? result.substring(download + 1) : result);
         }
         case 1: {
             String result = VrSaves.importLatestFromDownload(ctx);
             if (result.startsWith("ERROR"))
                 return result.substring(Math.min(result.length(), 7));
             Log.i("flycast", "tcvr: " + result + ", restarting");
-            // the app again in a moment, from a fresh process (the emulator keeps the saves open)
-            Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
-            if (launch != null)
-            {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                android.app.PendingIntent pending = android.app.PendingIntent.getActivity(ctx, 1, launch,
-                        android.app.PendingIntent.FLAG_CANCEL_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
-                android.app.AlarmManager alarms = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
-                if (alarms != null)
-                    alarms.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 1500, pending);
-            }
-            handler.postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 500);
+            // The game again from a fresh process (the emulator keeps the saves open): the setup
+            // panel, in a process of its own, ends this one and starts the game (as its Play
+            // button does). A delayed relaunch from here is refused by Android (background start).
+            VrGames.Scan scan = VrGames.scan(ctx);
+            if (scan.game == null)
+                return "Saves imported. Quit and start the game again to use them.";
+            Intent relaunch = new Intent(ctx, VrSetupActivity.class);
+            relaunch.putExtra(VrSetupActivity.EXTRA_RELAUNCH, scan.game.getAbsolutePath());
+            relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            handler.postDelayed(() -> startActivity(relaunch), 300);
             return "Saves imported. Restarting...";
         }
         case 2:
