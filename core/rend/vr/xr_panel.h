@@ -31,5 +31,8 @@ struct Panel
 // place). Its picture is made again only when what it says changes.
 void drawPanel(const glm::mat4& viewProj, const Panel& panel);
 void termPanel();
+// tcvr: a one-line label (the frame-rate counter), widthMetres wide, centred on mvp's origin in
+// its x/y plane. Its picture is made again only when the text changes.
+void drawLabel(const glm::mat4& mvp, const std::string& text, float widthMetres);
 
 }

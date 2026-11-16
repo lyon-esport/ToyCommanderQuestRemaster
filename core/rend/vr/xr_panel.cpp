@@ -44,6 +44,14 @@ GLuint quadVao, quadVbo;
 GLint uMvp = -1;
 std::vector<u8> pixels;
 std::string shown;			// what the picture says now
+// tcvr: the picture blend/fill/text draw on: the panel's (Width x Height), or the label's
+std::vector<u8> *canvas = &pixels;
+int canvasW = Width, canvasH = Height;
+// tcvr: the small head-locked label (drawLabel)
+constexpr int LabelW = 512, LabelH = 96;
+GLuint labelTexture;
+std::vector<u8> labelPixels;
+std::string labelShown;
 
 void logGlErrors()
 {
@@ -72,17 +80,17 @@ bool loadFont()
 
 void blend(int x, int y, const glm::vec3& colour, float alpha)
 {
-	if (x < 0 || y < 0 || x >= Width || y >= Height || alpha <= 0.f)
+	if (x < 0 || y < 0 || x >= canvasW || y >= canvasH || alpha <= 0.f)
 		return;
-	u8 *p = &pixels[((size_t)y * Width + x) * 4];
+	u8 *p = &(*canvas)[((size_t)y * canvasW + x) * 4];
 	for (int c = 0; c < 3; c++)
 		p[c] = (u8)std::lround(p[c] * (1.f - alpha) + colour[c] * 255.f * alpha);
 }
 
 void fill(int x0, int y0, int x1, int y1, const glm::vec3& colour, float alpha = 1.f)
 {
-	for (int y = std::max(y0, 0); y < std::min(y1, Height); y++)
-		for (int x = std::max(x0, 0); x < std::min(x1, Width); x++)
+	for (int y = std::max(y0, 0); y < std::min(y1, canvasH); y++)
+		for (int x = std::max(x0, 0); x < std::min(x1, canvasW); x++)
 			blend(x, y, colour, alpha);
 }
 
@@ -99,7 +107,7 @@ void text(const std::string& s, float px, int y, const glm::vec3& colour)
 		if (i + 1 < s.size())
 			width += scale * stbtt_GetCodepointKernAdvance(&font, (u8)s[i], (u8)s[i + 1]);
 	}
-	float x = (Width - width) * 0.5f;
+	float x = (canvasW - width) * 0.5f;
 	std::vector<u8> glyph;
 	for (size_t i = 0; i < s.size(); i++)
 	{
@@ -124,6 +132,9 @@ void text(const std::string& s, float px, int y, const glm::vec3& colour)
 
 void paint(const Panel& panel)
 {
+	canvas = &pixels;
+	canvasW = Width;
+	canvasH = Height;
 	pixels.assign((size_t)Width * Height * 4, 0);
 	for (size_t i = 0; i < pixels.size(); i += 4)
 	{
@@ -258,8 +269,70 @@ void drawPanel(const glm::mat4& viewProj, const Panel& panel)
 	logGlErrors();
 }
 
+void drawLabel(const glm::mat4& mvp, const std::string& s, float widthMetres)
+{
+	if (!loadFont() || !initGl())
+		return;
+	glActiveTexture(GL_TEXTURE0);
+	if (labelTexture == 0)
+	{
+		glGenTextures(1, &labelTexture);
+		glcache.BindTexture(GL_TEXTURE_2D, labelTexture);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		labelShown.clear();
+	}
+	glcache.BindTexture(GL_TEXTURE_2D, labelTexture);
+	if (s != labelShown)
+	{
+		labelShown = s;
+		labelPixels.assign((size_t)LabelW * LabelH * 4, 0);
+		for (size_t i = 0; i < labelPixels.size(); i += 4)
+		{
+			labelPixels[i] = labelPixels[i + 1] = labelPixels[i + 2] = 10;
+			labelPixels[i + 3] = 170;
+		}
+		canvas = &labelPixels;
+		canvasW = LabelW;
+		canvasH = LabelH;
+		text(s, LabelH * 0.62f, (int)(LabelH * 0.72f), glm::vec3(0.95f, 0.95f, 0.6f));
+		canvas = &pixels;
+		canvasW = Width;
+		canvasH = Height;
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, LabelW, LabelH, 0, GL_RGBA, GL_UNSIGNED_BYTE, labelPixels.data());
+	}
+	const float hx = widthMetres * 0.5f, hy = hx * LabelH / LabelW;
+	const float quad[] {
+		-hx,  hy, 0.f,  0.f, 0.f,
+		 hx,  hy, 0.f,  1.f, 0.f,
+		-hx, -hy, 0.f,  0.f, 1.f,
+		 hx, -hy, 0.f,  1.f, 1.f,
+	};
+	glBindBuffer(GL_ARRAY_BUFFER, quadVbo);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+	glcache.UseProgram(program);
+	glUniformMatrix4fv(uMvp, 1, GL_FALSE, &mvp[0][0]);
+	glcache.Disable(GL_SCISSOR_TEST);
+	glcache.Disable(GL_STENCIL_TEST);
+	glcache.Disable(GL_DEPTH_TEST);
+	glcache.Disable(GL_CULL_FACE);
+	glcache.Enable(GL_BLEND);
+	glcache.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	bindVertexArray(quadVao);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+	bindVertexArray(0);
+	glcache.Disable(GL_BLEND);
+	glcache.BindTexture(GL_TEXTURE_2D, 0);
+}
+
 void termPanel()
 {
+	if (labelTexture != 0)
+		glcache.DeleteTextures(1, &labelTexture);
+	labelTexture = 0;
+	labelShown.clear();
 	if (program != 0)
 		glcache.DeleteProgram(program);
 	if (texture != 0)
