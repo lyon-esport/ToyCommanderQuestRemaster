@@ -9,7 +9,7 @@ Covers the four P0 changes made without the headset, each in its own PR:
 | C. Comfort vignette while steering | P0-9 | `tcvr/comfort-vignette` |
 | D. 360° camera prep: scripted pad input, dump series, head yaw | P0-8 | `tcvr/camera-360-prep` |
 | E. Image sharpness: LOD bias, MSAA and eye resolution switched live | P1-7 | `tcvr/sharpness` |
-| F. VR menu on the left ≡ (overlay), with a toggle per sharpness setting | P0-3, P1-6 | `tcvr/vr-menu` (on top of E and C) |
+| F. VR menu (left ≡ held or pressed twice; overlay), with a toggle per sharpness setting; Start/recenter mapping | P0-3, P1-6 | `tcvr/vr-menu` (on top of E and C) |
 | G. Launch splash and loading panel | P1-8 | `tcvr/launch-feedback` |
 | H. HD texture upscale cache (built once from the player's disc) | P2-9 | `tcvr/texture-upscale` (on top of F) |
 
@@ -84,16 +84,16 @@ Capture the menu with `files/capture.request` (left eye) or a screenshot.
 
 | # | Steps | Expected | Evidence |
 |---|---|---|---|
-| F1 | In a mission, press the left ≡ (or `toggle`). | The menu appears ~1.6 m ahead where the head looks, over the frozen game; the game is paused (sound stops, nothing moves); head tracking still smooth. Lines: Resume, Recenter view, World size, Game behind the menu, Comfort vignette, Anti-aliasing (MSAA), Anisotropic filtering, Sharper far textures, Eye resolution, Export saves, Import saves, Quit game, and a line "Headset N fps Game N fps (paused)". | capture; logcat `XR menu: open (game paused)` |
+| F1 | In a mission, hold the left ≡ 0.6 s (or `toggle`). Then close it and press the left ≡ twice quickly. | Both open the menu, ~1.6 m ahead where the head looks, over the **frozen** game (sound stops, nothing moves, always: there is no "running" option); head tracking still smooth; no Start reaches the game. Lines: Resume, Recenter view, World size, Comfort vignette, Anti-aliasing (MSAA), Anisotropic filtering, Sharper far textures, HD textures, Resolution multiplier, Export saves, Import saves, Quit game, and "Headset N fps Game 0 fps (paused) HD textures N". | capture; logcat `XR menu: open (game paused)` |
 | F2 | Stick up/down; hold down 2 s. | The highlighted line moves one step, then repeats; wraps around. | capture |
-| F3 | Left ≡, B, or Resume + A. | The menu closes, the game continues where it was; the A/B press doesn't reach the game. | logcat `XR menu: closed`; tester's note |
+| F3 | A press of the left ≡, B, or Resume + A. | The menu closes, the game continues where it was; the A/B press doesn't reach the game. | logcat `XR menu: closed`; tester's note |
 | F4 | Recenter view + A, facing 90° away. | Menu closes; the view is recentred to where you face. | logcat `XR: game camera placed at the head` |
 | F5 | World size left/right. | Each step 10% smaller/bigger, at once; kept after a restart (emu.cfg `vr.WorldScale`). | capture before/after; emu.cfg |
-| F6 | Start: right stick click only. Left ≡ no longer pauses the game through its own menu. | As described. | tester's note |
-| E1 | Game behind the menu = Running; then change MSAA Off → 2x → 4x. | Each change rebuilds the eye buffers within a frame (a short blink at most); edges visibly smoother at 4x. Note the headset and game fps on the menu line for each value. | logcat `XR: eye buffer settings changed (MSAA 4 ...)` then `XR: eye buffers WxH, 4x MSAA`; fps per value |
+| F6 | Mapping (Manu, 2026-11-16): a single short press of the left ≡ in a mission; then a right stick click facing 90° away; then a left stick click. | Single press: the game's own pause menu after ~0.25 s (the double-press window), no VR menu. Right stick click: recenter. Left stick click: nothing. | tester's note; logcat `XR: game camera placed at the head` |
+| E1 | MSAA Off → 2x → 4x in the menu. | Each change rebuilds the eye buffers within a frame (a short blink at most); edges visibly smoother at 4x. Note the headset fps on the menu line for each value (the game is frozen: it measures the drawing cost of the scene behind), then close the menu and play 1 min at that value (logcat `tcvr: video ... game frames/s`, OVR Metrics). | logcat `XR: eye buffer settings changed (MSAA 4 ...)` then `XR: eye buffers WxH, 4x MSAA`; fps per value |
 | E2 | Anisotropic filtering Off → 16x. | Ground textures at a grazing angle sharper; fps noted. | capture of the same view per value; fps |
 | E3 | Sharper far textures Off → Low → High. | Distant textures sharper; High may shimmer while moving (note it). | captures; fps |
-| E4 | Resolution multiplier 100% → 160%, one step at a time (Game behind the menu = Running). | Sharper picture as it grows; eye buffers capped at the runtime's maximum (logcat size stops growing); fps drops at some point: note where it falls below 72. | logcat `XR: eye buffers WxH` per step; fps per value |
+| E4 | Resolution multiplier 100% → 160%, one step at a time. | Sharper picture as it grows; eye buffers capped at the runtime's maximum (logcat size stops growing); fps drops at some point: note where it falls below 72. | logcat `XR: eye buffers WxH` per step; fps per value |
 | E5 | Restart the app. | The chosen values are kept (emu.cfg `vr.Msaa`, `rend.AnisotropicFiltering`, `vr.TexLodBias`, `vr.XrResolution`, `vr.ComfortVignette`). | emu.cfg |
 | E6 | Pick the best quality that holds 72 fps in the busiest level tried. | A recommended default set for the release. | table in the results |
 | F7 | Export saves + A. | Status line "Saves exported to Download/ToyCommanderVR/Saves/<time>"; the folder has the VMU files. | `adb shell ls` of the folder |
@@ -122,7 +122,8 @@ Capture the menu with `files/capture.request` (left eye) or a screenshot.
 
 ## Regression checks (every run)
 
-- Start mapping unchanged: right stick click and left ≡ are Start; left stick click recenters.
+- Controls as in `tcvr/docs/Controls.md`: left ≡ short = Start, held/double = VR menu, right stick click = recenter.
+- Performance against `tcvr/docs/PerformanceTargets.md` (T1–T10).
 - Audio: sound present and normal speed (the audio PR's checks).
 - Menu and view sizing unchanged (no change made there; compare with an earlier capture).
 - emu.cfg and VMU hashes unchanged by the tests (only the app's own `vr-refused-discs.properties` is new
