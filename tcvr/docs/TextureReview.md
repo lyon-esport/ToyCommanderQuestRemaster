@@ -30,14 +30,15 @@ keeps both. HD 4x is for textures up to 128x128 (a bigger one would take 4 MB of
    (mean colour difference and % of pixels changed a lot). Upscales that changed or lost details
    score high; cards are sorted worst first and marked "check" over the threshold (6 by default).
 3. **Review** the page in a browser. Each card shows the original, the automatic HD version and,
-   once you pick something, a live preview of the result. Per texture, choose:
-   - **Crisp edges**: clean borders and less blur (shapes, bars, lettering, HUD pieces);
-   - **Sharper**: sharper details;
-   - **More relief**: more local contrast, so walls, stone and wood look less flat;
+   once you change something, a live preview of the result. Per texture:
+   - **Sharpness** slider, -2 to +3: below 0 smoother, above 0 sharper (0: the automatic HD);
+   - **Relief** slider, 0 to 3: more local contrast, so walls, stone and wood look less flat. It keeps
+     the softness: for "more relief but still soft", use e.g. Sharpness -1 and Relief 2;
+   - **Crisp edges**: clean borders (shapes, bars, lettering, HUD pieces);
    - **Original**: no HD version at all;
    - **Reset (keep HD)**: back to the automatic HD version ("Reset all" for every texture).
-   Choices combine (e.g. Sharper + More relief). **Copy request list** puts lines like
-   `66183f22 relief` on the clipboard; save them to a text file.
+   **Copy request list** puts lines like `66183f22 sharp=-1 relief=2` on the clipboard; save them
+   to a text file.
 4. **Make and send the tuned textures:**
 
    ```bash

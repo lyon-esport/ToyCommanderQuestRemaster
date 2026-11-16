@@ -11,7 +11,7 @@ share of pixels that changed a lot. An upscale that keeps the picture scores nea
 lost or invented details (merged lines, smeared text, changed shapes) scores high. Cards are
 sorted worst first, and those over --threshold are marked "check".
 
-Per texture the reviewer picks Crisp edges / Sharper / More relief / Original (live preview with
+Per texture the reviewer sets Sharpness (-2..3) and Relief (0..3) sliders, Crisp edges, Original or Reset (live preview with
 the filters of tcvr/re/texcache_tune.py); "Copy request list" gives the lines for
 texcache-review.sh tune (tcvr/docs/TextureReview.md). The images come from the player's own disc: keep the review
 folder private (never commit or publish it).
@@ -109,15 +109,17 @@ def main():
 .t.check{border-color:#f59e0b}.t.bad{border-color:#ef4444}.t img{display:block;image-rendering:pixelated}
 .pair{display:flex;gap:6px}.cap{font-size:12px;color:#a1a1aa;margin-top:4px}.warn{color:#f59e0b}
 .opts{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.opts button{flex:1 1 45%;padding:3px;background:#3f3f46;color:#e4e4e7;border:1px solid #52525b;border-radius:4px;cursor:pointer}
-.opts button.on{background:#2563eb;border-color:#60a5fa}.opts button.reset{flex-basis:100%;background:#27272a}.t.req{border-color:#3b82f6}canvas{display:block;image-rendering:auto}
+.opts button.on{background:#2563eb;border-color:#60a5fa}.opts label{flex-basis:100%;font-size:12px;display:flex;gap:6px;align-items:center}
+.opts input[type=range]{flex:1}.opts label span{width:2.5em;text-align:right}.opts button.reset{flex-basis:100%;background:#27272a}.t.req{border-color:#3b82f6}canvas{display:block;image-rendering:auto}
 #bar button{margin-top:6px}#bar{position:sticky;top:0;background:#18181b;padding:8px 0;z-index:1}
 textarea{width:100%;height:70px}</style>
 ''')
         page.write(f'''<div id="bar"><b>HD texture review</b> - {len(cards)} textures, biggest difference first;
 {flagged} marked <span class="warn">check</span> (difference &ge; {args.threshold:g}).{note}
 Left: original, middle: automatic HD; a third picture previews your choices.
-<b>Reset</b> keeps the automatic HD version. Per texture: <b>Crisp edges</b> (clean borders, less blur), <b>Sharper</b>, <b>More relief</b> (local contrast:
-walls, stone, wood), <b>Original</b> (no HD). Then "Copy request list" and run
+Per texture: <b>Sharpness</b> (below 0 smoother, above 0 sharper), <b>Relief</b> (local contrast: walls,
+stone, wood; keeps the softness unless you also raise sharpness), <b>Crisp edges</b> (clean borders for shapes and
+lettering), <b>Original</b> (no HD), <b>Reset</b> (back to the automatic HD). Then "Copy request list" and run
 <code>texcache-review.sh tune &lt;file&gt;</code> (tcvr/docs/TextureReview.md).
 <button onclick="copyList()" style="width:auto">Copy request list</button>
 <button onclick="resetAll()" style="width:auto">Reset all</button> <span id="count"></span>
@@ -130,41 +132,56 @@ walls, stone, wood), <b>Original</b> (no HD). Then "Copy request list" and run
 <canvas class="p" title="tuned preview" style="display:none"></canvas></div>
 <div class="cap">{html.escape(c['h'])} - {c['ow']}x{c['oh']} to {c['w']}x{c['ht']}<br>
 difference {c['mean']:.1f}, {c['big']:.1f}% pixels changed{'' if c['real'] else ' (no original saved)'}</div>
-<div class="opts" data-h="{c['h']}"><button data-c="crisp">Crisp edges</button><button data-c="sharp">Sharper</button>
-<button data-c="relief">More relief</button><button data-c="original"{' class="on"' if c['bad'] else ''}>Original</button>
+<div class="opts" data-h="{c['h']}" data-hw="{c['w']}">
+<label>Sharpness <input type="range" min="-2" max="3" step="0.5" value="0" data-k="sharp"><span>0</span></label>
+<label>Relief <input type="range" min="0" max="3" step="0.5" value="0" data-k="relief"><span>0</span></label>
+<button data-c="crisp">Crisp edges</button><button data-c="original"{' class="on"' if c['bad'] else ''}>Original</button>
 <button data-c="reset" class="reset">Reset (keep HD)</button></div></div>
 ''')
         page.write(r'''</div><script>
-// the same filters as tcvr/re/texcache_tune.py, on the shown (small) pictures
+// the same steps as tcvr/re/texcache_tune.py, on the shown (small) pictures: box blurs scaled
+// from the HD size to the shown size
 function boxBlur(d,w,h,r){const o=new Float32Array(d.length),t=new Float32Array(d.length);
  for(let y=0;y<h;y++)for(let x=0;x<w;x++)for(let c=0;c<3;c++){let s=0,n=0;for(let k=-r;k<=r;k++){const xx=Math.min(w-1,Math.max(0,x+k));s+=d[(y*w+xx)*4+c];n++}t[(y*w+x)*4+c]=s/n}
  for(let y=0;y<h;y++)for(let x=0;x<w;x++)for(let c=0;c<3;c++){let s=0,n=0;for(let k=-r;k<=r;k++){const yy=Math.min(h-1,Math.max(0,y+k));s+=t[(yy*w+x)*4+c];n++}o[(y*w+x)*4+c]=s/n}
  return o}
-function unsharp(img,r,amount,thr){const d=img.data,b=boxBlur(d,img.width,img.height,r);
- for(let i=0;i<d.length;i+=4)for(let c=0;c<3;c++){const diff=d[i+c]-b[i+c];if(Math.abs(diff)>=thr)d[i+c]=Math.max(0,Math.min(255,d[i+c]+diff*amount))}}
+function against(img,r,t){const d=img.data,b=boxBlur(d,img.width,img.height,r);
+ for(let i=0;i<d.length;i+=4)for(let c=0;c<3;c++)d[i+c]=Math.max(0,Math.min(255,b[i+c]+(d[i+c]-b[i+c])*t))}
 function contrast(img,k){const d=img.data;for(let i=0;i<d.length;i+=4)for(let c=0;c<3;c++)d[i+c]=Math.max(0,Math.min(255,128+(d[i+c]-128)*k))}
-function render(card){const opts=[...card.querySelectorAll('.opts .on')].map(b=>b.dataset.c);
+function state(box){return{sharp:+box.querySelector('[data-k=sharp]').value,relief:+box.querySelector('[data-k=relief]').value,
+ crisp:box.querySelector('[data-c=crisp]').classList.contains('on'),original:box.querySelector('[data-c=original]').classList.contains('on')}}
+function render(card){const box=card.querySelector('.opts'),st=state(box);
  const o=card.querySelector('img.o'),h=card.querySelector('img.h'),cv=card.querySelector('canvas.p');
- if(!opts.length){cv.style.display='none';return}
- cv.width=h.naturalWidth;cv.height=h.naturalHeight;const g=cv.getContext('2d');const W=cv.width,H=cv.height;
- if(opts.includes('original')){g.imageSmoothingEnabled=false;g.drawImage(o,0,0,W,H)}
- else{g.drawImage(h,0,0,W,H);const k=W/160;
-  if(opts.includes('crisp')){g.globalAlpha=0.65;g.imageSmoothingEnabled=false;g.drawImage(o,0,0,W,H);g.globalAlpha=1;
-   const im=g.getImageData(0,0,W,H);unsharp(im,Math.max(1,Math.round(k)),0.6,4);g.putImageData(im,0,0)}
-  if(opts.includes('sharp')){const im=g.getImageData(0,0,W,H);unsharp(im,Math.max(1,Math.round(2*k)),1.3,2);g.putImageData(im,0,0)}
-  if(opts.includes('relief')){const im=g.getImageData(0,0,W,H);unsharp(im,Math.max(2,Math.round(8*k)),0.7,0);contrast(im,1.15);g.putImageData(im,0,0)}}
+ const any=st.sharp||st.relief||st.crisp||st.original;card.classList.toggle('req',!!any);
+ if(!any){cv.style.display='none';return}
+ cv.width=h.naturalWidth;cv.height=h.naturalHeight;const g=cv.getContext('2d');const W=cv.width,H=cv.height,k=W/+box.dataset.hw;
+ if(st.original){g.imageSmoothingEnabled=false;g.drawImage(o,0,0,W,H)}
+ else{g.drawImage(h,0,0,W,H);
+  if(st.crisp){g.globalAlpha=0.65;g.imageSmoothingEnabled=false;g.drawImage(o,0,0,W,H);g.globalAlpha=1}
+  let im=g.getImageData(0,0,W,H);
+  if(st.sharp)against(im,Math.max(1,Math.round(2*k)),1+st.sharp*(st.sharp>0?0.6:0.45));
+  if(st.relief){against(im,Math.max(1,Math.round(8*k)),1+st.relief*0.35);contrast(im,1+st.relief*0.06)}
+  g.putImageData(im,0,0)}
  cv.style.display='block'}
-function resetCard(box){box.querySelectorAll('button').forEach(x=>x.classList.remove('on'));const card=box.closest('.t');card.classList.remove('req');render(card)}
+function line(box){const st=state(box),p=[box.dataset.h];
+ if(st.original)p.push('original');else{if(st.crisp)p.push('crisp');if(st.sharp)p.push('sharp='+st.sharp);if(st.relief)p.push('relief='+st.relief)}
+ return p.length>1?p.join(' '):null}
+function resetCard(box){box.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+ box.querySelectorAll('input').forEach(x=>{x.value=0;x.nextElementSibling.textContent='0'});render(box.closest('.t'))}
 function resetAll(){document.querySelectorAll('.opts').forEach(resetCard);update()}
+document.querySelectorAll('.opts input').forEach(r=>r.oninput=()=>{r.nextElementSibling.textContent=r.value;
+ const box=r.closest('.opts');box.querySelector('[data-c=original]').classList.remove('on');render(box.closest('.t'));update()});
 document.querySelectorAll('.opts button').forEach(b=>b.onclick=()=>{const box=b.parentNode;
  if(b.dataset.c==='reset'){resetCard(box);update();return}
- if(b.dataset.c==='original'){box.querySelectorAll('button').forEach(x=>{if(x!==b)x.classList.remove('on')})}
- else box.querySelector('[data-c=original]').classList.remove('on');
- b.classList.toggle('on');const card=box.closest('.t');card.classList.toggle('req',!!box.querySelector('.on'));render(card);update()});
-function update(){const l=[...document.querySelectorAll('.opts')].map(x=>[x.dataset.h,...[...x.querySelectorAll('.on')].map(b=>b.dataset.c)]).filter(a=>a.length>1).map(a=>a.join(' '));
+ b.classList.toggle('on');
+ if(b.dataset.c==='original'&&b.classList.contains('on')){box.querySelector('[data-c=crisp]').classList.remove('on');
+  box.querySelectorAll('input').forEach(x=>{x.value=0;x.nextElementSibling.textContent='0'})}
+ if(b.dataset.c==='crisp')box.querySelector('[data-c=original]').classList.remove('on');
+ render(box.closest('.t'));update()});
+function update(){const l=[...document.querySelectorAll('.opts')].map(line).filter(x=>x);
  document.getElementById('list').value=l.join('\n');document.getElementById('count').textContent=l.length+' requests'}
 function copyList(){update();navigator.clipboard.writeText(document.getElementById('list').value)}
-document.querySelectorAll('.opts').forEach(x=>{if(x.querySelector('.on')){const c=x.closest('.t');c.classList.add('req');render(c)}});update()</script>
+document.querySelectorAll('.opts').forEach(x=>render(x.closest('.t')));update()</script>
 ''')
     print(f'{len(cards)} textures ({missing} without an original), {flagged} to check, '
           f'{len(rejected)} already rejected -> {os.path.join(out, "index.html")}')
