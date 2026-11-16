@@ -31,6 +31,8 @@ class OboeBackend : AudioBackend
 {
 	RingBuffer ringBuffer;
 	cResetEvent pushWait;
+	std::atomic<bool> outputStalled { false };
+	AudioBackend *fallbackPacer = nullptr;
 
 	std::shared_ptr<oboe::AudioStream> stream;
 	std::shared_ptr<oboe::AudioStream> recordStream;
@@ -82,6 +84,10 @@ public:
 
 	bool init() override
 	{
+		outputStalled.store(false);
+		fallbackPacer = config::VrXr ? AudioBackend::getBackend("null") : nullptr;
+		if (fallbackPacer != nullptr)
+			fallbackPacer->init();
 		// Actual capacity is size-1 to avoid overrun so add one buffer
 		ringBuffer.setCapacity((config::AudioBufferSize + SAMPLE_COUNT) * 4);
 
@@ -118,7 +124,8 @@ public:
 		}
 
 		stream->requestStart();
-		NOTICE_LOG(AUDIO, "Oboe driver started. stream capacity: %d frames, size: %d frames, frames/callback: %d, frames/burst: %d",
+		NOTICE_LOG(AUDIO, "Oboe driver started (API %d). stream capacity: %d frames, size: %d frames, frames/callback: %d, frames/burst: %d",
+				(int)stream->getAudioApi(),
 				stream->getBufferCapacityInFrames(), stream->getBufferSizeInFrames(),
 				stream->getFramesPerCallback(), stream->getFramesPerBurst());
 
@@ -143,8 +150,27 @@ public:
 
 	u32 push(const void* frame, u32 samples, bool wait) override
 	{
-		while (!ringBuffer.write((const u8 *)frame, samples * 4) && wait)
-			pushWait.Wait();
+		const bool vr = config::VrXr;
+		while (!ringBuffer.write((const u8 *)frame, samples * 4))
+		{
+			if (!wait)
+				return 1;
+			if (vr && outputStalled.load())
+				return fallbackPacer != nullptr ? fallbackPacer->push(frame, samples, true) : 1;
+			if (vr)
+			{
+				if (!pushWait.Wait(100))
+				{
+					if (!outputStalled.exchange(true))
+						WARN_LOG(AUDIO, "VR: audio output stalled; using real-time fallback pacing");
+					return fallbackPacer != nullptr ? fallbackPacer->push(frame, samples, true) : 1;
+				}
+			}
+			else
+				pushWait.Wait();
+		}
+		if (outputStalled.exchange(false))
+			NOTICE_LOG(AUDIO, "VR: audio output resumed");
 
 		return 1;
 	}
