@@ -30,7 +30,6 @@ namespace
 using Clock = std::chrono::steady_clock;
 
 bool open;
-bool keepRunning;			// the game keeps running behind the menu (to watch its frame rate change)
 bool pausedGame;			// the menu stopped the emulator (and starts it again)
 float placedYaw;			// where the head looked when it opened
 int selected;
@@ -67,14 +66,6 @@ void saveOption(config::Option<int>& o, float v) { o.set((int)std::lround(v)); o
 const std::vector<Choice>& choices()
 {
 	static const std::vector<Choice> list {
-		{ "Game behind the menu", { 0.f, 1.f }, { "Paused", "Running" },
-			[] { return keepRunning ? 1.f : 0.f; }, [](float v) {
-				keepRunning = v > 0.5f;
-				if (keepRunning)
-					resumeGame();
-				else
-					pauseGame();
-			} },
 		{ "Comfort vignette", { 0.f, 0.3f, 0.6f, 1.f }, { "Off", "Low", "Medium", "High" },
 			[] { return (float)config::VrComfortVignette; }, [](float v) { saveOption(config::VrComfortVignette, v); } },
 		{ "Anti-aliasing (MSAA)", { 1.f, 2.f, 4.f }, { "Off", "2x", "4x" },
@@ -146,8 +137,8 @@ void openMenu(float headYaw)
 	confirming = -1;
 	heldDir = 0;
 	status.clear();
-	if (!keepRunning)
-		pauseGame();
+	// always frozen behind the menu (Manu): the game must not go on without the player
+	pauseGame();
 	NOTICE_LOG(RENDERER, "XR menu: open (game %s)", pausedGame ? "paused" : "not running");
 }
 
