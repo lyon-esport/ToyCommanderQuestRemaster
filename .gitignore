@@ -59,3 +59,7 @@ AGENTS.md
 *.jks
 *.keystore
 keystore.properties
+
+# Machine-specific settings and the personal leakscan denylist (never commit)
+tcvr/tools/env.local.sh
+leakscan-denylist

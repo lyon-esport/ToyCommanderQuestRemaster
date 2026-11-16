@@ -1,0 +1,24 @@
+# Each line must be refused on its own. All values are fake.
+export TCVR_HEADSET_IP="${TCVR_HEADSET_IP:-192.168.1.77}"
+adb connect 10.1.2.3:41235
+ping 172.20.0.9
+my home IP is 46.101.91.123
+export ANDROID_HOME="${ANDROID_HOME:-/d/LOCAL_DATA/Documents/Sdk}"
+cd "L:\Drive partagés\Team\Game"
+python C:\Users\someone\AppData\Local\Programs\Python\python.exe
+see D:/Work/project/build
+open /home/jdoe/code and /Users/jdoe/Desktop
+copy \\nas01\share\file
+adb -s 1WMHH8A1B2C3D4 shell
+adb -s 2G0YC5ZF9K0123 install x.apk
+export ANDROID_SERIAL=R58M123ABCD
+adb-2G0YC5ZF9K0123-AbCdEf._adb-tls-connect._tcp
+serial: 1WMHH8A1B2C3D4
+mac 2c:26:17:aa:bb:cc
+host DESKTOP-AB12CD3
+ssh pi@raspberry.local
+mail jane.doe@company.fr
+token ghp_abcdefghijklmnopqrstuvwxyz0123456789
+key AKIAABCDEFGHIJKLMNOP
+-----BEGIN RSA PRIVATE KEY-----
+storePassword = "hunter2secret"

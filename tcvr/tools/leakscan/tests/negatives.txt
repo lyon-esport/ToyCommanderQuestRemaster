@@ -1,0 +1,19 @@
+# Each line must pass. These are placeholders, standard locations or code.
+export TCVR_HEADSET_IP="${TCVR_HEADSET_IP:-}"
+adb connect <headset-ip>:<port>
+the docs use 192.0.2.10, 198.51.100.7 and 203.0.113.99
+listen on 127.0.0.1 or 0.0.0.0, broadcast 255.255.255.255, DNS 8.8.8.8
+version 1.2.3.4 and v10.20.30.40 and mediapipe==5.0.0.93
+export JAVA_HOME="${JAVA_HOME:-/c/Program Files/Android/Android Studio/jbr}"
+C:\Program Files\Meta Quest Developer Hub\resources\bin\adb.exe
+cd ~/code; ls $HOME/code /home/<user>/code /Users/user/x /usr/local/bin
+adb -s $ANDROID_SERIAL shell; adb -s "$id" shell; adb -s emulator-5554 shell
+see https://github.com/lyon-esport/ToyCommanderQuestRemaster and http://localhost:8080
+Co-Authored-By: Claude <noreply@anthropic.com>
+1176052+someone@users.noreply.github.com
+sprite@2x.png and icon@3x.png
+the _adb-tls-connect._tcp service; core_options_intl.local
+storePassword System.getenv("TCVR_STORE_PASSWORD")
+password = "${PASSWORD}"
+a/b/c paths and s/foo/bar/ regex
+ip 192.168.1.50 in a doc example leakscan:allow
