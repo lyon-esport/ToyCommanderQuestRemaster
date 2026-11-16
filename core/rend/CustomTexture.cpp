@@ -80,10 +80,14 @@ private:
 class UpscaleCacheSource : public BaseCustomTextureSource
 {
 public:
-	explicit UpscaleCacheSource(const std::string& gameId)
-		: dir(get_writable_data_path("texcache/v2/") + gameId + "/"),
+	// factor: the session's vr.UpscaleCache (2 or 4; changes apply at the next start). Each
+	// factor has its own cache (2x: <game id>/, 4x: <game id>-x4/), so switching keeps both.
+	UpscaleCacheSource(const std::string& gameId, int factor)
+		: factor(factor),
+		  dir(get_writable_data_path("texcache/v2/") + gameId + (factor >= 4 ? "-x4/" : "/")),
 		  oldDir(get_writable_data_path("texcache/") + gameId + "/") {}
-	bool shouldReplace() const override { return config::VrUpscaleCache > 1; }
+	bool shouldReplace() const override { return factor > 1; }
+	const int factor;
 	bool loadMap() override
 	{
 		deleteOldCache();
@@ -419,7 +423,8 @@ bool CustomTexture::init()
 			// tcvr: after it, so a texture pack the player adds wins: the reviewed textures, then
 			// the upscale cache
 			addSource(std::make_unique<TunedTextureSource>(game_id));
-			auto cache = std::make_unique<UpscaleCacheSource>(game_id);
+			const int factor = std::clamp((int)config::VrUpscaleCache, 0, 4);
+			auto cache = std::make_unique<UpscaleCacheSource>(game_id, factor >= 4 ? 4 : factor >= 2 ? 2 : 0);
 			upscaleCache = cache.get();
 			addSource(std::move(cache));
 		}
@@ -751,9 +756,11 @@ void CustomTexture::resetPreloadProgress()
 // upscaling and the file run on a worker thread of their own.
 void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, void *src_buffer)
 {
-	const int factor = std::clamp((int)config::VrUpscaleCache, 0, 4);
-	if (factor < 2 || upscaleCache == nullptr || config::TextureUpscale > 1)
+	if (upscaleCache == nullptr || upscaleCache->factor < 2 || config::VrUpscaleCache < 2 || config::TextureUpscale > 1)
 		return;
+	// 4x for small textures only: a 256x256 texture would become 1024x1024 (4 MB of video memory
+	// each); bigger ones get 2x in the 4x cache
+	const int factor = upscaleCache->factor >= 4 && w * h <= 128 * 128 ? 4 : 2;
 	// small, still pictures only: no video (YUV), nothing the game redraws (render to texture,
 	// animated), nothing big (memory and time)
 	if (w * h > 256 * 256 || w < 8 || h < 8 || texture->tcw.PixelFmt == PixelYUV || texture->Updates > 1)

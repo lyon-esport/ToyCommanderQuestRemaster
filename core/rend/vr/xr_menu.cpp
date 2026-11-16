@@ -70,6 +70,7 @@ struct Choice
 
 void pauseGame();
 void resumeGame();
+void setStatus(const std::string& s);
 
 void saveOption(config::Option<float>& o, float v) { o.set(v); o.save(); }
 void saveOption(config::Option<int>& o, float v) { o.set((int)std::lround(v)); o.save(); }
@@ -87,8 +88,12 @@ const std::vector<Choice>& choices()
 		{ Section::Image, "Sharper far textures", { 0.f, -0.5f, -1.f }, { "Off", "Low (-0.5)", "High (-1.0)" },
 			[] { return (float)config::VrTexLodBias; }, [](float v) { saveOption(config::VrTexLodBias, v); } },
 		// the upscale cache (CustomTexture.cpp): each texture upscaled once, then reused
-		{ Section::Image, "HD textures (upscale cache)", { 0.f, 2.f, 4.f }, { "Off", "2x", "4x" },
-			[] { return (float)config::VrUpscaleCache; }, [](float v) { saveOption(config::VrUpscaleCache, v); } },
+		// (each size has its own cache; a change applies at the next start)
+		{ Section::Image, "Textures", { 0.f, 2.f, 4.f }, { "Original", "HD 2x", "HD 4x" },
+			[] { return (float)config::VrUpscaleCache; }, [](float v) {
+				saveOption(config::VrUpscaleCache, v);
+				setStatus("Textures: applies at the next start of the game");
+			} },
 		// the headset's display rate (applied live by xr_host); the game itself stays at 60 Hz
 		{ Section::Performance, "Refresh rate", { 72.f, 90.f, 120.f }, { "72 Hz", "90 Hz", "120 Hz" },
 			[] { return (float)config::VrXrRefreshRate; }, [](float v) { saveOption(config::VrXrRefreshRate, v); } },

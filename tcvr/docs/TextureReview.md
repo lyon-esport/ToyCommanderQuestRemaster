@@ -7,6 +7,13 @@ and HUD digits blurred or smeared, thin lines broken, transparent edges with hal
 that were meant to be pixel-sharp. This is how to find those and send the game back to the
 original texture for them.
 
+## Sizes
+
+VR menu → Image quality → **Textures**: Original, HD 2x or HD 4x (applies at the next start). Each
+size has its own cache on the headset (`texcache/v2/<game id>/` and `<game id>-x4/`), so switching
+keeps both. HD 4x is for textures up to 128x128 (a bigger one would take 4 MB of video memory at
+4x); bigger textures get 2x in the 4x cache. For the 4x cache, add `4` to `pull` and `tune`.
+
 ## The steps
 
 1. **Play** the levels to review (the cache fills as textures appear).
@@ -27,7 +34,8 @@ original texture for them.
    - **Crisp edges**: clean borders and less blur (shapes, bars, lettering, HUD pieces);
    - **Sharper**: sharper details;
    - **More relief**: more local contrast, so walls, stone and wood look less flat;
-   - **Original**: no HD version at all.
+   - **Original**: no HD version at all;
+   - **Reset (keep HD)**: back to the automatic HD version ("Reset all" for every texture).
    Choices combine (e.g. Sharper + More relief). **Copy request list** puts lines like
    `66183f22 relief` on the clipboard; save them to a text file.
 4. **Make and send the tuned textures:**

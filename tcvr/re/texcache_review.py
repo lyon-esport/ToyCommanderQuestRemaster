@@ -109,17 +109,18 @@ def main():
 .t.check{border-color:#f59e0b}.t.bad{border-color:#ef4444}.t img{display:block;image-rendering:pixelated}
 .pair{display:flex;gap:6px}.cap{font-size:12px;color:#a1a1aa;margin-top:4px}.warn{color:#f59e0b}
 .opts{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.opts button{flex:1 1 45%;padding:3px;background:#3f3f46;color:#e4e4e7;border:1px solid #52525b;border-radius:4px;cursor:pointer}
-.opts button.on{background:#2563eb;border-color:#60a5fa}.t.req{border-color:#3b82f6}canvas{display:block;image-rendering:auto}
+.opts button.on{background:#2563eb;border-color:#60a5fa}.opts button.reset{flex-basis:100%;background:#27272a}.t.req{border-color:#3b82f6}canvas{display:block;image-rendering:auto}
 #bar button{margin-top:6px}#bar{position:sticky;top:0;background:#18181b;padding:8px 0;z-index:1}
 textarea{width:100%;height:70px}</style>
 ''')
         page.write(f'''<div id="bar"><b>HD texture review</b> - {len(cards)} textures, biggest difference first;
 {flagged} marked <span class="warn">check</span> (difference &ge; {args.threshold:g}).{note}
 Left: original, middle: automatic HD; a third picture previews your choices.
-Per texture: <b>Crisp edges</b> (clean borders, less blur), <b>Sharper</b>, <b>More relief</b> (local contrast:
+<b>Reset</b> keeps the automatic HD version. Per texture: <b>Crisp edges</b> (clean borders, less blur), <b>Sharper</b>, <b>More relief</b> (local contrast:
 walls, stone, wood), <b>Original</b> (no HD). Then "Copy request list" and run
 <code>texcache-review.sh tune &lt;file&gt;</code> (tcvr/docs/TextureReview.md).
-<button onclick="copyList()" style="width:auto">Copy request list</button> <span id="count"></span>
+<button onclick="copyList()" style="width:auto">Copy request list</button>
+<button onclick="resetAll()" style="width:auto">Reset all</button> <span id="count"></span>
 <textarea id="list" readonly placeholder="requests appear here: hash choice..."></textarea></div><div class="grid">
 ''')
         for c in cards:
@@ -130,7 +131,8 @@ walls, stone, wood), <b>Original</b> (no HD). Then "Copy request list" and run
 <div class="cap">{html.escape(c['h'])} - {c['ow']}x{c['oh']} to {c['w']}x{c['ht']}<br>
 difference {c['mean']:.1f}, {c['big']:.1f}% pixels changed{'' if c['real'] else ' (no original saved)'}</div>
 <div class="opts" data-h="{c['h']}"><button data-c="crisp">Crisp edges</button><button data-c="sharp">Sharper</button>
-<button data-c="relief">More relief</button><button data-c="original"{' class="on"' if c['bad'] else ''}>Original</button></div></div>
+<button data-c="relief">More relief</button><button data-c="original"{' class="on"' if c['bad'] else ''}>Original</button>
+<button data-c="reset" class="reset">Reset (keep HD)</button></div></div>
 ''')
         page.write(r'''</div><script>
 // the same filters as tcvr/re/texcache_tune.py, on the shown (small) pictures
@@ -152,7 +154,10 @@ function render(card){const opts=[...card.querySelectorAll('.opts .on')].map(b=>
   if(opts.includes('sharp')){const im=g.getImageData(0,0,W,H);unsharp(im,Math.max(1,Math.round(2*k)),1.3,2);g.putImageData(im,0,0)}
   if(opts.includes('relief')){const im=g.getImageData(0,0,W,H);unsharp(im,Math.max(2,Math.round(8*k)),0.7,0);contrast(im,1.15);g.putImageData(im,0,0)}}
  cv.style.display='block'}
+function resetCard(box){box.querySelectorAll('button').forEach(x=>x.classList.remove('on'));const card=box.closest('.t');card.classList.remove('req');render(card)}
+function resetAll(){document.querySelectorAll('.opts').forEach(resetCard);update()}
 document.querySelectorAll('.opts button').forEach(b=>b.onclick=()=>{const box=b.parentNode;
+ if(b.dataset.c==='reset'){resetCard(box);update();return}
  if(b.dataset.c==='original'){box.querySelectorAll('button').forEach(x=>{if(x!==b)x.classList.remove('on')})}
  else box.querySelector('[data-c=original]').classList.remove('on');
  b.classList.toggle('on');const card=box.closest('.t');card.classList.toggle('req',!!box.querySelector('.on'));render(card);update()});
