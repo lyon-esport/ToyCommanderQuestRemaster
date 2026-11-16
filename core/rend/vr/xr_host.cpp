@@ -1978,11 +1978,7 @@ void captureIfRequested(GLuint fbo, int width, int height)
 			const glm::vec2 head = headYawPitch();
 			if (FILE *f = fopen((dir + "/ram" + suffix + ".txt").c_str(), "w"))
 			{
-				fprintf(f, "game %s
-headYawDeg %.2f
-headPitchDeg %.2f
-steadyMs %lld
-", settings.content.gameId.c_str(),
+				fprintf(f, "game %s\nheadYawDeg %.2f\nheadPitchDeg %.2f\nsteadyMs %lld\n", settings.content.gameId.c_str(),
 						head.x * 57.29578f, head.y * 57.29578f,
 						(long long)std::chrono::duration_cast<std::chrono::milliseconds>(
 								std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -2103,7 +2099,7 @@ const Eye *currentEye()
 
 glm::vec2 headYawPitch()
 {
-	return glm::vec2(headYawNow, headPitchNow);
+	return glm::vec2(headYawNow.load(), headPitchNow.load());
 }
 
 void term()
