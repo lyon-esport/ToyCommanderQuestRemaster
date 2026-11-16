@@ -26,15 +26,16 @@ Meta Touch controllers act as a Dreamcast pad:
 | Right thumbstick | D-pad (8 directions) |
 | Left trigger / right trigger | L / R triggers |
 | A, B (right) / X, Y (left) | A, B / X, Y |
-| Left ≡ (menu) | Start |
+| Left ≡ (menu), short press | Start (the game's menu) |
+| Left ≡ (menu), long press | VR menu (planned) |
 | Right thumbstick click | Recenter the view |
 | Hold a grip, then right thumbstick up / down | Make the world bigger / smaller (saved) |
 
 The view also recenters by itself when you come back to the headset after more than a few
 seconds away (system menu, headset taken off).
 
-The left thumbstick click does nothing. Planned (see the roadmap): a VR menu drawn over the
-paused game (recenter, world size, saves, quit).
+The left thumbstick click does nothing. The VR menu (planned, see the roadmap) is drawn over
+the paused game: recenter, world size, saves, quit.
 
 ## Saves
 

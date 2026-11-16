@@ -35,7 +35,7 @@ when the player looks away from the vehicle's heading, and the public name and i
 |---|---|
 | P0-1 | **PAL version check at launch:** accept only `MK-5102050` (plus a file hash if possible), with a clear message on the setup panel otherwise. |
 | P0-2 | **60 Hz for the PAL game:** check whether it runs at 50 Hz, and force 60 Hz if it can. |
-| P0-3 | **VR menu overlay**, pausing the game: recenter, world size, export / import saves, quit at the bottom. Start is only the left ≡ button; the right stick click recenters. |
+| P0-3 | **VR menu overlay** on a long press of the left ≡ button, pausing the game: recenter, world size, export / import saves, quit at the bottom. A short press of left ≡ is Start (the game's menu, and the only Start); the right stick click recenters. |
 | P0-4 | **End-to-end save test:** play, save, quit, relaunch, load, export, import. |
 | P0-5 | **Control model written down:** vehicle aiming (decided); pitch / roll in planes and sight placement still to define. |
 | P0-6 | **Release readiness:** release keystore and signing, sideloading (SideQuest / `adb`), an `Install.md` for players, and the GPL source published with each APK. |
