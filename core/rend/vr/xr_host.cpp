@@ -400,9 +400,10 @@ bool initSwapchains()
 	for (int i = 0; i < 2; i++)
 	{
 		EyeChain& c = chains[i];
-		const float scale = std::clamp((float)config::VrXrResolution, 0.3f, 1.5f);
-		c.width = (int)(configViews[i].recommendedImageRectWidth * scale);
-		c.height = (int)(configViews[i].recommendedImageRectHeight * scale);
+		// tcvr: up to 160% (supersampling: sharper), within what the runtime takes
+		const float scale = std::clamp((float)config::VrXrResolution, 0.3f, 1.6f);
+		c.width = std::min((int)(configViews[i].recommendedImageRectWidth * scale), (int)configViews[i].maxImageRectWidth);
+		c.height = std::min((int)(configViews[i].recommendedImageRectHeight * scale), (int)configViews[i].maxImageRectHeight);
 		XrSwapchainCreateInfo info { XR_TYPE_SWAPCHAIN_CREATE_INFO };
 		info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
 		info.format = format;
