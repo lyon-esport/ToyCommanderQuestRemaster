@@ -16,7 +16,7 @@ original texture for them.
    bash tcvr/tools/texcache-review.sh pull
    ```
 
-   It copies the cache to the private hub (`AI/TextureReview/<game id>/cache/`) and writes
+   It copies the cache to the private hub (`AI/TextureReview/<game id>/cache/` (from the headset's `texcache/v2/<game id>/`)) and writes
    `AI/TextureReview/<game id>/review/index.html`: one card per texture, the original on the left
    (shrunk back from the HD copy) and the HD one on the right, at the same size.
 3. **Review** the page in a browser. Click **Reject** on every texture that looks worse. The

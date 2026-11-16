@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 source tcvr/tools/env.sh
 GAME="${TCVR_GAME_ID:-MK-5102050}"
-DEV_DIR="/sdcard/Android/data/$TCVR_PACKAGE/files/data/texcache/$GAME"
+DEV_DIR="/sdcard/Android/data/$TCVR_PACKAGE/files/data/texcache/v2/$GAME"
 OUT="${TCVR_PRIVATE_ROOT:-..}/AI/TextureReview/$GAME"
 PY="${PYTHON:-python}"
 case "${1:-}" in
