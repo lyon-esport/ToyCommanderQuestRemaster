@@ -8,8 +8,11 @@ Covers the four P0 changes made without the headset, each in its own PR:
 | B. 60 Hz for the European disc, video-rate log | P0-2 | `tcvr/force-60hz` |
 | C. Comfort vignette while steering | P0-9 | `tcvr/comfort-vignette` |
 | D. 360° camera prep: scripted pad input, dump series, head yaw | P0-8 | `tcvr/camera-360-prep` |
+| E. Image sharpness: LOD bias, MSAA and eye resolution switched live | P1-7 | `tcvr/sharpness` |
+| F. VR menu on the left ≡ (overlay), with a toggle per sharpness setting | P0-3, P1-6 | `tcvr/vr-menu` (on top of E and C) |
+| G. Launch splash and loading panel | P1-8 | `tcvr/launch-feedback` |
 
-Test build: the local branch `tcvr/test-p0` = `main` + the audio fixes (PR #2) + the four branches.
+Test build: the local branch `tcvr/test-p0` = `main` + the audio fixes (PR #2) + all the branches above.
 Record the APK's version and SHA-256 with each result. A test passes only with the evidence listed.
 
 ## Setup (laptop, Git Bash, from `code/`)
@@ -71,6 +74,39 @@ Before anything: note the device config and saves, so they can be checked unchan
 | D4 | The same with steer `-1` (turn_left) and with steer 0 while the tester turns their head 90° between dumps (head_only). | As D3. | as D3 |
 | D5 | `python tcvr/re/find_camera.py tcvr/docs/RE/dumps/turn_right/ram_*.bin` (and turn_left, head_only) | Candidate matrices whose yaw changes by the steering's amount in turn_right/turn_left and NOT in head_only. Check `0x8CAB7944` (pitched candidate from the old dumps). | output saved next to the dumps; findings added to `tcvr/docs/RE/Camera360.md` and `Addresses.md` |
 | D6 | Recenter (left stick click) facing another way, then a dump: `ram_NN.txt` head yaw ~0 right after recenter. | Head yaw is relative to the recenter direction. | `ram_NN.txt` |
+
+## E + F. VR menu and image sharpness
+
+Scripted menu input (nobody at the controllers): `"$ADB" shell "run-as com.dreamcast4ever.toycommandervr sh -c 'echo toggle > files/menu.request'"`
+(words: toggle, up, down, left, right, accept, back; one per request, 0.1 s apart at least).
+Capture the menu with `files/capture.request` (left eye) or a screenshot.
+
+| # | Steps | Expected | Evidence |
+|---|---|---|---|
+| F1 | In a mission, press the left ≡ (or `toggle`). | The menu appears ~1.6 m ahead where the head looks, over the frozen game; the game is paused (sound stops, nothing moves); head tracking still smooth. Lines: Resume, Recenter view, World size, Game behind the menu, Comfort vignette, Anti-aliasing (MSAA), Anisotropic filtering, Sharper far textures, Eye resolution, Export saves, Import saves, Quit game, and a line "Headset N fps Game N fps (paused)". | capture; logcat `XR menu: open (game paused)` |
+| F2 | Stick up/down; hold down 2 s. | The highlighted line moves one step, then repeats; wraps around. | capture |
+| F3 | Left ≡, B, or Resume + A. | The menu closes, the game continues where it was; the A/B press doesn't reach the game. | logcat `XR menu: closed`; tester's note |
+| F4 | Recenter view + A, facing 90° away. | Menu closes; the view is recentred to where you face. | logcat `XR: game camera placed at the head` |
+| F5 | World size left/right. | Each step 10% smaller/bigger, at once; kept after a restart (emu.cfg `vr.WorldScale`). | capture before/after; emu.cfg |
+| F6 | Start: right stick click only. Left ≡ no longer pauses the game through its own menu. | As described. | tester's note |
+| E1 | Game behind the menu = Running; then change MSAA Off → 2x → 4x. | Each change rebuilds the eye buffers within a frame (a short blink at most); edges visibly smoother at 4x. Note the headset and game fps on the menu line for each value. | logcat `XR: eye buffer settings changed (MSAA 4 ...)` then `XR: eye buffers WxH, 4x MSAA`; fps per value |
+| E2 | Anisotropic filtering Off → 16x. | Ground textures at a grazing angle sharper; fps noted. | capture of the same view per value; fps |
+| E3 | Sharper far textures Off → Low → High. | Distant textures sharper; High may shimmer while moving (note it). | captures; fps |
+| E4 | Eye resolution 80% → 130%. | Sharper picture as it grows; fps drops at some point (note where it falls below 72). | logcat eye buffer size; fps per value |
+| E5 | Restart the app. | The chosen values are kept (emu.cfg `vr.Msaa`, `rend.AnisotropicFiltering`, `vr.TexLodBias`, `vr.XrResolution`, `vr.ComfortVignette`). | emu.cfg |
+| E6 | Pick the best quality that holds 72 fps in the busiest level tried. | A recommended default set for the release. | table in the results |
+| F7 | Export saves + A. | Status line "Saves exported to Download/ToyCommanderVR/Saves/<time>"; the folder has the VMU files. | `adb shell ls` of the folder |
+| F8 | Import saves + A, then A again. | "Saves imported. Restarting..."; the app restarts by itself within ~2 s and the game boots with those saves. | logcat; tester's note |
+| F9 | Quit game + A, A. | Back to Horizon Home; the app's process is gone. | `adb shell pidof com.dreamcast4ever.toycommandervr` empty |
+| F10 | Vignette off while the menu is open (stick moves with menu open). | No vignette. | capture |
+
+## G. Launch splash and loading panel
+
+| # | Steps | Expected | Evidence |
+|---|---|---|---|
+| G1 | Start the app from the library (worn). | The system splash "TOY COMMANDER VR / Loading..." instead of a black void, then the loading panel "Reading your disc..." / "Starting Toy Commander..." with "Disc MK-5102050", then the game. | tester's note; logcat `XR: loading panel shown` |
+| G2 | Time from the tap to the first game picture. | Noted (seconds). | stopwatch |
+| G3 | Only a wrong disc (A3). | Loading panel, then back to the setup panel with the red message. | as A3 |
 
 ## Regression checks (every run)
 
