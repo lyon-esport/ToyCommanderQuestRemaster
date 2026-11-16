@@ -680,6 +680,31 @@ bool BaseTextureCacheData::Update()
 	protectVRam();
 
 	UploadToGPU(upscaled_w, upscaled_h, (const u8 *)temp_tex_buffer, IsMipmapped(), mipmapped);
+	// tcvr: the upscale cache (VR): this texture upscaled once, in the background
+	// Only whole pictures: not cropped to the end of VRAM (heightLimit).
+	if (config::VrUpscaleCache > 1 && !config::DumpTextures && upscaled_w == width && heightLimit == height)
+	{
+		// A mipmap buffer holds the levels smallest first (1x1, 2x2, ... width x height, see
+		// PixelBuffer::set_mipmap): the full-size picture is the last level, not the start.
+		const u8 *picture = (const u8 *)temp_tex_buffer;
+		bool usable = true;
+		if (mipmapped)
+		{
+			const u32 topLevel = tsp.TexU + 3;
+			usable = width == height && (1u << topLevel) == width;
+			const u32 pixelSize = tex_type == TextureType::_8888 ? 4 : tex_type == TextureType::_8 ? 1 : 2;
+			size_t offset = 0;
+			for (u32 i = 0; i < topLevel; i++)
+				offset += (size_t)1 << (2 * i);
+			picture += offset * pixelSize;
+		}
+		if (usable)
+		{
+			if (!custom_texture.enabled())
+				ComputeHash();
+			custom_texture.cacheUpscaled(this, upscaled_w, upscaled_h, (void *)picture);
+		}
+	}
 	if (config::DumpTextures)
 	{
 		ComputeHash();

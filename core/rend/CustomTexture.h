@@ -61,6 +61,10 @@ public:
 	void addSource(std::unique_ptr<BaseCustomTextureSource> source);
 	void loadCustomTextureAsync(BaseTextureCacheData *texture_data);
 	void dumpTexture(BaseTextureCacheData* texture, int w, int h, void *src_buffer);
+	// tcvr: the VR build's upscale cache (vr.UpscaleCache, see CustomTexture.cpp)
+	void cacheUpscaled(BaseTextureCacheData* texture, int w, int h, void *src_buffer);
+	// this run's upscaled and queued textures, and all those in the cache
+	void getUpscaleCacheProgress(int& done, int& queued, int& cached) const;
 	void terminate();
 	void getPreloadProgress(int& completed, int& total, size_t& loaded_size) const;
 

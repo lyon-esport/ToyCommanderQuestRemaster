@@ -132,6 +132,12 @@ Option<float> VrComfortVignette("vr.ComfortVignette", 0.6f);	// tcvr: darken the
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");
+// tcvr: textures upscaled (xBRZ, this factor) once as the game shows them, cached, reused (0: off)
+#ifdef USE_OPENXR
+Option<int> VrUpscaleCache("vr.UpscaleCache", 2);
+#else
+Option<int> VrUpscaleCache("vr.UpscaleCache", 0);
+#endif
 Option<bool> DumpUniqueTextures("rend.DumpUniqueTextures");
 Option<bool> DumpReplacedTextures("rend.DumpReplacedTextures");
 Option<int> ScreenStretching("rend.ScreenStretching", 100);
