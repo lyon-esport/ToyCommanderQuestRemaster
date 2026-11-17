@@ -162,9 +162,11 @@ bool trap(Sh4Context *ctx, u32 pc)
 	if (ctx->pr == ViewCaller || headCameraTarget() != 0)
 		frameHead = headYawPitch();
 	const glm::vec2 head = frameHead;
-	// (the game's camera turns the other way for the same angle: the user, 2026-11-17, head right
-	// turned the view left. The picture's turn back takes the same value, so they still match.)
-	const float yaw = -head.x;
+	// The picture goes where the head looks (+yaw in the VR view); the game's camera formula below
+	// turns the other way for the same angle (the user, 2026-11-17: head right turned the view
+	// left), so it gets -yaw. (Negating both put the picture opposite the head: black past ~90.)
+	const float yaw = head.x;
+	const float camYaw = -yaw;
 	const float pitch = mode >= 2 ? std::clamp(head.y, -1.4f, 1.4f) : 0.f;
 	float m[12];
 	for (int i = 0; i < 12; i++)
@@ -174,7 +176,7 @@ bool trap(Sh4Context *ctx, u32 pc)
 	const glm::vec3 r(m[0], m[1], m[2]), u(m[3], m[4], m[5]), b(m[6], m[7], m[8]);
 	// the camera turned in its own frame by Ry(yaw) * Rx(pitch): each new axis is a column of
 	// that matrix in the old axes
-	const float cy = std::cos(yaw), sy = std::sin(yaw), cp = std::cos(pitch), sp = std::sin(pitch);
+	const float cy = std::cos(camYaw), sy = std::sin(camYaw), cp = std::cos(pitch), sp = std::sin(pitch);
 	const glm::vec3 r2 = cy * r - sy * b;
 	const glm::vec3 u2 = sy * sp * r + cp * u + cy * sp * b;
 	const glm::vec3 b2 = sy * cp * r - sp * u + cy * cp * b;
