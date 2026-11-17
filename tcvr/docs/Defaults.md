@@ -16,7 +16,7 @@ The Quest build starts with these settings when `emu.cfg` has no value for them
 | Fixed foveation (edges) | `vr.Foveation` | Off | Off |
 | Upload frame once | `vr.UploadOnce` | Off | On |
 | Discard eye depth | `vr.DiscardDepth` | On | On |
-| Comfort vignette | `vr.ComfortVignette` | High (1.0) | Medium (0.6) |
+| Comfort vignette | `vr.ComfortVignette` | Low (1; the former High) | 0.6 (the former Medium) |
 | World size | `vr.WorldScale` | 182% (0.2, the menu's maximum) | 100% (0.11) |
 
 The headset can refuse a refresh rate (a developer lock, or another app such as Quest Games

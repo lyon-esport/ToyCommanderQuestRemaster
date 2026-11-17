@@ -108,7 +108,7 @@ const std::vector<Choice>& choices()
 			[] { return config::VrUploadOnce ? 1.f : 0.f; }, [](float v) { config::VrUploadOnce.set(v > 0.5f); config::VrUploadOnce.save(); } },
 		{ Section::Performance, "Discard eye depth", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrDiscardDepth ? 1.f : 0.f; }, [](float v) { config::VrDiscardDepth.set(v > 0.5f); config::VrDiscardDepth.save(); } },
-		{ Section::Comfort, "Comfort vignette", { 0.f, 0.3f, 0.6f, 1.f }, { "Off", "Low", "Medium", "High" },
+		{ Section::Comfort, "Comfort vignette", { 0.f, 1.f, 2.f, 3.f }, { "Off", "Low", "Medium", "High" },
 			[] { return (float)config::VrComfortVignette; }, [](float v) { saveOption(config::VrComfortVignette, v); } },
 	};
 	return list;

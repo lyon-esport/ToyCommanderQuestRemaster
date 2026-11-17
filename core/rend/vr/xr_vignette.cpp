@@ -36,8 +36,17 @@ constexpr float FullRate = 1.57f;
 // small steering corrections). Time constants in seconds.
 constexpr float RiseTime = 0.08f, FallTime = 0.35f;
 // The clear area, as a half angle from the eye's forward direction: from (barely there) to
-// (at full strength), and the soft edge's width. Degrees.
+// (at full strength), and the soft edge's width. Degrees. These are the Low level (vr.ComfortVignette 1).
 constexpr float ClearAtLow = 62.f, ClearAtFull = 30.f, Edge = 22.f;
+// Medium (2) and High (3) build on Low, per level above it: the clear area shrinks (degrees),
+// and a lighter steer gives the full effect (gain on the turn amount).
+constexpr float ClearLowStep = 8.f, ClearFullStep = 7.f, GainStep = 0.6f;
+
+// How far the setting goes past Low: 0 (Low and below), 1 (Medium), 2 (High).
+float extraLevel()
+{
+	return std::clamp((float)config::VrComfortVignette - 1.f, 0.f, 2.f);
+}
 
 bool initGl()
 {
@@ -107,8 +116,11 @@ void setArtificialTurnRate(float radiansPerSecond)
 
 float updateVignette(double seconds)
 {
+	// 0..1 scales the Low look (older configs: 0.3, 0.6); 2 and 3 are the stronger levels
 	const float setting = std::clamp((float)config::VrComfortVignette, 0.f, 1.f);
-	const float target = setting * std::max((float)steering, std::min((float)turnRate / FullRate, 1.f));
+	const float gain = 1.f + GainStep * extraLevel();
+	const float turn = std::max((float)steering, std::min((float)turnRate / FullRate, 1.f));
+	const float target = setting * std::min(1.f, gain * turn);
 	const float dt = (float)std::clamp(seconds, 0.0, 0.1);
 	const float tau = target > shown ? RiseTime : FallTime;
 	shown += (target - shown) * (1.f - std::exp(-dt / tau));
@@ -122,14 +134,16 @@ void drawVignette(const glm::mat4& projection, float strength)
 	if (strength < 0.01f || !initGl())
 		return;
 	const float deg = 3.14159265f / 180.f;
-	const float inner = (ClearAtLow + (ClearAtFull - ClearAtLow) * strength) * deg;
+	const float extra = extraLevel();
+	const float clearLow = ClearAtLow - ClearLowStep * extra, clearFull = ClearAtFull - ClearFullStep * extra;
+	const float inner = (clearLow + (clearFull - clearLow) * strength) * deg;
 	glcache.UseProgram(program);
 	glUniform2f(uTanScale, 1.f / projection[0][0], 1.f / projection[1][1]);
 	glUniform2f(uTanOffset, projection[2][0], projection[2][1]);
 	glUniform1f(uInner, inner);
 	glUniform1f(uOuter, inner + Edge * deg);
 	// never fully black at the very edge: a hint of the world stays (less closed in)
-	glUniform1f(uAlpha, std::min(1.f, 0.35f + strength) * 0.95f);
+	glUniform1f(uAlpha, std::min(1.f, 0.35f + 0.15f * extra + strength) * 0.95f);
 	glcache.Disable(GL_SCISSOR_TEST);
 	glcache.Disable(GL_STENCIL_TEST);
 	glcache.Disable(GL_DEPTH_TEST);
