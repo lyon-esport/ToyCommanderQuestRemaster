@@ -29,13 +29,14 @@
 	logic; the weapons aim with the vehicle, not the head.
 
 	Each picture is turned back by the turn of its own frame: the hook at the scene's end
-	(rnd_FrameEnd 0x8C057A86, before kmRender) latches it and the render start takes it
+	(0x8C057A86 / 0x8C057A5C, before kmRender) latches it and the render start takes it
 	(tcvrTakeFrameCamTurn). (The first version noted it at the display list's start: a list
 	could take the previous frame's head while its cameras had the new one, another jitter.)
 
-	A second hook at the start of the crosshair drawing (0x8C03EEF8) puts the stock (unturned)
-	world-to-camera matrix back: the crosshair, lock-on square and weapon sights are world points
-	projected to the 2D HUD plane, and the HUD plane stays with the vehicle (no turn back).
+	The crosshair and weapon sights are world points (the weapons' aim, from the vehicle)
+	projected with the turned camera and drawn at their own depth, so the picture's turn back puts
+	them on their point like the rest of the 3D: nothing to do for them. (A hook that gave them the
+	stock camera put them at the centre of the eye, headset test 2026-11-17.)
 
 	This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
@@ -71,14 +72,14 @@ struct Hook
 };
 // "set camera" (sts.l pr,@-r15 ...)
 constexpr Hook SetCamera { 0x8C0610F6, { 0x4F22, 0xD320, 0x430B, 0x0009, 0xAFEC, 0x4F26 } };
-// the crosshair / sights of a player (mov.l r13,@-r15 ...)
-constexpr Hook Crosshair { 0x8C03EEF8, { 0x2FD6, 0x9D7A, 0xD33F, 0x04D7, 0x9078, 0x2FC6 } };
-// the end of a scene: kmRender, kmEndScene (sts.l pr,@-r15 ...)
+// The end of a scene (kmRender, kmEndScene), two routines: 0x8C057A86 (between split-screen
+// players) and 0x8C057A5C (one player: the main frame callback calls it through the pointer at
+// 0x8C0FC464; headset test 2026-11-17: the first is never called with one player). The second
+// is hooked at its second instruction (sts.l pr,@-r15): its first is a PC-relative load.
 constexpr Hook FrameEnd { 0x8C057A86, { 0x4F22, 0x6343, 0x2338, 0x8D09, 0x2F46, 0xD466 } };
-constexpr const Hook *Hooks[] { &SetCamera, &Crosshair, &FrameEnd };
+constexpr Hook FrameEnd1P { 0x8C057A5E, { 0x4F22, 0x6342, 0xD273, 0x7301, 0x420B, 0x2432 } };
+constexpr const Hook *Hooks[] { &SetCamera, &FrameEnd, &FrameEnd1P };
 
-constexpr u32 CamToWorld = 0x8C0FD5BC;
-constexpr u32 WorldToCam = 0x8C0FD58C;
 constexpr u32 PlayerCount = 0x8C0A72F4;	// split screen: 1..4
 // 48 bytes for the turned matrix: in the boot area (IP.BIN, 0x8C008000-0x8C00FFFF) the game
 // leaves alone once running; zero in every dump taken (kitchen, attract demo, a mission).
@@ -102,8 +103,6 @@ constexpr u32 TurnedCallers[] {
 bool installed;
 u32 vblanks, simVblank = ~0u;
 glm::vec2 frameHead;		// the head for every call of a game frame, taken at its first
-float stockWorldToCam[12];	// the last turned call's camera, unturned, as world-to-camera
-bool haveStock;
 glm::vec2 frameTurn;		// the turn the cameras of the frame being drawn got (0: none turned)
 
 float readFloat(u32 addr)
@@ -123,7 +122,8 @@ void writeFloat(u32 addr, float f)
 
 bool gameplayFrame()
 {
-	return vblanks - simVblank <= 2;
+	// (the scene's end comes 1 or 2 VBlanks after the simulation's call: some margin)
+	return vblanks - simVblank <= 3;
 }
 
 // What calls it (test aid): every new caller, once, to the log; and how many turned calls.
@@ -208,41 +208,15 @@ void setCameraTrap(Sh4Context *ctx)
 		writeFloat(Scratch + i * 4, out[i]);
 	ctx->r[4] = Scratch;
 
-	// the stock camera as world-to-camera, for the HUD's projections (crosshairTrap):
-	// M^T and -M^T t, same layout
-	for (int row = 0; row < 3; row++)
-		for (int col = 0; col < 3; col++)
-			stockWorldToCam[row * 3 + col] = m[col * 3 + row];
-	for (int row = 0; row < 3; row++)
-		stockWorldToCam[9 + row] = -(m[0 * 3 + row] * m[9] + m[1 * 3 + row] * m[10] + m[2 * 3 + row] * m[11]);
-	haveStock = true;
-
 	frameTurn = glm::vec2(yaw, pitch);
 }
 
-void crosshairTrap(Sh4Context *ctx)
+void frameEndTrap(Sh4Context *ctx, u32 pc)
 {
-	// the instruction the hook replaced: mov.l r13,@-r15
-	ctx->r[15] -= 4;
-	WriteMem32_nommu(ctx->r[15], ctx->r[13]);
-	ctx->pc = Crosshair.pc + 2;
-	// The crosshair, the lock-on square and the weapon sights are world points projected with
-	// the world-to-camera matrix and drawn on the 2D HUD plane: project them with the stock
-	// camera, so they land on their point in the vehicle's frame (where the HUD plane is).
-	// Only the matrix in RAM: the culling planes and XMTRX stay turned; the HUD draws no 3D
-	// until the next "set camera" call.
-	if (!haveStock || config::VrHeadCamera <= 0 || !gameplayFrame())
-		return;
-	for (int i = 0; i < 12; i++)
-		writeFloat(WorldToCam + i * 4, stockWorldToCam[i]);
-}
-
-void frameEndTrap(Sh4Context *ctx)
-{
-	// the instruction the hook replaced: sts.l pr,@-r15
+	// the instruction the hook replaced (both): sts.l pr,@-r15
 	ctx->r[15] -= 4;
 	WriteMem32_nommu(ctx->r[15], ctx->pr);
-	ctx->pc = FrameEnd.pc + 2;
+	ctx->pc = pc + 2;
 	// The scene is complete: its picture (rendered from kmRender on) gets this frame's turn.
 	const glm::vec2 turn = gameplayFrame() ? frameTurn : glm::vec2(0.f);
 	tcvrSetFrameCamTurn(turn.x, turn.y);
@@ -254,10 +228,8 @@ bool trap(Sh4Context *ctx, u32 pc)
 		return false;
 	if (pc == SetCamera.pc)
 		setCameraTrap(ctx);
-	else if (pc == Crosshair.pc)
-		crosshairTrap(ctx);
-	else if (pc == FrameEnd.pc)
-		frameEndTrap(ctx);
+	else if (pc == FrameEnd.pc || pc == FrameEnd1P.pc)
+		frameEndTrap(ctx, pc);
 	else
 		return false;
 	return true;
@@ -289,7 +261,6 @@ void updateHeadCamera()
 			for (const Hook *h : Hooks)
 				WriteMem16_nommu(h->pc, REIOS_OPCODE);
 			installed = true;
-			haveStock = false;
 			NOTICE_LOG(RENDERER, "VR head camera: hooks in");
 		}
 	}

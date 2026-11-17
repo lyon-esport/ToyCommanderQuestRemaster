@@ -176,8 +176,10 @@ a half turn about y) that is exactly `Ry(yaw) * Rx(pitch)`, the turn back of `ga
 
 **Which picture gets which turn (second cause).** The turn was noted at the display list's start; a
 list could take the previous frame's head while its cameras had the new one (a one-frame mismatch,
-as large as the head moves in a frame). Now a hook at the scene's end (`0x8C057A86` rnd_FrameEnd,
-before kmRender/kmEndScene) latches the frame's turn and the render start takes it
+as large as the head moves in a frame). Now a hook at the scene's end (kmRender/kmEndScene; two routines:
+`0x8C057A86` between split-screen players, `0x8C057A5C` with one player, called by the main frame
+callback through the pointer `0x8C0FC464`; the second is hooked at `0x8C057A5E`, its first
+instruction being PC-relative) latches the frame's turn and the render start takes it
 (`tcvrTakeFrameCamTurn` in `Renderer_if.cpp`). The head is read once per game frame, at the
 simulation's camera call.
 
@@ -203,12 +205,24 @@ Unknown callers are left alone and logged once. A gameplay frame is one where th
 ran in the last 2 VBlanks; in menus, the title and pause nothing is turned.
 
 **HUD and sights.** The HUD plane is drawn without the turn back (it stays with the vehicle). The
-crosshair, lock-on square and weapon sights are world points projected with the world-to-camera
-matrix `0x8C0FD58C` (`0x8C03A824`) and drawn on that plane: a hook at `0x8C03EEF8` writes the
-stock (unturned) world-to-camera matrix back there first, so they land on their point in the
-vehicle's frame. The split-screen player arrows (`0x8C03F0E8`) would need the same; the head
-camera is off in split screen (`0x8C0A72F4` player count > 1) and in netplay.
+crosshair, lock-on square and weapon sights (`0x8C03A824`) are the weapons' aim points (from the
+vehicle) projected with the camera in use and drawn at their own depth, not on the HUD plane: with
+the turned camera, the picture's turn back puts them on their point. A first try that gave them the
+stock world-to-camera matrix put them at the centre of the eye at every head angle (headset,
+2026-11-17), so it was dropped. The split-screen player arrows (`0x8C03F0E8`) are not handled; the
+head camera is off in split screen (`0x8C0A72F4` player count > 1) and in netplay.
 
 **Options.** VR menu > Comfort > "Head turns the camera": Off / Left-right / Left-right + up-down.
 The step mode and the sight option are gone (the steps only hid the mismatch; the sight now follows
 the vehicle's aim by construction).
+
+## Headset test of the rework (2026-11-17, debug build, made-up head turns)
+
+- First build: the picture was never turned back (`0x8C057A86` is not called with one player).
+  With the `0x8C057A5E` hook: `cam 30` / `-30`: 0 px residual on 6/6 patches; `cam 60` / `90`: 0-1 px
+  on the patches that still have content (before the rework: up to ~10 px). `view 180` shows the room
+  behind the vehicle. The scene's end comes 1-2 VBlanks after the simulation's call (gameplay-frame
+  window is 3).
+- HUD gauges and radar stay toward the vehicle. VR menu (compositor layer) opens sharp; the frozen
+  picture behind it does not move. VrApi 120/120 fps, no crash.
+- To check worn: continuous follow, the crosshair on the aim, the menu at a turned head.
