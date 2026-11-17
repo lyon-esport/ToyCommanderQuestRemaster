@@ -2275,6 +2275,37 @@ bool frame()
 			{ staff ? "Reload: point it away from the screen and pull the trigger."
 					: "Reload: grab the back of the pistol with your other hand and pull.", 0.047f, grey },
 		};
+	// tcvr: until the game's first picture, a loading panel instead of a black headset (backlog
+	// P1-8): what the app is doing, and a hint when it takes long
+	{
+		static bool sawGameFrame;
+		static std::chrono::steady_clock::time_point loadingSince;
+		const auto now = std::chrono::steady_clock::now();
+		if (gles_vr_have_frame())
+			sawGameFrame = true;
+		if (loadingSince == std::chrono::steady_clock::time_point())
+			loadingSince = now;
+		if (panel.lines.empty() && !sawGameFrame)
+		{
+			const std::string& id = settings.content.gameId;
+			const float secs = std::chrono::duration<float>(now - loadingSince).count();
+			panel.lines = {
+				{ "TOY COMMANDER VR", 0.085f, red },
+				{ "", 0.03f, white },
+				{ id.empty() ? "Reading your disc..." : "Starting Toy Commander...", 0.064f, white },
+				{ secs > 25.f ? "Still starting. If nothing comes, quit and start the app again."
+						: "Your own disc image, from the Download folder.", 0.047f, grey },
+			};
+			if (!id.empty())
+				panel.footer = "Disc " + id;
+			static bool logged;
+			if (!logged)
+			{
+				logged = true;
+				NOTICE_LOG(RENDERER, "XR: loading panel shown until the game's first picture");
+			}
+		}
+	}
 	const bool showPanel = !panel.lines.empty();
 	// tcvr: the comfort vignette's strength for this frame (eased over time; none on a panel or in menus)
 	float vignette;
