@@ -149,7 +149,9 @@ Expected:
 - GPL-2.0-or-later: publish the exact source of the build with it (a Git tag of the commit, e.g.
   `release-<version>`, on the public repository), and the licence notice (README).
 - No game data in the APK or next to it; the disc image is the player's own.
-- Public name and icon: still to be decided (backlog P0-7) before any public release.
+- Name and icon: *Toy Commander VR*, original logo with a "VR" mark (decided 2026-11-17).
+- GitHub release: tag `v<major>.<minor>.<patch>` on the built commit, attach
+  `ToyCommanderVR-<version>.apk`, link `tcvr/docs/Install.md` in the notes.
 - Attach `Install.md` (or link it) to the release, and optionally the certificate fingerprint.
 
 ## If the key is lost or leaked
