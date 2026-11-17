@@ -17,7 +17,15 @@ done
 # so it can never be committed itself. Add your headset IP, serials, user and machine names.
 deny="$(git rev-parse --git-common-dir)/leakscan-denylist"
 touch "$deny"
-add() { local v="$1"; [[ -n "$v" && ${#v} -ge 4 ]] || return 0; grep -qixF -- "$v" "$deny" || { echo "$v" >> "$deny"; echo "  denylist += $2"; }; }
+add() {
+  local v="$1" line
+  [[ -n "$v" && ${#v} -ge 4 ]] || return 0
+  # Pure bash (no grep): Git for Windows' grep can abort on -i with some locales.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "${line,,}" == "${v,,}" ]] && return 0
+  done < "$deny"
+  printf '%s\n' "$v" >> "$deny"; echo "  denylist += $2"
+}
 echo "Seeding $deny (values are not printed):"
 add "${USERNAME:-${USER:-}}" "OS user name"
 add "${COMPUTERNAME:-$(hostname 2>/dev/null || true)}" "machine name"
