@@ -121,6 +121,10 @@ If `TCVR_SIGNING_PROPERTIES` is missing or points to no file, the build stops wi
 `-Ptcvr.release needs TCVR_SIGNING_PROPERTIES` rather than producing a wrongly signed APK. A wrong
 password stops it with a keystore error.
 
+For a headset that already has a player build, a **release-signed test build** adds
+`-Ptcvr.debuggable`: same key (installs over the player build, data kept) but debuggable, so the test
+aids that need `adb shell run-as` work. Never publish it; put the player build back afterwards.
+
 The APK is `code\shell\android-studio\flycast\build\outputs\apk\vr\flycast-vr.apk`. It overwrites
 the last test build at the same place: copy it out and rename it `ToyCommanderVR-<versionName>.apk`
 (the version is the build time, `YYYYMMDD_HHMMSS`). Build a test build again before using the

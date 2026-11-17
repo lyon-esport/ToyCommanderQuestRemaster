@@ -168,6 +168,74 @@ public final class VrSaves {
     }
 
     /**
+     * "Unlock all levels" (VR menu): opens every mission of every saved game on the Toy Commander
+     * VMU images (VrSaveUnlock), after backing all saves up (save_backups, and Download when
+     * allowed). Only the changed bytes are written, in place (the files keep their owner). Call
+     * while the game is paused and restart it right after (the game holds its progress in RAM).
+     * Returns a line for the menu, "ERROR: ..." when nothing was changed. Never throws.
+     */
+    public static String unlockAllLevels(Context ctx) {
+        try {
+            File[] saves = listSaves(dataDir(ctx));
+            int games = 0, rejected = 0;
+            java.util.List<File> files = new java.util.ArrayList<>();
+            java.util.List<byte[]> olds = new java.util.ArrayList<>(), news = new java.util.ArrayList<>();
+            for (File f : saves) {
+                if (!VrSaveUnlock.isToyCommanderCard(f.getName()) || f.length() != VrSaveUnlock.CARD_SIZE)
+                    continue;
+                byte[] old = new byte[VrSaveUnlock.CARD_SIZE];
+                try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
+                    in.readFully(old);
+                }
+                byte[] card = old.clone();
+                VrSaveUnlock.Result r = VrSaveUnlock.patch(card);
+                Log.i(TAG, "VrSaves: unlock " + f.getName() + ": " + r.savedGames + " saved game(s), "
+                        + r.changed + " to change, " + r.rejected + " left alone " + r.log);
+                games += r.savedGames;
+                rejected += r.rejected;
+                if (r.changed > 0) {
+                    files.add(f);
+                    olds.add(old);
+                    news.add(card);
+                }
+            }
+            if (games == 0)
+                return "ERROR: No saved game found. Start a game with a player name first.";
+            if (files.isEmpty())
+                return "ERROR: Every level is already open.";
+            String backup = backupOnLaunch(ctx);
+            if (backup.startsWith("ERROR") || backup.startsWith("No saves"))
+                return "ERROR: Backup failed, nothing changed";
+            if (hasAllFilesAccess())
+                exportToDownload(ctx);
+            int changedBytes = 0;
+            for (int i = 0; i < files.size(); i++) {
+                byte[] old = olds.get(i), card = news.get(i);
+                try (java.io.RandomAccessFile out = new java.io.RandomAccessFile(files.get(i), "rw")) {
+                    for (int o = 0; o < card.length; o++) {
+                        if (card[o] == old[o])
+                            continue;
+                        int end = o;
+                        while (end < card.length && card[end] != old[end])
+                            end++;
+                        out.seek(o);
+                        out.write(card, o, end - o);
+                        changedBytes += end - o;
+                        o = end;
+                    }
+                    out.getFD().sync();
+                }
+            }
+            Log.i(TAG, "VrSaves: unlocked all levels in " + files.size() + " file(s), " + changedBytes
+                    + " byte(s) changed, backup " + backup);
+            return "All levels open in " + games + " saved game(s)" + (rejected > 0 ? " (" + rejected + " skipped)" : "");
+        } catch (Throwable t) {
+            Log.e(TAG, "VrSaves.unlockAllLevels failed", t);
+            return "ERROR: " + t.getMessage();
+        }
+    }
+
+    /**
      * At launch (before the emulator opens the saves): when the player put an empty file named
      * "import.request" in /sdcard/Download/ToyCommanderVR/Saves/ (SideQuest, a file manager),
      * the newest save folder there is imported and the request deleted. Never throws.
