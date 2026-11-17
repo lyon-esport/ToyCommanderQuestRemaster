@@ -60,9 +60,13 @@ safety net, not the rule: check what you stage.
 
 ## Decompile workspace
 
-Outside the code checkout, so nothing can be committed by mistake. Its location is set in the
-private hub, not here; scripts and docs refer to it as `$TCVR_DECOMP` (placeholder, set in the
-hub's `tools/local.env`).
+Outside the code checkout, so nothing can be committed by mistake: a `decomp/` folder in the
+private hub, next to `code/`, on the team's shared drive (decided 2026-11-17). It is ignored by
+the hub's own git as well, so it is never synced to any repository. Scripts and docs refer to it
+as `$TCVR_DECOMP` (set in the hub's `tools/local.env`).
+
+Close the disassembler before the shared drive syncs: a project database copied while it is
+open can be corrupted.
 
 Suggested layout:
 
