@@ -57,6 +57,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <iterator>
 #include <cstring>
@@ -704,6 +705,17 @@ glm::mat4 gameToWorld()
 {
 	const float s = worldScale();
 	return glm::scale(glm::mat4(1.f), glm::vec3(s, -s, s));
+}
+
+// tcvr: the head's yaw and pitch relative to the origin (see headYawPitch), at the last frame
+std::atomic<float> headYawNow, headPitchNow;
+
+void noteHeadDirection()
+{
+	const glm::quat q = relativeRotation(views[0].pose.orientation);
+	const glm::vec3 forward = q * glm::vec3(0.f, 0.f, -1.f);
+	headYawNow = std::atan2(-forward.x, -forward.z);
+	headPitchNow = std::asin(std::clamp(forward.y, -1.f, 1.f));
 }
 
 void updateOrigin(bool tracked)
@@ -1375,6 +1387,76 @@ glm::vec2 handStick(int hand)
 	return glm::vec2(stick.currentState.x, stick.currentState.y);
 }
 
+static const std::string& debugDir();
+
+// tcvr: test aid: pad input from a file, for tests run over adb with nobody at the controllers.
+// "files/pad.request" holds "<stick x> <stick y> <buttons> <milliseconds>": the left stick
+// (-1..1, up positive), buttons joined by + (A B X Y START UP DOWN LEFT RIGHT LT RT, or -),
+// held that long. Example: echo "0 0 START 150" > files/pad.request. Taken when read
+// (deleted), checked ten times a second; a new request replaces the one being held.
+struct InjectedPad
+{
+	glm::vec2 stick { 0.f };
+	u32 buttons = 0;
+	bool lt = false, rt = false;
+	std::chrono::steady_clock::time_point until;
+};
+
+bool injectedPad(InjectedPad& out)
+{
+	static InjectedPad held;
+	static std::chrono::steady_clock::time_point nextCheck;
+	const auto now = std::chrono::steady_clock::now();
+	if (now >= nextCheck)
+	{
+		nextCheck = now + std::chrono::milliseconds(100);
+		const std::string path = debugDir() + "/pad.request";
+		if (FILE *f = fopen(path.c_str(), "r"))
+		{
+			float x = 0.f, y = 0.f;
+			char names[128] {};
+			int ms = 0;
+			const int n = fscanf(f, "%f %f %127s %d", &x, &y, names, &ms);
+			fclose(f);
+			nowide::remove(path.c_str());
+			if (n == 4 && ms > 0)
+			{
+				InjectedPad pad;
+				pad.stick = glm::clamp(glm::vec2(x, y), glm::vec2(-1.f), glm::vec2(1.f));
+				static const struct { const char *name; u32 bit; } bits[] {
+					{ "A", DC_BTN_A }, { "B", DC_BTN_B }, { "X", DC_BTN_X }, { "Y", DC_BTN_Y },
+					{ "START", DC_BTN_START }, { "UP", DC_DPAD_UP }, { "DOWN", DC_DPAD_DOWN },
+					{ "LEFT", DC_DPAD_LEFT }, { "RIGHT", DC_DPAD_RIGHT },
+				};
+				std::string list = names;
+				size_t start = 0;
+				while (start <= list.size())
+				{
+					size_t end = list.find('+', start);
+					if (end == std::string::npos)
+						end = list.size();
+					const std::string name = list.substr(start, end - start);
+					for (const auto& b : bits)
+						if (name == b.name)
+							pad.buttons |= b.bit;
+					pad.lt = pad.lt || name == "LT";
+					pad.rt = pad.rt || name == "RT";
+					start = end + 1;
+				}
+				pad.until = now + std::chrono::milliseconds(ms);
+				held = pad;
+				NOTICE_LOG(INPUT, "XR: scripted pad input: stick %.2f %.2f, buttons %s, %d ms", x, y, names, ms);
+			}
+			else
+				WARN_LOG(INPUT, "XR: pad.request not understood (want: x y buttons ms)");
+		}
+	}
+	if (now >= held.until)
+		return false;
+	out = held;
+	return true;
+}
+
 void updateGamepad(XrTime time)
 {
 	static u32 lastButtons;		// DC_* bits we hold down (1 = pressed)
@@ -1430,6 +1512,18 @@ void updateGamepad(XrTime time)
 		if (stickClick && !stickClickWas)
 			recenterRequested = true;
 		stickClickWas = stickClick;
+	}
+	// tcvr: scripted input (test aid), on top of the controllers
+	InjectedPad injected;
+	const bool scripted = injectedPad(injected);
+	if (scripted)
+	{
+		if (glm::length(injected.stick) > glm::length(analog))
+			analog = injected.stick;
+		buttons |= injected.buttons;
+		left = std::max(left, injected.lt ? 1.f : 0.f);
+		right = std::max(right, injected.rt ? 1.f : 0.f);
+		sync = true;
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
@@ -1852,21 +1946,49 @@ void captureIfRequested(GLuint fbo, int width, int height)
 	const std::string& dir = debugDir();
 	// tcvr: "touch files/ram.request": the 16 MB of main RAM to files/ram.bin and the 8 MB
 	// of VRAM to files/vram.bin, as they are now (reverse engineering: camera, culling).
+	// A name in the request (echo turn90 > files/ram.request) gives ram_turn90.bin,
+	// vram_turn90.bin and ram_turn90.txt (the head's direction, the game, the time), so a
+	// series can be taken without pulling each one (see tcvr/tools/ramdump-series.sh).
 	{
 		const std::string ramRequest = dir + "/ram.request";
 		if (file_exists(ramRequest))
 		{
+			std::string name;
+			if (FILE *f = fopen(ramRequest.c_str(), "r"))
+			{
+				char buf[64] {};
+				if (fscanf(f, "%63s", buf) == 1)
+					name = buf;
+				fclose(f);
+			}
 			nowide::remove(ramRequest.c_str());
-			auto dump = [&](RamRegion& mem, size_t size, const char *name) {
-				if (FILE *f = fopen((dir + "/" + name).c_str(), "wb"))
+			for (char c : name)
+				if (!std::isalnum((unsigned char)c) && c != '_' && c != '-')
+				{
+					name.clear();
+					break;
+				}
+			const std::string suffix = name.empty() ? "" : "_" + name;
+			auto dump = [&](RamRegion& mem, size_t size, const std::string& file) {
+				if (FILE *f = fopen((dir + "/" + file).c_str(), "wb"))
 				{
 					fwrite(&mem[0], 1, size, f);
 					fclose(f);
 				}
 			};
-			dump(mem_b, RAM_SIZE, "ram.bin");
-			dump(vram, VRAM_SIZE, "vram.bin");
-			NOTICE_LOG(RENDERER, "XR: RAM and VRAM dumped to %s (game %s)", dir.c_str(), settings.content.gameId.c_str());
+			dump(mem_b, RAM_SIZE, "ram" + suffix + ".bin");
+			dump(vram, VRAM_SIZE, "vram" + suffix + ".bin");
+			const glm::vec2 head = headYawPitch();
+			if (FILE *f = fopen((dir + "/ram" + suffix + ".txt").c_str(), "w"))
+			{
+				fprintf(f, "game %s\nheadYawDeg %.2f\nheadPitchDeg %.2f\nsteadyMs %lld\n", settings.content.gameId.c_str(),
+						head.x * 57.29578f, head.y * 57.29578f,
+						(long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+								std::chrono::steady_clock::now().time_since_epoch()).count());
+				fclose(f);
+			}
+			NOTICE_LOG(RENDERER, "XR: RAM and VRAM dumped to %s/ram%s.bin (game %s)", dir.c_str(), suffix.c_str(),
+					settings.content.gameId.c_str());
 		}
 	}
 	static bool shotArmed;
@@ -1976,6 +2098,11 @@ bool enabled()
 const Eye *currentEye()
 {
 	return drawingEye ? &eye : nullptr;
+}
+
+glm::vec2 headYawPitch()
+{
+	return glm::vec2(headYawNow.load(), headPitchNow.load());
 }
 
 void term()
@@ -2161,6 +2288,8 @@ bool frame()
 		}
 	}
 	updateOrigin(located);
+	if (located)
+		noteHeadDirection();
 	// once a session, what the view is made of (to compare headsets and runtimes when the
 	// world looks the wrong size)
 	if (located && !viewsLogged)
