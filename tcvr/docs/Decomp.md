@@ -38,7 +38,8 @@ tcvr/decomp ●───●────────●────────�
 The repository will become public (GPL). The game's code and data belong to their owner, so the
 following are **never committed, on any branch**:
 
-- the disc image, `1ST_READ.BIN` or any file extracted from the disc (models, textures, sounds,
+- the disc image, the boot executable (`1GUTH.BIN` on the European disc, named by `IP.BIN`;
+  other games call it `1ST_READ.BIN`), `IP.BIN` or any other file extracted from the disc (models, textures, sounds,
   videos, text);
 - RAM, VRAM or audio dumps;
 - decompiled C, disassembly listings of whole functions, and the disassembler's project
@@ -72,7 +73,7 @@ Suggested layout:
 
 ```
 $TCVR_DECOMP/
-  disc/        files extracted from the disc (1ST_READ.BIN, ...)
+  disc/        files extracted from the disc (IP.BIN, 1GUTH.BIN, loaded at 0x8C010000)
   ghidra/      the Ghidra project (SH-4, base 0x8C010000)
   dumps/       RAM dumps by session
   export/      decompiled C exported from Ghidra, by function
