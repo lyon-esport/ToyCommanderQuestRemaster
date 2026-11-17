@@ -50,6 +50,9 @@ dc_flash.bin
 tcvr/docs/RE/dumps/
 # Decompile output and disassembler databases (game code, never commit; see tcvr/docs/Decomp.md)
 1ST_READ.BIN
+1GUTH.BIN
+1guth.bin
+IP.BIN
 1st_read.bin
 *.gpr
 *.rep/

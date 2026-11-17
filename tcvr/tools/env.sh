@@ -12,7 +12,18 @@ if [[ -f "$_tcvr_local" ]]; then
   set -a; source "$_tcvr_local"; set +a
 fi
 unset _tcvr_root _tcvr_local
-export JAVA_HOME="${JAVA_HOME:-/c/Program Files/Android/Android Studio/jbr}"
+# Builds use Android Studio's bundled Java (the one v1.0.0 was built and tested with), not the
+# system JAVA_HOME, which may point to a newer Java installed for other tools (Ghidra needs 25).
+# TCVR_JAVA_HOME overrides it.
+_tcvr_jbr="/c/Program Files/Android/Android Studio/jbr"
+if [[ -n "${TCVR_JAVA_HOME:-}" ]]; then
+  export JAVA_HOME="$TCVR_JAVA_HOME"
+elif [[ -d "$_tcvr_jbr" ]]; then
+  export JAVA_HOME="$_tcvr_jbr"
+else
+  export JAVA_HOME="${JAVA_HOME:-$_tcvr_jbr}"
+fi
+unset _tcvr_jbr
 export ANDROID_HOME="${ANDROID_HOME:-$LOCALAPPDATA/Android/Sdk}"
 ADB_DEFAULT="/c/Program Files/Meta Quest Developer Hub/resources/bin/adb.exe"
 [[ -x "$ANDROID_HOME/platform-tools/adb.exe" ]] && ADB_DEFAULT="$ANDROID_HOME/platform-tools/adb.exe"
