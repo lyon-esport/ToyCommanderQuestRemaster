@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# The HD texture review (tcvr/docs/TextureReview.md).
+#   tcvr/tools/texcache-review.sh pull [4]        copy the headset's cache (2x, or 4x) and build the review page
+#   tcvr/tools/texcache-review.sh reject <file>   send a list of rejected hashes (one per line) to the headset
+#   tcvr/tools/texcache-review.sh tune <file> [4] make tuned HD textures from the review's requests, send them
+#   tcvr/tools/texcache-review.sh clear           empty the headset's HD cache (at the game's next start)
+# The review folder holds images made from the player's disc: it lives in the private hub
+# (${TCVR_PRIVATE_ROOT:-..}/AI/TextureReview/<game id>/), never in git.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+source tcvr/tools/env.sh
+GAME="${TCVR_GAME_ID:-MK-5102050}"
+# pull/tune take the cache size as their last argument: 2 (default) or 4 (VR menu: Textures HD 4x)
+SIZE="2"; for a in "$@"; do [[ "$a" == "4" ]] && SIZE="4"; done
+SUF=""; [[ "$SIZE" == "4" ]] && SUF="-x4"
+DEV_DIR="/sdcard/Android/data/$TCVR_PACKAGE/files/data/texcache/v2/$GAME$SUF"
+OUT="${TCVR_PRIVATE_ROOT:-..}/AI/TextureReview/$GAME"
+INBOX="/sdcard/Download/ToyCommanderVR/TextureReview"
+PACK="/sdcard/Download/ToyCommanderVR/Textures/$GAME"
+PY="${PYTHON:-python}"
+case "${1:-}" in
+  pull)
+    mkdir -p "$OUT/cache$SUF" "$OUT/cache$SUF-orig"
+    "$ADB" shell ls "$DEV_DIR" >/dev/null || { echo "No cache on the headset yet ($DEV_DIR)"; exit 1; }
+    "$ADB" pull "$DEV_DIR/." "$OUT/cache$SUF" >/dev/null
+    # the originals, kept next to the cache since 2026-11-16 (older caches have none)
+    "$ADB" pull "$DEV_DIR-orig/." "$OUT/cache$SUF-orig" >/dev/null 2>&1 || true
+    "$PY" tcvr/re/texcache_review.py "$OUT/cache$SUF" --out "$OUT/review$SUF"
+    echo "Open $OUT/review$SUF/index.html"
+    ;;
+  reject)
+    LIST="${2:?file with one hash per line}"
+    # The cache folder is the app's own (adb can't write or delete there): the list goes to the
+    # review inbox in Download, which the game reads at its next start (it adds the hashes to the
+    # cache's rejected.txt and deletes those HD files itself). The hub keeps the full list.
+    mkdir -p "$OUT"
+    { grep -hv '^#' "$OUT/rejected.txt" "$LIST" 2>/dev/null || true; } | tr -d '\r' | grep -E '^[0-9a-fA-F]{1,8}$' | tr 'A-F' 'a-f' | sort -u > "$OUT/rejected.new"
+    mv "$OUT/rejected.new" "$OUT/rejected.txt"
+    "$ADB" shell mkdir -p "$INBOX"
+    tr -d '\r' < "$LIST" | "$ADB" shell "cat > $INBOX/rejected.txt"
+    echo "$(grep -c . "$OUT/rejected.txt") rejected in total; restart the game to apply"
+    ;;
+  tune)
+    # the review's requests (hash crisp|sharp|relief|original ...): tuned HD textures made here
+    # from the pulled cache, shown on a before/after sheet, and copied to the headset's
+    # Download/ToyCommanderVR/Textures/<game id>/, which the game reads ahead of its HD cache
+    LIST="${2:?file with the request list from the review page}"
+    "$PY" tcvr/re/texcache_tune.py "$LIST" "$OUT/cache$SUF" "$OUT/cache$SUF-orig" "$OUT/tuned" --sheet "$OUT/tuned_sheet.png"
+    "$ADB" shell mkdir -p "$PACK"
+    "$ADB" push "$OUT/tuned/." "$PACK/" >/dev/null
+    echo "Sheet: $OUT/tuned_sheet.png; restart the game to use the tuned textures"
+    ;;
+  clear)
+    # empties the HD cache (HD and original copies); it fills again as textures appear
+    "$ADB" shell "mkdir -p $INBOX && echo clear > $INBOX/clear.request"
+    echo "The cache is cleared at the game's next start"
+    ;;
+  *) echo "usage: $0 pull | tune <file> | reject <file> | clear"; exit 2 ;;
+esac

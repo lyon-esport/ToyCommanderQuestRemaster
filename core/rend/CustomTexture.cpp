@@ -27,6 +27,7 @@
 #include "xbrz/xbrz.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <set>
 
@@ -79,17 +80,37 @@ private:
 class UpscaleCacheSource : public BaseCustomTextureSource
 {
 public:
-	explicit UpscaleCacheSource(const std::string& gameId)
-		: dir(get_writable_data_path("texcache/v2/") + gameId + "/"),
+	// factor: the session's vr.UpscaleCache (2 or 4; changes apply at the next start). Each
+	// factor has its own cache (2x: <game id>/, 4x: <game id>-x4/), so switching keeps both.
+	UpscaleCacheSource(const std::string& gameId, int factor)
+		: factor(factor),
+		  dir(get_writable_data_path("texcache/v2/") + gameId + (factor >= 4 ? "-x4/" : "/")),
 		  oldDir(get_writable_data_path("texcache/") + gameId + "/") {}
-	bool shouldReplace() const override { return config::VrUpscaleCache > 1; }
+	bool shouldReplace() const override { return factor > 1; }
+	const int factor;
 	bool loadMap() override
 	{
 		deleteOldCache();
+		processReviewInbox();
 		if (!file_exists(dir))
 			return false;
 		std::lock_guard<std::mutex> _(mutex);
 		map.clear();
+		// tcvr: textures rejected in the review (tcvr/docs/TextureReview.md): one hex hash per line;
+		// the game keeps their originals and never upscales them again
+		rejected.clear();
+		if (FILE *f = nowide::fopen((dir + "rejected.txt").c_str(), "r"))
+		{
+			char line[64];
+			while (fgets(line, sizeof(line), f) != nullptr)
+			{
+				char *end;
+				const u32 hash = (u32)strtoul(line, &end, 16);
+				if (end != line && line[0] != '#')
+					rejected.insert(hash);
+			}
+			fclose(f);
+		}
 		hostfs::DirectoryTree tree(dir);
 		for (const hostfs::FileInfo& item : tree)
 		{
@@ -97,10 +118,14 @@ public:
 				continue;
 			char *end;
 			const u32 hash = (u32)strtoll(item.name.c_str(), &end, 16);
-			if (*end == '.')
+			if (*end != '.')
+				continue;
+			if (rejected.count(hash) == 0)
 				map[hash] = item.path;
+			else
+				nowide::remove(item.path.c_str());	// (only the app may delete its files)
 		}
-		NOTICE_LOG(RENDERER, "tcvr: upscale cache: %zu textures in %s", map.size(), dir.c_str());
+		NOTICE_LOG(RENDERER, "tcvr: upscale cache: %zu textures in %s (%zu rejected in review)", map.size(), dir.c_str(), rejected.size());
 		return !map.empty();
 	}
 	size_t getTextureCount() const override { std::lock_guard<std::mutex> _(mutex); return map.size(); }
@@ -124,11 +149,69 @@ public:
 		return data;
 	}
 	bool isTextureReplaced(u32 hash) override { std::lock_guard<std::mutex> _(mutex); return map.count(hash) != 0; }
+	bool isRejected(u32 hash) const { std::lock_guard<std::mutex> _(mutex); return rejected.count(hash) != 0; }
 	// a new file in the cache: used from the next time the game loads that texture
 	void added(u32 hash, const std::string& path) { std::lock_guard<std::mutex> _(mutex); map[hash] = path; }
 	const std::string dir;
 
 private:
+	// tcvr: the review's requests, in a folder adb and the app can both write (the cache folder is
+	// the app's own: adb can neither add nor delete files there). tcvr/tools/texcache-review.sh puts
+	// rejected.txt (hashes to add to the cache's list) or clear.request (empty the cache) there.
+	void processReviewInbox()
+	{
+#ifdef __ANDROID__
+		const std::string inbox = "/sdcard/Download/ToyCommanderVR/TextureReview/";
+#else
+		const std::string inbox = get_writable_data_path("TextureReview/");
+#endif
+		const std::string origDir = dir.substr(0, dir.size() - 1) + "-orig/";
+		if (file_exists(inbox + "clear.request"))
+		{
+			int count = 0;
+			for (const std::string& d : { dir, origDir })
+			{
+				if (!file_exists(d))
+					continue;
+				hostfs::DirectoryTree tree(d);
+				for (const hostfs::FileInfo& item : tree)
+					if (get_file_extension(item.name) == "png" && nowide::remove(item.path.c_str()) == 0)
+						count++;
+			}
+			// (the rejected list too: the review sends the full list again after a clear)
+			nowide::remove((dir + "rejected.txt").c_str());
+			nowide::remove((inbox + "clear.request").c_str());
+			NOTICE_LOG(RENDERER, "tcvr: upscale cache: cleared on request (%d files)", count);
+		}
+		const std::string incoming = inbox + "rejected.txt";
+		if (FILE *in = nowide::fopen(incoming.c_str(), "r"))
+		{
+			if (!file_exists(dir))
+			{
+				make_directory(get_writable_data_path("texcache/"));
+				make_directory(get_writable_data_path("texcache/v2/"));
+				make_directory(dir);
+			}
+			int count = 0;
+			if (FILE *out = nowide::fopen((dir + "rejected.txt").c_str(), "a"))
+			{
+				char line[64];
+				while (fgets(line, sizeof(line), in) != nullptr)
+					if (line[0] != '#' && line[0] != '\n' && line[0] != '\r')
+					{
+						fputs(line, out);
+						if (line[strlen(line) - 1] != '\n')
+							fputc('\n', out);
+						count++;
+					}
+				fclose(out);
+			}
+			fclose(in);
+			nowide::remove(incoming.c_str());
+			NOTICE_LOG(RENDERER, "tcvr: upscale cache: %d textures rejected in review added", count);
+		}
+	}
+
 	// the v1 cache holds broken pictures (see above): delete its files, they're all regenerable
 	void deleteOldCache()
 	{
@@ -148,6 +231,68 @@ private:
 	}
 
 	const std::string oldDir;
+	mutable std::mutex mutex;
+	std::map<u32, std::string> map;
+	std::set<u32> rejected;
+};
+
+// tcvr: textures tuned in the review (tcvr/docs/TextureReview.md: crisp edges, sharper, more
+// relief), made on the laptop and copied to Download/ToyCommanderVR/Textures/<game id>/ (a folder
+// adb can write and the app reads with its file access). Before the upscale cache: they replace
+// its automatic HD versions.
+class TunedTextureSource : public BaseCustomTextureSource
+{
+public:
+	explicit TunedTextureSource(const std::string& gameId)
+#ifdef __ANDROID__
+		: dir("/sdcard/Download/ToyCommanderVR/Textures/" + gameId + "/") {}
+#else
+		: dir(get_writable_data_path("TunedTextures/") + gameId + "/") {}
+#endif
+	bool shouldReplace() const override { return true; }
+	bool loadMap() override
+	{
+		std::lock_guard<std::mutex> _(mutex);
+		map.clear();
+		if (!file_exists(dir))
+			return false;
+		hostfs::DirectoryTree tree(dir);
+		for (const hostfs::FileInfo& item : tree)
+		{
+			if (get_file_extension(item.name) != "png")
+				continue;
+			char *end;
+			const u32 hash = (u32)strtoll(item.name.c_str(), &end, 16);
+			if (*end == '.')
+				map[hash] = item.path;
+		}
+		NOTICE_LOG(RENDERER, "tcvr: %zu tuned textures in %s", map.size(), dir.c_str());
+		return !map.empty();
+	}
+	size_t getTextureCount() const override { std::lock_guard<std::mutex> _(mutex); return map.size(); }
+	u8* loadCustomTexture(u32 hash, int& width, int& height) override
+	{
+		std::string path;
+		{
+			std::lock_guard<std::mutex> _(mutex);
+			auto it = map.find(hash);
+			if (it == map.end())
+				return nullptr;
+			path = it->second;
+		}
+		hostfs::File *file = hostfs::storage().openFile(path, "rb");
+		if (file == nullptr)
+			return nullptr;
+		int n;
+		stbi_set_flip_vertically_on_load_thread(1);
+		u8 *data = stbi_load_from_file(file, &width, &height, &n, STBI_rgb_alpha);
+		delete file;
+		return data;
+	}
+	bool isTextureReplaced(u32 hash) override { std::lock_guard<std::mutex> _(mutex); return map.count(hash) != 0; }
+
+private:
+	const std::string dir;
 	mutable std::mutex mutex;
 	std::map<u32, std::string> map;
 };
@@ -275,8 +420,11 @@ bool CustomTexture::init()
 			// The first source added has highest priority.
 			// Add your source after the default `CustomTextureSource`(data/textures/<game id> folder), so end-users can override your textures.
 			addSource(std::make_unique<CustomTextureSource>(game_id));
-			// tcvr: after it, so a texture pack the player adds wins over the upscale cache
-			auto cache = std::make_unique<UpscaleCacheSource>(game_id);
+			// tcvr: after it, so a texture pack the player adds wins: the reviewed textures, then
+			// the upscale cache
+			addSource(std::make_unique<TunedTextureSource>(game_id));
+			const int factor = std::clamp((int)config::VrUpscaleCache, 0, 4);
+			auto cache = std::make_unique<UpscaleCacheSource>(game_id, factor >= 4 ? 4 : factor >= 2 ? 2 : 0);
 			upscaleCache = cache.get();
 			addSource(std::move(cache));
 		}
@@ -608,9 +756,11 @@ void CustomTexture::resetPreloadProgress()
 // upscaling and the file run on a worker thread of their own.
 void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, void *src_buffer)
 {
-	const int factor = std::clamp((int)config::VrUpscaleCache, 0, 4);
-	if (factor < 2 || upscaleCache == nullptr || config::TextureUpscale > 1)
+	if (upscaleCache == nullptr || upscaleCache->factor < 2 || config::VrUpscaleCache < 2 || config::TextureUpscale > 1)
 		return;
+	// 4x for small textures only: a 256x256 texture would become 1024x1024 (4 MB of video memory
+	// each); bigger ones get 2x in the 4x cache
+	const int factor = upscaleCache->factor >= 4 && w * h <= 128 * 128 ? 4 : 2;
 	// small, still pictures only: no video (YUV), nothing the game redraws (render to texture,
 	// animated), nothing big (memory and time)
 	if (w * h > 256 * 256 || w < 8 || h < 8 || texture->tcw.PixelFmt == PixelYUV || texture->Updates > 1)
@@ -624,7 +774,7 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 		logged = true;
 		return;
 	}
-	if (isTextureReplaced(texture))
+	if (isTextureReplaced(texture) || upscaleCache->isRejected(texture->texture_hash))
 		return;
 	{
 		std::lock_guard<std::mutex> _(upscaleMutex);
@@ -648,7 +798,6 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 			const u8 *p = &rgba[i * 4];
 			src[i] = ((u32)p[3] << 24) | ((u32)p[0] << 16) | ((u32)p[1] << 8) | p[2];
 		}
-		free(rgba);
 		xbrz::scale(factor, src.data(), dst.data(), w, h, alpha ? xbrz::ColorFormat::ARGB : xbrz::ColorFormat::RGB, xbrz::ScalerCfg());
 		std::vector<u8> out(dst.size() * 4);
 		for (size_t i = 0; i < dst.size(); i++)
@@ -667,17 +816,30 @@ void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, v
 		}
 		char name[16];
 		snprintf(name, sizeof(name), "%08x.png", hash);
+		auto writePng = [](const std::string& file, int pw, int ph, const u8 *pixels) {
+			bool ok = false;
+			if (FILE *f = nowide::fopen(file.c_str(), "wb"))
+			{
+				stbi_flip_vertically_on_write(1);
+				ok = stbi_write_png_to_func([](void *context, void *data, int size) {
+						fwrite(data, 1, size, (FILE *)context);
+					}, f, pw, ph, STBI_rgb_alpha, pixels, 0) != 0;
+				ok = fclose(f) == 0 && ok;
+			}
+			return ok;
+		};
+		// the original next to it (<game id>-orig/, not read by the game): the review compares the
+		// HD picture with the real original (tcvr/docs/TextureReview.md)
+		{
+			const std::string origDir = cache->dir.substr(0, cache->dir.size() - 1) + "-orig/";
+			if (!file_exists(origDir))
+				make_directory(origDir);
+			writePng(origDir + name, w, h, rgba);
+		}
+		free(rgba);
 		const std::string path = cache->dir + name;
 		const std::string tmp = path + ".tmp";
-		bool written = false;
-		if (FILE *f = nowide::fopen(tmp.c_str(), "wb"))
-		{
-			stbi_flip_vertically_on_write(1);
-			written = stbi_write_png_to_func([](void *context, void *data, int size) {
-					fwrite(data, 1, size, (FILE *)context);
-				}, f, w * factor, h * factor, STBI_rgb_alpha, out.data(), 0) != 0;
-			written = fclose(f) == 0 && written;
-		}
+		const bool written = writePng(tmp, w * factor, h * factor, out.data());
 		if (written && std::rename(tmp.c_str(), path.c_str()) == 0)
 		{
 			cache->added(hash, path);
