@@ -18,6 +18,38 @@ tad_context ta_tad;
 static void tactx_Recycle(TA_context* ctx);
 static TA_context *tactx_Find(u32 addr, bool allocnew = false);
 
+// tcvr: the head-driven camera's turn, per picture. The game sets its camera either after the
+// list for the picture started (then it goes into that list's context, the first time) or before
+// (then it waits here for the next list).
+static float pendingCamYaw, pendingCamPitch;
+static bool pendingCamTurn;
+
+void tcvrNoteCamTurn(float yaw, float pitch)
+{
+	if (ta_ctx != nullptr && !ta_ctx->rend.tcvrCamTurnSet)
+	{
+		ta_ctx->rend.tcvrCamYaw = yaw;
+		ta_ctx->rend.tcvrCamPitch = pitch;
+		ta_ctx->rend.tcvrCamTurnSet = true;
+	}
+	else
+	{
+		pendingCamYaw = yaw;
+		pendingCamPitch = pitch;
+		pendingCamTurn = true;
+	}
+}
+
+void tcvrCamTurnListInit()
+{
+	if (ta_ctx == nullptr)
+		return;
+	ta_ctx->rend.tcvrCamYaw = pendingCamTurn ? pendingCamYaw : 0.f;
+	ta_ctx->rend.tcvrCamPitch = pendingCamTurn ? pendingCamPitch : 0.f;
+	ta_ctx->rend.tcvrCamTurnSet = pendingCamTurn;
+	pendingCamTurn = false;
+}
+
 void SetCurrentTARC(u32 addr)
 {
 	if (addr != TACTX_NONE)

@@ -1522,6 +1522,12 @@ bool gles_vr_have_frame() {
 	return vrFrameValid || vrShowFramebuffer;
 }
 
+glm::vec2 gles_vr_frame_cam_turn() {
+	if (!vrFrameValid || vrShowFramebuffer)
+		return glm::vec2(0.f);
+	return glm::vec2(vrFrame.tcvrCamYaw, vrFrame.tcvrCamPitch);
+}
+
 bool gles_vr_showing_framebuffer() {
 	return vrShowFramebuffer;
 }

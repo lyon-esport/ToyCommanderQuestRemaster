@@ -84,3 +84,45 @@ To check with a controlled series: it should turn by the steering's amount, and 
 - Where the gun sight is drawn when the head looks away from the vehicle's heading (it aims with the
   vehicle: probably a 3D mark on the vehicle's axis, the game's own 2D one hidden or moved).
 - Split screen (multiplayer): one camera per player; the same record layout is expected, to check.
+
+## Found and hooked (2026-11-17)
+
+- Camera records from `0x8C0D5904` (one per player; `0x8C03FFA8` returns the one in use). Each has two
+  3x4 camera-to-world matrices, rows right, up, back, then position (y up, right-handed): `+0x154` and
+  `+0x184` (`0x8C0D5A58` / `0x8C0D5A88` for player 1). The turn-in-place dumps found them directly.
+- "Set camera" `0x8C0610F6` (r4 = a 3x4 camera matrix): loads it into XMTRX (`0x8C061498`), saves it at
+  `0x8C0FD5BC`, inverts it into the view matrix `0x8C0FD58C`, then the culling planes (`0x8C060E20`).
+- Calls seen in a mission: from `0x8C019278` (the 3D view: camera in use, matrix B), again from
+  `0x8C03ED5C` and `0x8C0402B4` with the same matrix, and from `0x8C027DD6` with a copy of the camera
+  elsewhere (`0x8CB8E738` in the kitchen). **The 3D is drawn through the `0x8C027DD6` call**: turning
+  only the first three changed nothing on screen; turning every call turned the view.
+- The hook (`core/rend/vr/xr_headcam.cpp`): BIOS trap opcode over the routine's first instruction
+  (a dynarec block start, so every register is in the CPU context). For those calls, in a frame where
+  the 3D view's call ran (not in menus, title, cutscenes), the camera turned by the head is written to a
+  scratch matrix at `0x8C00BF00` (boot area, zero in every dump) and r4 points there. The game's own
+  camera record is never written, so its chase logic and game state don't see the head.
+  A first try rewrote XMTRX in the CPU context after the load: no effect (the dynarec still had the
+  loaded registers in host registers).
+- Each display list carries the turn its picture was drawn with (`rend_context::tcvrCamYaw/Pitch`); the
+  VR view turns that picture back by as much (`gameToWorld`), so the world stays put and the head sees it
+  from where it looks, with the turn matched per picture.
+
+## Defaults and switches (VR menu > Comfort)
+
+- **Head turns the camera** (`vr.HeadCamera`): Off / Left-right (yaw) / Left-right + up-down. Off by
+  default until a wearer has checked it. Yaw is about the camera's own up axis, so in a banking plane the
+  turn follows the plane's tilt; the reprojection shows it exactly either way. Pitch stays with the
+  reprojection by default (the widened view already covers about +-50 degrees); roll never goes into
+  the game camera.
+- **Sight when looking away** (`vr.HeadCameraSight`): the weapons aim with the vehicle. The gun sight is
+  a HUD sprite; whether the game projects it from the vehicle's aim (then it lands right in the turned
+  view) or draws it fixed on screen is still to be checked with a head; "Hidden" is reserved for that.
+- Off in netplay (GGPO, network, battle cable): the turned view matrix may feed the game's targeting.
+
+## Testing without a head (head.request)
+
+`echo "<yaw> <pitch> view|cam [target] [ySense pSense]" > files/head.request` (run-as): `view` turns the
+eyes as if the wearer turned (shows what they'd see), `cam` turns only the game camera (the world must
+not move: checks the turn back). `off` ends it. Headset tests 2026-11-17 (attract demo): with the hook on
+the `0x8C027DD6` call, `view 60/180/-90` show other parts of the room; `cam 20/25` keep the world in
+place with sense +1 (sense -1 shifted it by twice the angle).

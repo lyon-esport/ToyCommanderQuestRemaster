@@ -19,6 +19,7 @@
 #include "xr_panel.h"
 #include "xr_vignette.h"	// tcvr: comfort vignette
 #include "xr_menu.h"		// tcvr: the VR menu
+#include "xr_headcam.h"	// tcvr: the head-driven game camera
 #include "hands_rip.h"
 #include "rend/gles/gles.h"
 #ifdef __ANDROID__
@@ -752,12 +753,81 @@ glm::quat yawOnly(const glm::quat& q)
 	return glm::angleAxis(std::atan2(-forward.x, -forward.z), glm::vec3(0, 1, 0));
 }
 
+// tcvr: test aid: a head turn made up over adb, for tests with nobody wearing the headset.
+// "files/head.request" holds "<yaw degrees> <pitch degrees> <view|cam> [target]" (yaw positive
+// to the left, pitch up): "view" turns the head itself (the eye views, and so the game camera),
+// as if the wearer turned that much; "cam" turns only the game camera, the eyes stay (the world
+// must not move: checks the camera turn and the view's turn back match). "target" picks which
+// "set camera" calls the head camera turns (xr_headcam.cpp: 0 the 3D view, 1 player 1's matrix B, 2 its two matrices,
+// 3 every call). "off" ends it. Taken when read, checked five times a second.
+struct HeadSim
+{
+	float yaw = 0.f, pitch = 0.f;
+	bool view = false;
+};
+HeadSim headSim;
+std::atomic<float> simCamYaw, simCamPitch;
+std::atomic<int> simCamTarget;
+// The sense of the picture's turn back in gameToWorld, for yaw and pitch (test aid: 5th and 6th
+// numbers of head.request; to be fixed once checked on the headset).
+std::atomic<float> turnBackYaw { 1.f }, turnBackPitch { 1.f };
+
+static const std::string& debugDir();
+
+void readHeadRequest()
+{
+	static std::chrono::steady_clock::time_point nextCheck;
+	const auto now = std::chrono::steady_clock::now();
+	if (now < nextCheck)
+		return;
+	nextCheck = now + std::chrono::milliseconds(200);
+	const std::string path = debugDir() + "/head.request";
+	FILE *f = fopen(path.c_str(), "r");
+	if (f == nullptr)
+		return;
+	char line[128] {};
+	if (fgets(line, sizeof(line), f) == nullptr)
+		line[0] = 0;
+	fclose(f);
+	nowide::remove(path.c_str());
+	float yaw = 0.f, pitch = 0.f;
+	char mode[16] {};
+	int target = 0;
+	float ySense = 1.f, pSense = 1.f;
+	const int n = sscanf(line, "%f %f %15s %d %f %f", &yaw, &pitch, mode, &target, &ySense, &pSense);
+	if (n >= 6)
+	{
+		turnBackYaw = ySense;
+		turnBackPitch = pSense;
+	}
+	if (n >= 3 && (strcmp(mode, "view") == 0 || strcmp(mode, "cam") == 0))
+	{
+		const float rad = 3.14159265f / 180.f;
+		headSim = { yaw * rad, pitch * rad, strcmp(mode, "view") == 0 };
+		simCamYaw = headSim.view ? 0.f : headSim.yaw;
+		simCamPitch = headSim.view ? 0.f : headSim.pitch;
+		simCamTarget = n >= 4 ? target : 0;
+		NOTICE_LOG(RENDERER, "XR: made-up head turn: yaw %.1f, pitch %.1f degrees, %s, target %d", yaw, pitch, mode, (int)simCamTarget);
+	}
+	else
+	{
+		headSim = HeadSim();
+		simCamYaw = simCamPitch = 0.f;
+		simCamTarget = 0;
+		NOTICE_LOG(RENDERER, "XR: made-up head turn off");
+	}
+}
+
 // Pose relative to the game camera's place in the room.
 glm::vec3 relativePosition(const XrVector3f& p) {
 	return glm::conjugate(originRot) * (toVec(p) - originPos);
 }
 glm::quat relativeRotation(const XrQuaternionf& q) {
-	return glm::conjugate(originRot) * toQuat(q);
+	const glm::quat r = glm::conjugate(originRot) * toQuat(q);
+	if (!headSim.view)
+		return r;
+	// (the made-up turn on top of the real head: yaw about the room's up, then pitch)
+	return glm::angleAxis(headSim.yaw, glm::vec3(0.f, 1.f, 0.f)) * glm::angleAxis(headSim.pitch, glm::vec3(1.f, 0.f, 0.f)) * r;
 }
 
 glm::mat4 eyeProjection(const XrFovf& fov)
@@ -776,10 +846,17 @@ glm::mat4 eyeProjection(const XrFovf& fov)
 }
 
 // Rebuilt game eye space -> headset local space, relative to the origin.
+// tcvr: turned by as much as the head turned the game camera for the picture on show
+// (xr_headcam.cpp), so the picture lands where the game camera looked.
 glm::mat4 gameToWorld()
 {
 	const float s = worldScale();
-	return glm::scale(glm::mat4(1.f), glm::vec3(s, -s, s));
+	const glm::vec2 turn = shownCameraTurn();
+	glm::mat4 m(1.f);
+	if (turn.x != 0.f || turn.y != 0.f)
+		m = glm::rotate(glm::rotate(m, turn.x * turnBackYaw.load(), glm::vec3(0.f, 1.f, 0.f)),
+				turn.y * turnBackPitch.load(), glm::vec3(1.f, 0.f, 0.f));
+	return glm::scale(m, glm::vec3(s, -s, s));
 }
 
 // tcvr: the head's yaw and pitch relative to the origin (see headYawPitch), at the last frame
@@ -2303,7 +2380,12 @@ const Eye *currentEye()
 
 glm::vec2 headYawPitch()
 {
-	return glm::vec2(headYawNow.load(), headPitchNow.load());
+	return glm::vec2(headYawNow.load() + simCamYaw.load(), headPitchNow.load() + simCamPitch.load());
+}
+
+int headCameraTarget()
+{
+	return simCamTarget.load();
 }
 
 void term()
@@ -2577,6 +2659,7 @@ bool frame()
 				views[i].pose.position = { eyes[i].x, eyes[i].y, eyes[i].z };
 		}
 	}
+	readHeadRequest();		// tcvr: test aid, a made-up head turn
 	updateOrigin(located);
 	if (located)
 		noteHeadDirection();

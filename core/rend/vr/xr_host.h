@@ -38,12 +38,16 @@ void term();
 // yaw (radians, positive to the left) and pitch (radians, positive up), at the last headset
 // frame. Any thread. For the head-driven game camera (backlog P0-8).
 glm::vec2 headYawPitch();
+// tcvr: test aid (files/head.request): which "set camera" calls the head camera turns
+// (0 player 1's camera, the default; see xr_headcam.cpp).
+int headCameraTarget();
 #else
 inline bool enabled() { return false; }
 inline bool frame() { return false; }
 inline const Eye *currentEye() { return nullptr; }
 inline void term() {}
 inline glm::vec2 headYawPitch() { return glm::vec2(0.f); }
+inline int headCameraTarget() { return 0; }
 #endif
 
 }

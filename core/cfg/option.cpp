@@ -130,6 +130,8 @@ Option<bool> VrUploadOnce("vr.UploadOnce", true);	// tcvr: the kept game frame's
 Option<bool> VrDiscardDepth("vr.DiscardDepth", true);	// tcvr: drop each eye's depth/stencil after drawing (not written out to memory)
 Option<int> VrFoveation("vr.Foveation", 0);	// tcvr: fixed foveated rendering, fewer pixels at the lens edges: 0 off, 1 low, 2 medium, 3 high (the Quest only)
 Option<float> VrComfortVignette("vr.ComfortVignette", 0.6f);	// tcvr: darken the view's edges while it turns on its own, 0..1 (0: off)
+Option<int> VrHeadCamera("vr.HeadCamera", 0);	// tcvr: the head turns the game camera (Toy Commander): 0 off, 1 yaw, 2 yaw and pitch
+Option<int> VrHeadCameraSight("vr.HeadCameraSight", 0);	// tcvr: the gun sight while the head looks away: 0 stays on the vehicle's aim, 1 hidden past 30 degrees
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");

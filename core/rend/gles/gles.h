@@ -430,6 +430,8 @@ GLuint gl_CompileShader(const char* shader, GLuint type);
 GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader);
 // hotd2-vr: the frame kept for the headset (the one on screen), drawn once per eye
 bool gles_vr_have_frame();
+// tcvr: the head-driven camera's turn (yaw, pitch) of the game picture on show (see xr_headcam.h)
+glm::vec2 gles_vr_frame_cam_turn();
 void gles_vr_note_framebuffer(bool blank);
 // the game shows the last rendered frame now: it goes to the headset
 void gles_vr_present();

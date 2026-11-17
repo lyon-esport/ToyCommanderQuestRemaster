@@ -12,6 +12,10 @@ void reios_term();
 
 struct Sh4Context;
 void DYNACALL reios_trap(Sh4Context *ctx, u32 op);
+// tcvr: a hook into the game's own code: REIOS_OPCODE written over one of its instructions,
+// at an address the BIOS doesn't use. Called first with the trap's address; true = handled
+// (the hook did the replaced instruction and set ctx->pc where to go on).
+extern bool (*reios_game_trap)(Sh4Context *ctx, u32 pc);
 
 void reios_disk_id();
 
