@@ -156,7 +156,12 @@ bool trap(Sh4Context *ctx, u32 pc)
 	noteCaller(matrix, ctx->pr, turn);
 	if (!turn)
 		return true;
-	const glm::vec2 head = headYawPitch();
+	// the head as it was at the frame's first (view) call, for every call of the frame: the
+	// vehicle's, the room's and the view's cameras must agree, and with the picture's turn back
+	static glm::vec2 frameHead;
+	if (ctx->pr == ViewCaller || headCameraTarget() != 0)
+		frameHead = headYawPitch();
+	const glm::vec2 head = frameHead;
 	// (the game's camera turns the other way for the same angle: the user, 2026-11-17, head right
 	// turned the view left. The picture's turn back takes the same value, so they still match.)
 	const float yaw = -head.x;
