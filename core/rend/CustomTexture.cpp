@@ -24,6 +24,11 @@
 #include "oslib/oslib.h"
 #include "stdclass.h"
 #include "util/worker_thread.h"
+#include "xbrz/xbrz.h"
+#include <algorithm>
+#include <cstdio>
+#include <mutex>
+#include <set>
 
 #include <sstream>
 #include <locale>
@@ -64,6 +69,94 @@ private:
 	std::string textures_path;
 	std::map<u32, std::string> texture_map;
 };
+
+// tcvr: the upscale cache (vr.UpscaleCache): textures upscaled with xBRZ from the player's own
+// disc as the game first shows them, kept as PNG files in the app's storage
+// (data/texcache/v2/<game id>/<hash>.png) and used in place of the originals from then on, also
+// on later launches. Nothing of it leaves the device.
+// v2: the first version (data/texcache/<game id>/) saved the packed mipmap chain of mipmapped
+// textures instead of their full-size picture; its files are deleted once, then rebuilt.
+class UpscaleCacheSource : public BaseCustomTextureSource
+{
+public:
+	explicit UpscaleCacheSource(const std::string& gameId)
+		: dir(get_writable_data_path("texcache/v2/") + gameId + "/"),
+		  oldDir(get_writable_data_path("texcache/") + gameId + "/") {}
+	bool shouldReplace() const override { return config::VrUpscaleCache > 1; }
+	bool loadMap() override
+	{
+		deleteOldCache();
+		if (!file_exists(dir))
+			return false;
+		std::lock_guard<std::mutex> _(mutex);
+		map.clear();
+		hostfs::DirectoryTree tree(dir);
+		for (const hostfs::FileInfo& item : tree)
+		{
+			if (get_file_extension(item.name) != "png")
+				continue;
+			char *end;
+			const u32 hash = (u32)strtoll(item.name.c_str(), &end, 16);
+			if (*end == '.')
+				map[hash] = item.path;
+		}
+		NOTICE_LOG(RENDERER, "tcvr: upscale cache: %zu textures in %s", map.size(), dir.c_str());
+		return !map.empty();
+	}
+	size_t getTextureCount() const override { std::lock_guard<std::mutex> _(mutex); return map.size(); }
+	u8* loadCustomTexture(u32 hash, int& width, int& height) override
+	{
+		std::string path;
+		{
+			std::lock_guard<std::mutex> _(mutex);
+			auto it = map.find(hash);
+			if (it == map.end())
+				return nullptr;
+			path = it->second;
+		}
+		hostfs::File *file = hostfs::storage().openFile(path, "rb");
+		if (file == nullptr)
+			return nullptr;
+		int n;
+		stbi_set_flip_vertically_on_load_thread(1);
+		u8 *data = stbi_load_from_file(file, &width, &height, &n, STBI_rgb_alpha);
+		delete file;
+		return data;
+	}
+	bool isTextureReplaced(u32 hash) override { std::lock_guard<std::mutex> _(mutex); return map.count(hash) != 0; }
+	// a new file in the cache: used from the next time the game loads that texture
+	void added(u32 hash, const std::string& path) { std::lock_guard<std::mutex> _(mutex); map[hash] = path; }
+	const std::string dir;
+
+private:
+	// the v1 cache holds broken pictures (see above): delete its files, they're all regenerable
+	void deleteOldCache()
+	{
+		if (!file_exists(oldDir))
+			return;
+		int count = 0;
+		{
+			hostfs::DirectoryTree tree(oldDir);
+			for (const hostfs::FileInfo& item : tree)
+			{
+				const std::string ext = get_file_extension(item.name);
+				if ((ext == "png" || ext == "tmp") && nowide::remove(item.path.c_str()) == 0)
+					count++;
+			}
+		}
+		NOTICE_LOG(RENDERER, "tcvr: upscale cache: deleted %d files of the old cache in %s", count, oldDir.c_str());
+	}
+
+	const std::string oldDir;
+	mutable std::mutex mutex;
+	std::map<u32, std::string> map;
+};
+
+static UpscaleCacheSource *upscaleCache;		// owned by custom_texture's sources
+static std::unique_ptr<WorkerThread> upscaleThread;
+static std::mutex upscaleMutex;
+static std::set<u32> upscaleSeen;			// queued or done this run
+static std::atomic<int> upscaleDone, upscaleQueued;
 
 bool CustomTextureSource::loadMap()
 {
@@ -182,6 +275,10 @@ bool CustomTexture::init()
 			// The first source added has highest priority.
 			// Add your source after the default `CustomTextureSource`(data/textures/<game id> folder), so end-users can override your textures.
 			addSource(std::make_unique<CustomTextureSource>(game_id));
+			// tcvr: after it, so a texture pack the player adds wins over the upscale cache
+			auto cache = std::make_unique<UpscaleCacheSource>(game_id);
+			upscaleCache = cache.get();
+			addSource(std::move(cache));
 		}
 	}
 
@@ -312,38 +409,15 @@ void CustomTexture::loadCustomTextureAsync(BaseTextureCacheData *texture_data)
 	});
 }
 
-void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, void *src_buffer)
+// A decoded texture (as the renderer uploads it) as 8-bit RGBA, malloc'd, or nullptr
+static u8 *textureToRGBA(BaseTextureCacheData* texture, int w, int h, void *src_buffer)
 {
-	if (!config::DumpTextures)
-		return;
-
-	if (config::DumpUniqueTextures && (texture->Updates > 1 || texture->tcw.PixelFmt == PixelYUV))
-		return;
-
-	if (!config::DumpReplacedTextures.get() && isTextureReplaced(texture))
-		return;
-
-	std::string base_dump_dir = hostfs::getTextureDumpPath();
-	if (!file_exists(base_dump_dir))
-		make_directory(base_dump_dir);
-	std::string game_id = getGameId();
-	if (game_id.length() == 0)
-		return;
-
-	base_dump_dir += game_id + "/";
-	if (!file_exists(base_dump_dir))
-		make_directory(base_dump_dir);
-
-	std::ostringstream path;
-	path.imbue(std::locale::classic());
-	path << base_dump_dir << std::hex << texture->texture_hash << ".png";
-
 	u16 *src = (u16 *)src_buffer;
 	u8 *dst_buffer = (u8 *)malloc(w * h * 4);	// 32-bit per pixel
 	if (dst_buffer == nullptr)
 	{
 		ERROR_LOG(RENDERER, "Dump texture: out of memory");
-		return;
+		return nullptr;
 	}
 	u8 *dst = dst_buffer;
 
@@ -389,7 +463,7 @@ void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, voi
 			default:
 				WARN_LOG(RENDERER, "dumpTexture: unsupported picture format %x", (u32)texture->tex_type);
 				free(dst_buffer);
-				return;
+				return nullptr;
 			}
 		}
 		else
@@ -431,10 +505,43 @@ void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, voi
 			default:
 				WARN_LOG(RENDERER, "dumpTexture: unsupported picture format %x", (u32)texture->tex_type);
 				free(dst_buffer);
-				return;
+				return nullptr;
 			}
 		}
 	}
+
+	return dst_buffer;
+}
+
+void CustomTexture::dumpTexture(BaseTextureCacheData* texture, int w, int h, void *src_buffer)
+{
+	if (!config::DumpTextures)
+		return;
+
+	if (config::DumpUniqueTextures && (texture->Updates > 1 || texture->tcw.PixelFmt == PixelYUV))
+		return;
+
+	if (!config::DumpReplacedTextures.get() && isTextureReplaced(texture))
+		return;
+
+	std::string base_dump_dir = hostfs::getTextureDumpPath();
+	if (!file_exists(base_dump_dir))
+		make_directory(base_dump_dir);
+	std::string game_id = getGameId();
+	if (game_id.length() == 0)
+		return;
+
+	base_dump_dir += game_id + "/";
+	if (!file_exists(base_dump_dir))
+		make_directory(base_dump_dir);
+
+	std::ostringstream path;
+	path.imbue(std::locale::classic());
+	path << base_dump_dir << std::hex << texture->texture_hash << ".png";
+
+	u8 *dst_buffer = textureToRGBA(texture, w, h, src_buffer);
+	if (dst_buffer == nullptr)
+		return;
 
 	stbi_flip_vertically_on_write(1);
 	const auto& savefunc = [](void *context, void *data, int size) {
@@ -495,4 +602,97 @@ void CustomTexture::resetPreloadProgress()
 	preload_total = 0;
 	preload_loaded = 0;
 	preload_loaded_size = 0;
+}
+
+// tcvr: see UpscaleCacheSource. Called on the render thread as a texture is uploaded; the
+// upscaling and the file run on a worker thread of their own.
+void CustomTexture::cacheUpscaled(BaseTextureCacheData* texture, int w, int h, void *src_buffer)
+{
+	const int factor = std::clamp((int)config::VrUpscaleCache, 0, 4);
+	if (factor < 2 || upscaleCache == nullptr || config::TextureUpscale > 1)
+		return;
+	// small, still pictures only: no video (YUV), nothing the game redraws (render to texture,
+	// animated), nothing big (memory and time)
+	if (w * h > 256 * 256 || w < 8 || h < 8 || texture->tcw.PixelFmt == PixelYUV || texture->Updates > 1)
+		return;
+	// the caller passes the full-size picture only (never a mipmap chain or a cropped texture)
+	if ((u32)w != texture->width || (u32)h != texture->height)
+	{
+		static bool logged;
+		if (!logged)
+			WARN_LOG(RENDERER, "tcvr: upscale cache: size mismatch %dx%d vs %dx%d, skipped", w, h, texture->width, texture->height);
+		logged = true;
+		return;
+	}
+	if (isTextureReplaced(texture))
+		return;
+	{
+		std::lock_guard<std::mutex> _(upscaleMutex);
+		if (!upscaleSeen.insert(texture->texture_hash).second)
+			return;
+	}
+	u8 *rgba = textureToRGBA(texture, w, h, src_buffer);
+	if (rgba == nullptr)
+		return;
+	if (!upscaleThread)
+		upscaleThread = std::make_unique<WorkerThread>("UpscaleCache");
+	upscaleQueued++;
+	const u32 hash = texture->texture_hash;
+	const bool alpha = texture->tcw.PixelFmt != Pixel565;
+	UpscaleCacheSource *cache = upscaleCache;
+	upscaleThread->run([=]() {
+		// RGBA bytes -> xBRZ's ARGB words and back
+		std::vector<u32> src((size_t)w * h), dst((size_t)w * h * factor * factor);
+		for (size_t i = 0; i < src.size(); i++)
+		{
+			const u8 *p = &rgba[i * 4];
+			src[i] = ((u32)p[3] << 24) | ((u32)p[0] << 16) | ((u32)p[1] << 8) | p[2];
+		}
+		free(rgba);
+		xbrz::scale(factor, src.data(), dst.data(), w, h, alpha ? xbrz::ColorFormat::ARGB : xbrz::ColorFormat::RGB, xbrz::ScalerCfg());
+		std::vector<u8> out(dst.size() * 4);
+		for (size_t i = 0; i < dst.size(); i++)
+		{
+			const u32 c = dst[i];
+			out[i * 4] = (c >> 16) & 0xff;
+			out[i * 4 + 1] = (c >> 8) & 0xff;
+			out[i * 4 + 2] = c & 0xff;
+			out[i * 4 + 3] = alpha ? (c >> 24) & 0xff : 0xff;
+		}
+		if (!file_exists(cache->dir))
+		{
+			make_directory(get_writable_data_path("texcache/"));
+			make_directory(get_writable_data_path("texcache/v2/"));
+			make_directory(cache->dir);
+		}
+		char name[16];
+		snprintf(name, sizeof(name), "%08x.png", hash);
+		const std::string path = cache->dir + name;
+		const std::string tmp = path + ".tmp";
+		bool written = false;
+		if (FILE *f = nowide::fopen(tmp.c_str(), "wb"))
+		{
+			stbi_flip_vertically_on_write(1);
+			written = stbi_write_png_to_func([](void *context, void *data, int size) {
+					fwrite(data, 1, size, (FILE *)context);
+				}, f, w * factor, h * factor, STBI_rgb_alpha, out.data(), 0) != 0;
+			written = fclose(f) == 0 && written;
+		}
+		if (written && std::rename(tmp.c_str(), path.c_str()) == 0)
+		{
+			cache->added(hash, path);
+			const int done = ++upscaleDone;
+			if (done == 1 || done % 50 == 0)
+				NOTICE_LOG(RENDERER, "tcvr: upscale cache: %d textures upscaled %dx this run (%d queued)", done, factor, (int)upscaleQueued);
+		}
+		else
+			WARN_LOG(RENDERER, "tcvr: upscale cache: can't write %s", path.c_str());
+	});
+}
+
+void CustomTexture::getUpscaleCacheProgress(int& done, int& queued, int& cached) const
+{
+	done = upscaleDone;
+	queued = upscaleQueued;
+	cached = upscaleCache != nullptr ? (int)upscaleCache->getTextureCount() : 0;
 }

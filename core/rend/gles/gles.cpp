@@ -956,6 +956,8 @@ static void create_modvol_shader()
 	}
 }
 
+static void gles_vr_forget_upload();
+
 static void gl_create_resources()
 {
 	if (gl.vbo.geometry != nullptr)
@@ -975,6 +977,7 @@ static void gl_create_resources()
 #endif
 
 	//create vbos
+	gles_vr_forget_upload();
 	gl.vbo.geometry = std::make_unique<GlBuffer>(GL_ARRAY_BUFFER);
 	gl.vbo.modvols = std::make_unique<GlBuffer>(GL_ARRAY_BUFFER);
 	gl.vbo.idxs = std::make_unique<GlBuffer>(GL_ELEMENT_ARRAY_BUFFER);
@@ -1144,6 +1147,23 @@ static rend_context vrPending;
 static bool vrPendingBlank;
 // Screen frames rendered since the last one was shown.
 static int vrFramesNotShown;
+// tcvr: which kept frame the GL vertex/index buffers hold (0: none, or something else)
+static u64 vrFrameGeneration = 1;
+static u64 vrUploadedGeneration;
+
+static void gles_vr_forget_upload() {
+	vrUploadedGeneration = 0;
+}
+static bool gles_vr_frame_uploaded() {
+	return vrUploadedGeneration == vrFrameGeneration;
+}
+static void gles_vr_note_frame_uploaded() {
+	vrUploadedGeneration = vrFrameGeneration;
+}
+// The kept frame changed (or is gone): upload it again before drawing it.
+static void gles_vr_frame_changed() {
+	vrFrameGeneration++;
+}
 
 void OpenGLRenderer::Process(TA_context* ctx)
 {
@@ -1353,15 +1373,27 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 
 	if (is_rtt || gl.rendContext->clearFramebuffer || vrEye)
 		glClear(GL_COLOR_BUFFER_BIT);
-	//move vertex to gpu
-	//Main VBO
-	gl.vbo.geometry->update(&gl.rendContext->verts[0], gl.rendContext->verts.size() * sizeof(decltype(gl.rendContext->verts[0])));
+	// tcvr: in the headset the kept game frame is drawn for each eye at the headset's rate
+	// (2-4 headset frames per game picture): its vertices and indices go to the GPU once per
+	// game picture, not again for every eye. Rewriting a buffer the GPU is still reading made
+	// the driver stall or copy it (frame-rate plan, item 2).
+	// (vr.UploadOnce off: every eye again, as before, to compare)
+	if (!vrEye || !config::VrUploadOnce || !gles_vr_frame_uploaded())
+	{
+		//move vertex to gpu
+		//Main VBO
+		gl.vbo.geometry->update(&gl.rendContext->verts[0], gl.rendContext->verts.size() * sizeof(decltype(gl.rendContext->verts[0])));
 
-	upload_vertex_indices();
+		upload_vertex_indices();
 
-	//Modvol VBO
-	if (!gl.rendContext->modtrig.empty())
-		gl.vbo.modvols->update(&gl.rendContext->modtrig[0], gl.rendContext->modtrig.size() * sizeof(decltype(gl.rendContext->modtrig[0])));
+		//Modvol VBO
+		if (!gl.rendContext->modtrig.empty())
+			gl.vbo.modvols->update(&gl.rendContext->modtrig[0], gl.rendContext->modtrig.size() * sizeof(decltype(gl.rendContext->modtrig[0])));
+		if (vrEye)
+			gles_vr_note_frame_uploaded();
+		else
+			gles_vr_forget_upload();
+	}
 
 	Rect scissor = gl.matrices.getBaseScissor();
 	ShaderUniforms.base_clipping.x = scissor.origin.x;
@@ -1443,6 +1475,7 @@ void OpenGLRenderer::Term()
 	vrFrameValid = false;
 	vrShowFramebuffer = false;
 	vrPendingKind = VrPending::None;
+	gles_vr_forget_upload();
 	if (vrScreenProgram != 0)
 	{
 		glcache.DeleteProgram(vrScreenProgram);
@@ -1470,6 +1503,7 @@ void gles_vr_present()
 	{
 	case VrPending::Frame:
 		std::swap(vrFrame, vrPending);
+		gles_vr_frame_changed();
 		vrFrameValid = true;
 		vrShowFramebuffer = false;
 		break;

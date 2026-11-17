@@ -13,6 +13,7 @@
 #include "cfg/option.h"
 #include "emulator.h"
 #include "hw/pvr/Renderer_if.h"
+#include "rend/CustomTexture.h"
 #include "log/Log.h"
 #include "stdclass.h"
 
@@ -85,12 +86,23 @@ const std::vector<Choice>& choices()
 			[] { return (float)config::AnisotropicFiltering; }, [](float v) { saveOption(config::AnisotropicFiltering, v); } },
 		{ Section::Image, "Sharper far textures", { 0.f, -0.5f, -1.f }, { "Off", "Low (-0.5)", "High (-1.0)" },
 			[] { return (float)config::VrTexLodBias; }, [](float v) { saveOption(config::VrTexLodBias, v); } },
+		// the upscale cache (CustomTexture.cpp): each texture upscaled once, then reused
+		{ Section::Image, "HD textures (upscale cache)", { 0.f, 2.f, 4.f }, { "Off", "2x", "4x" },
+			[] { return (float)config::VrUpscaleCache; }, [](float v) { saveOption(config::VrUpscaleCache, v); } },
 		// the headset's display rate (applied live by xr_host); the game itself stays at 60 Hz
 		{ Section::Performance, "Refresh rate", { 72.f, 90.f, 120.f }, { "72 Hz", "90 Hz", "120 Hz" },
 			[] { return (float)config::VrXrRefreshRate; }, [](float v) { saveOption(config::VrXrRefreshRate, v); } },
 		// the frame-rate counter at the bottom right of the view
 		{ Section::Performance, "Show frame rate", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrShowFps ? 1.f : 0.f; }, [](float v) { config::VrShowFps.set(v > 0.5f); config::VrShowFps.save(); } },
+		// tcvr: fixed foveated rendering: fewer pixels at the lens edges, more frame rate
+		{ Section::Performance, "Fixed foveation (edges)", { 0.f, 1.f, 2.f, 3.f }, { "Off", "Low", "Medium", "High" },
+			[] { return (float)config::VrFoveation; }, [](float v) { saveOption(config::VrFoveation, v); } },
+		// tcvr: the other frame-rate tweaks, each switchable to compare (both on by default)
+		{ Section::Performance, "Upload frame once", { 0.f, 1.f }, { "Off", "On" },
+			[] { return config::VrUploadOnce ? 1.f : 0.f; }, [](float v) { config::VrUploadOnce.set(v > 0.5f); config::VrUploadOnce.save(); } },
+		{ Section::Performance, "Discard eye depth", { 0.f, 1.f }, { "Off", "On" },
+			[] { return config::VrDiscardDepth ? 1.f : 0.f; }, [](float v) { config::VrDiscardDepth.set(v > 0.5f); config::VrDiscardDepth.save(); } },
 		{ Section::Comfort, "Comfort vignette", { 0.f, 0.3f, 0.6f, 1.f }, { "Off", "Low", "Medium", "High" },
 			[] { return (float)config::VrComfortVignette; }, [](float v) { saveOption(config::VrComfortVignette, v); } },
 	};
@@ -430,7 +442,10 @@ void drawMenu(const glm::mat4& viewProj)
 		panel.lines.push_back({ s, 0.042f, sel ? (confirming == (int)list[i].action ? yellow : white) : grey });
 	}
 	char rates[96];
-	snprintf(rates, sizeof(rates), "Headset %.0f fps   Game %.0f fps%s", headsetFps, gameFps, pausedGame ? " (paused)" : "");
+	int upscaled, queued, cached;
+	custom_texture.getUpscaleCacheProgress(upscaled, queued, cached);
+	snprintf(rates, sizeof(rates), "Headset %.0f fps   Game %.0f fps%s   HD textures %d", headsetFps, gameFps,
+			pausedGame ? " (paused)" : "", cached);
 	const bool showStatus = !status.empty() && Clock::now() < statusUntil;
 	panel.lines.push_back({ showStatus ? status : std::string(rates), 0.034f, showStatus ? yellow : grey });
 	// in front of where the head looked when it opened
