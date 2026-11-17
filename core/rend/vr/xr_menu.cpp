@@ -101,9 +101,9 @@ const std::vector<Choice>& choices()
 		{ Section::Performance, "Show frame rate", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrShowFps ? 1.f : 0.f; }, [](float v) { config::VrShowFps.set(v > 0.5f); config::VrShowFps.save(); } },
 		// tcvr: fixed foveated rendering: fewer pixels at the lens edges, more frame rate
-		{ Section::Performance, "Fixed foveation (edges)", { 0.f, 1.f, 2.f, 3.f }, { "Off", "Low", "Medium", "High" },
+		{ Section::Performance, "Fixed foveation (edges)", { 0.f, 1.f, 2.f }, { "Off", "Low", "High" },
 			[] { return (float)config::VrFoveation; }, [](float v) { saveOption(config::VrFoveation, v); } },
-		// tcvr: the other frame-rate tweaks, each switchable to compare (defaults: upload once off, discard depth on)
+		// tcvr: the other frame-rate tweaks, each switchable to compare (both on by default)
 		{ Section::Performance, "Upload frame once", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrUploadOnce ? 1.f : 0.f; }, [](float v) { config::VrUploadOnce.set(v > 0.5f); config::VrUploadOnce.save(); } },
 		{ Section::Performance, "Discard eye depth", { 0.f, 1.f }, { "Off", "On" },
