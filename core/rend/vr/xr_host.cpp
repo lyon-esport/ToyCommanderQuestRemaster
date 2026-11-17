@@ -848,10 +848,10 @@ glm::mat4 eyeProjection(const XrFovf& fov)
 // Rebuilt game eye space -> headset local space, relative to the origin.
 // tcvr: turned by as much as the head turned the game camera for the picture on show
 // (xr_headcam.cpp), so the picture lands where the game camera looked.
-glm::mat4 gameToWorld()
+glm::mat4 gameToWorld(bool turned = true)
 {
 	const float s = worldScale();
-	const glm::vec2 turn = shownCameraTurn();
+	const glm::vec2 turn = turned ? shownCameraTurn() : glm::vec2(0.f);
 	glm::mat4 m(1.f);
 	if (turn.x != 0.f || turn.y != 0.f)
 		m = glm::rotate(glm::rotate(m, turn.x * turnBackYaw.load(), glm::vec3(0.f, 1.f, 0.f)),
@@ -2695,7 +2695,8 @@ bool frame()
 		}
 		const glm::mat4 view = glm::inverse(glm::translate(glm::mat4(1.f), relativePosition(views[i].pose.position))
 				* glm::mat4_cast(relativeRotation(views[i].pose.orientation)));
-		eye = { c.fbos[index], c.width, c.height, eyeProjection(views[i].fov) * view * gameToWorld() };
+		eye = { c.fbos[index], c.width, c.height, eyeProjection(views[i].fov) * view * gameToWorld(),
+				eyeProjection(views[i].fov) * view * gameToWorld(false) };
 		if (showPanel)
 		{
 			// a dark room with the panel in it

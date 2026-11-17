@@ -21,6 +21,8 @@ struct Eye
 	int height;
 	// Rebuilt game eye space (renderer y convention, game units) -> this eye's clip space.
 	glm::mat4 viewProj;
+	// tcvr: the same without the head-driven camera's turn, for the HUD plane
+	glm::mat4 hudViewProj;
 };
 
 #ifdef USE_OPENXR
