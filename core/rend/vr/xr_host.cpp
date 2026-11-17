@@ -498,15 +498,18 @@ void destroySwapchains()
 }
 
 // tcvr: fixed foveated rendering (frame-rate plan, item 6): the runtime renders the lens
-// edges, which the lenses blur anyway, with fewer pixels. Level 0 (off) to 3 (high).
+// edges, which the lenses blur anyway, with fewer pixels. 0 off, 1 on: the runtime's strongest
+// level, "high", invisible in Toy Commander (Training, Quest 3, 120 Hz: 87 -> 117 fps). Meta's
+// "high top" (4) measured the same (the runtime reports Fov=3), so there is no stronger level.
+// (Older configs: 2 and 3 count as on.)
+constexpr int FoveationLevels = 1;
 void applyFoveation(int level)
 {
 	if (createFoveationProfile == nullptr || destroyFoveationProfile == nullptr || updateSwapchain == nullptr)
 		return;
-	static const XrFoveationLevelFB levels[] { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_LOW_FB,
-			XR_FOVEATION_LEVEL_MEDIUM_FB, XR_FOVEATION_LEVEL_HIGH_FB };
+	static const XrFoveationLevelFB levels[] { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_HIGH_FB };
 	XrFoveationLevelProfileCreateInfoFB levelInfo { XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB };
-	levelInfo.level = levels[std::clamp(level, 0, 3)];
+	levelInfo.level = levels[std::clamp(level, 0, FoveationLevels)];
 	levelInfo.verticalOffset = 0.f;
 	levelInfo.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
 	XrFoveationProfileCreateInfoFB profileInfo { XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB };
@@ -524,7 +527,7 @@ void applyFoveation(int level)
 		}
 	// (the swapchains keep the setting: the profile can go)
 	destroyFoveationProfile(profile);
-	NOTICE_LOG(RENDERER, "XR: fixed foveated rendering %s%s", level <= 0 ? "off" : level == 1 ? "low" : level == 2 ? "medium" : "high",
+	NOTICE_LOG(RENDERER, "XR: fixed foveated rendering %s%s", level <= 0 ? "off" : "on (runtime high)",
 			ok ? "" : " (refused by the runtime)");
 }
 
@@ -2424,7 +2427,7 @@ bool frame()
 	// tcvr: fixed foveated rendering (vr.Foveation), on the current eye buffers (new ones after
 	// an MSAA or resolution change get it again)
 	{
-		const int level = std::clamp((int)config::VrFoveation, 0, 3);
+		const int level = std::clamp((int)config::VrFoveation, 0, FoveationLevels);
 		if (updateSwapchain != nullptr && chains[0].chain != XR_NULL_HANDLE && level != foveationApplied)
 		{
 			// (off is the runtime's default: nothing to ask for on new eye buffers)
