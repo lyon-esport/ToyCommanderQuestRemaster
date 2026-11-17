@@ -12,6 +12,7 @@
 	This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #pragma once
+#include "xr_panel.h"
 #include <glm/glm.hpp>
 #include <string>
 
@@ -32,8 +33,16 @@ bool menuOpen();
 // Once per headset frame with the controllers' state (gamepad mode). headYaw: where the head
 // looks (radians, relative to the game camera's direction), for placing the menu when it opens.
 MenuAction updateMenu(const MenuInput& input, float headYaw);
-// Over an eye's picture (its framebuffer bound); viewProj as for drawPanel.
+// Over an eye's picture (its framebuffer bound); viewProj as for drawPanel. (Only where the
+// menu's own compositor layer can't be made: see menuPanel.)
 void drawMenu(const glm::mat4& viewProj);
+// tcvr: what the open menu shows, and the yaw it is placed at (radians, relative to the game
+// camera's direction), MenuDistanceMetres in front at eye height. xr_host gives it to the
+// headset as its own quad layer: the compositor samples the picture once, straight to the
+// display, where drawn into the eye's picture it was resampled twice (soft, shimmering letters).
+// False: the menu is closed.
+constexpr float MenuDistanceMetres = 1.6f;
+bool menuPanel(Panel& panel, float& yaw);
 // Counts headset frames, for the frame rate the menu shows.
 void noteHeadsetFrame();
 // The headset's and the game's frames per second over the last second (the frame-rate counter).
