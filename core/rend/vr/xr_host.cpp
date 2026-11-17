@@ -498,16 +498,16 @@ void destroySwapchains()
 }
 
 // tcvr: fixed foveated rendering (frame-rate plan, item 6): the runtime renders the lens
-// edges, which the lenses blur anyway, with fewer pixels. Level 0 (off), 1 (low: the runtime's
-// "high", invisible in Toy Commander), 2 (high: Meta's "high top", 4, stronger again; not in the
-// Khronos header, a runtime that doesn't know it refuses it and the log says so).
-constexpr int FoveationLevels = 2;
+// edges, which the lenses blur anyway, with fewer pixels. 0 off, 1 on: the runtime's strongest
+// level, "high", invisible in Toy Commander (Training, Quest 3, 120 Hz: 87 -> 117 fps). Meta's
+// "high top" (4) measured the same (the runtime reports Fov=3), so there is no stronger level.
+// (Older configs: 2 and 3 count as on.)
+constexpr int FoveationLevels = 1;
 void applyFoveation(int level)
 {
 	if (createFoveationProfile == nullptr || destroyFoveationProfile == nullptr || updateSwapchain == nullptr)
 		return;
-	static const XrFoveationLevelFB levels[] { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_HIGH_FB,
-			(XrFoveationLevelFB)4 /* XR_FOVEATION_LEVEL_HIGH_TOP_FB */ };
+	static const XrFoveationLevelFB levels[] { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_HIGH_FB };
 	XrFoveationLevelProfileCreateInfoFB levelInfo { XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB };
 	levelInfo.level = levels[std::clamp(level, 0, FoveationLevels)];
 	levelInfo.verticalOffset = 0.f;
@@ -527,7 +527,7 @@ void applyFoveation(int level)
 		}
 	// (the swapchains keep the setting: the profile can go)
 	destroyFoveationProfile(profile);
-	NOTICE_LOG(RENDERER, "XR: fixed foveated rendering %s%s", level <= 0 ? "off" : level == 1 ? "low (runtime high)" : "high (runtime high top)",
+	NOTICE_LOG(RENDERER, "XR: fixed foveated rendering %s%s", level <= 0 ? "off" : "on (runtime high)",
 			ok ? "" : " (refused by the runtime)");
 }
 
