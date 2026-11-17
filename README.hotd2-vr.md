@@ -20,7 +20,7 @@ tested yet. Other versions need their own profile (see *How it works*).
 Shooting lands on the aim dot, the B button skips story scenes and the game's own hit flash
 is gone, and the agent's hands and racking the slide work (all tested on the headset).
 
-What's next (two players, among others): see the [roadmap](ROADMAP.md).
+What's next (two players, among others): see the [roadmap](ROADMAP.hotd2-vr.md).
 
 ## What you get
 
