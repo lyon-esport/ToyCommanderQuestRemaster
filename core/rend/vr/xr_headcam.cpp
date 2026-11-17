@@ -158,9 +158,26 @@ bool trap(Sh4Context *ctx, u32 pc)
 		return true;
 	// the head as it was at the frame's first (view) call, for every call of the frame: the
 	// vehicle's, the room's and the view's cameras must agree, and with the picture's turn back
+	// The game camera follows the head in steps (vr.HeadCameraStep degrees, 0: continuously):
+	// between steps the picture stays put and the headset's own reprojection, at its full rate,
+	// shows the head's turn (as it does up and down). A continuously turned camera looked shaky
+	// to the user (2026-11-17).
 	static glm::vec2 frameHead;
 	if (ctx->pr == ViewCaller || headCameraTarget() != 0)
-		frameHead = headYawPitch();
+	{
+		const glm::vec2 now = headYawPitch();
+		const float step = std::max(0.f, (float)config::VrHeadCameraStep) * 0.0174533f;
+		auto wrap = [](float a) { return std::remainder(a, 6.2831853f); };
+		if (step <= 0.f)
+			frameHead = now;
+		else
+		{
+			if (std::abs(wrap(now.x - frameHead.x)) > step)
+				frameHead.x = now.x;
+			if (std::abs(now.y - frameHead.y) > step)
+				frameHead.y = now.y;
+		}
+	}
 	const glm::vec2 head = frameHead;
 	// The picture goes where the head looks (+yaw in the VR view); the game's camera formula below
 	// turns the other way for the same angle (the user, 2026-11-17: head right turned the view

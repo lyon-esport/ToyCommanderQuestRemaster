@@ -113,6 +113,8 @@ const std::vector<Choice>& choices()
 		// tcvr: the head-driven camera (xr_headcam.cpp): look all around the vehicle
 		{ Section::Comfort, "Head turns the camera", { 0.f, 1.f, 2.f }, { "Off", "Left/right", "Left/right + up/down" },
 			[] { return (float)config::VrHeadCamera; }, [](float v) { saveOption(config::VrHeadCamera, v); } },
+		{ Section::Comfort, "Camera follows the head", { 0.f, 10.f, 20.f, 30.f, 45.f }, { "Continuously", "Every 10 deg", "Every 20 deg", "Every 30 deg", "Every 45 deg" },
+			[] { return (float)config::VrHeadCameraStep; }, [](float v) { saveOption(config::VrHeadCameraStep, v); } },
 		{ Section::Comfort, "Sight when looking away", { 0.f, 1.f }, { "On the vehicle's aim", "Hidden" },
 			[] { return (float)config::VrHeadCameraSight; }, [](float v) { saveOption(config::VrHeadCameraSight, v); } },
 	};
