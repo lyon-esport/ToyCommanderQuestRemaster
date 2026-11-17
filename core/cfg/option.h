@@ -491,9 +491,16 @@ extern Option<bool> VrWidenFov;
 extern Option<bool> VrDropShotMarker;
 extern Option<bool> VrDropShotFlash;
 extern Option<bool> VrForce60Hz;
+extern Option<float> VrTexLodBias;
+extern Option<int> VrFoveation;
+extern Option<bool> VrUploadOnce;
+extern Option<bool> VrDiscardDepth;
+extern Option<bool> VrShowFps;
+extern Option<float> VrComfortVignette;
 extern Option<bool> CustomTextures;
 extern Option<bool> PreloadCustomTextures;
 extern Option<bool> DumpTextures;
+extern Option<int> VrUpscaleCache;
 extern Option<bool> DumpUniqueTextures;
 extern Option<bool> DumpReplacedTextures;
 extern Option<int> ScreenStretching;	// in percent. 150 means stretch from 4/3 to 6/3

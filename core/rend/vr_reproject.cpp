@@ -141,6 +141,10 @@ bool widensGameFov() {
 	return fovLiterals[0] != 0 || widensByCode();
 }
 
+bool isMenuFrame() {
+	return menuFrame;
+}
+
 static void widenGameView(Event event, void *)
 {
 	if (event == Event::Start)
