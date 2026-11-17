@@ -60,6 +60,13 @@ Items 1 and 2 can be switched off to compare or to rule them out of a bug: `vr.U
 
 ## Still to do (plan items)
 
+- Game pictures: missions draw 30 pictures/s because the game asks for 2 vblanks per picture
+  (menus ask for 1 and draw 60). The game's clock and physics follow real time, so drawing 60 in
+  missions looks feasible with a small patch; to test on the decompile branch (speed against a
+  stopwatch, physics feel, attract demos kept at 30).
+- Measured 2026-11-17 (worn): at 100% the GPU is 65–84% busy in 3D levels with 0–6 stale
+  frames/s at 120 Hz; at 130% it is saturated in the heaviest views (see Defaults.md).
+
 - Depth layer (`XR_KHR_composition_layer_depth`) and Application SpaceWarp (`XR_FB_space_warp`).
 - A worn-headset run (inside the boundary, no passthrough) at the stock size to confirm 90 Hz and
   measure 120 Hz without the shell sharing the GPU; then choose the shipped defaults (e.g. 90 Hz,

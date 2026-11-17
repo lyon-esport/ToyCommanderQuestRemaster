@@ -103,7 +103,7 @@ Option<bool> VrXr("vr.Xr", false);			// PCVR (OpenXR), when asked: the PCVR zip'
 Option<bool> VrXrGun("vr.XrGun", true);		// the controllers drive the light gun (the one that fires holds it)
 Option<bool> VrWiden("vr.Widen", true);		// let the game profile widen the view (vr.FovScale)
 Option<float> VrWorldScale("vr.WorldScale", 0.2f);	// tcvr default 0.2 (VR menu world size 182%, its maximum); metres per game unit (HOTD2's camera rides 15 units over the street: eye height)
-Option<float> VrXrResolution("vr.XrResolution", 1.f);	// eye buffer size, times the recommended size
+Option<float> VrXrResolution("vr.XrResolution", 1.3f);	// eye buffer size, times the recommended size (tcvr default 1.3, chosen on the headset 2026-11-17)
 Option<int> VrMsaa("vr.Msaa", 2);		// smooth edges: multisampling, e.g. 4 (the Quest only; 1: off)
 Option<int> VrXrRefreshRate("vr.XrRefreshRate", 120);	// Hz (tcvr default: 120)
 Option<bool> VrLaser("vr.Laser", true);		// aim line and dot from the gun
@@ -124,7 +124,7 @@ Option<bool> VrWidenFov("vr.WidenFov", true);	// widen through the game's field 
 Option<bool> VrDropShotMarker("vr.DropShotMarker", true);	// hide the game's own 2D shot marker after shots into 3D
 Option<bool> VrDropShotFlash("vr.DropShotFlash", true);	// hide a bright full-screen flash right after any shot
 Option<bool> VrForce60Hz("vr.Force60Hz", true);	// tcvr: run Toy Commander (Europe) at 60 Hz (NTSC broadcast), not 50 Hz PAL
-Option<bool> VrShowFps("vr.ShowFps", false);	// tcvr: frame-rate counter at the bottom right of the view
+Option<bool> VrShowFps("vr.ShowFps", true);	// tcvr: frame-rate counter (default on since 2026-11-17) at the bottom right of the view
 Option<float> VrTexLodBias("vr.TexLodBias", 0.f);	// tcvr: texture mipmap bias, negative = sharper far textures (e.g. -0.5; 0: stock)
 Option<bool> VrUploadOnce("vr.UploadOnce", true);	// tcvr: the kept game frame's vertices go to the GPU once per game picture, not per eye
 Option<bool> VrDiscardDepth("vr.DiscardDepth", true);	// tcvr: drop each eye's depth/stencil after drawing (not written out to memory)
