@@ -4,6 +4,7 @@ package com.flycast.emulator;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -192,6 +193,50 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
                 pendingIntentUrl = game;
         }
         Log.i("flycast", "BaseGLActivity.onCreate done");
+    }
+
+    // tcvr: called from native code (the VR menu, core/rend/vr/xr_menu.h), on the render thread:
+    // 0 export the saves to Download, 1 import the newest exported saves and start the game
+    // again, 2 quit. Returns the line the menu shows.
+    public String onVrMenuRequest(int request)
+    {
+        Context ctx = getApplicationContext();
+        switch (request)
+        {
+        case 0: {
+            String result = VrSaves.exportToDownload(ctx);
+            if (result.startsWith("ERROR"))
+                return result.substring(Math.min(result.length(), 7));
+            int download = result.indexOf("/Download/");
+            return "Saves exported to " + (download >= 0 ? result.substring(download + 1) : result);
+        }
+        case 1: {
+            String result = VrSaves.importLatestFromDownload(ctx);
+            if (result.startsWith("ERROR"))
+                return result.substring(Math.min(result.length(), 7));
+            Log.i("flycast", "tcvr: " + result + ", restarting");
+            // The game again from a fresh process (the emulator keeps the saves open): the setup
+            // panel, in a process of its own, ends this one and starts the game (as its Play
+            // button does). A delayed relaunch from here is refused by Android (background start).
+            VrGames.Scan scan = VrGames.scan(ctx);
+            if (scan.game == null)
+                return "Saves imported. Quit and start the game again to use them.";
+            Intent relaunch = new Intent(ctx, VrSetupActivity.class);
+            relaunch.putExtra(VrSetupActivity.EXTRA_RELAUNCH, scan.game.getAbsolutePath());
+            relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            handler.postDelayed(() -> startActivity(relaunch), 300);
+            return "Saves imported. Restarting...";
+        }
+        case 2:
+            Log.i("flycast", "tcvr: quit from the VR menu");
+            handler.post(() -> {
+                finishAndRemoveTask();
+                handler.postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 500);
+            });
+            return "Quitting...";
+        default:
+            return "Unknown request";
+        }
     }
 
 	// Called from native code

@@ -18,6 +18,7 @@
 #include "xr_hands.h"
 #include "xr_panel.h"
 #include "xr_vignette.h"	// tcvr: comfort vignette
+#include "xr_menu.h"		// tcvr: the VR menu
 #include "hands_rip.h"
 #include "rend/gles/gles.h"
 #ifdef __ANDROID__
@@ -108,7 +109,13 @@ XrAction aimAction, handAction, triggerAction, startAction, skipAction, recenter
 // tcvr: the gamepad mode's own buttons (A, B on the right; X, Y on the left; stick clicks)
 XrAction padAAction, padBAction, padXAction, padYAction, stickClickAction;
 PFN_xrRequestDisplayRefreshRateFB requestRefreshRate;
+PFN_xrGetDisplayRefreshRateFB getRefreshRate;	// tcvr: the rate in use (log)
 PFN_xrPerfSettingsSetPerformanceLevelEXT setPerformanceLevel;
+// tcvr: fixed foveated rendering (vr.Foveation; XR_FB_foveation and friends)
+PFN_xrCreateFoveationProfileFB createFoveationProfile;
+PFN_xrDestroyFoveationProfileFB destroyFoveationProfile;
+PFN_xrUpdateSwapchainFB updateSwapchain;
+int foveationApplied = -1;	// the level the eye buffers have (-1: new eye buffers, not asked yet)
 
 bool initTried;
 bool sessionRunning;
@@ -487,6 +494,38 @@ void destroySwapchains()
 			xrDestroySwapchain(c.chain);
 		c = EyeChain();
 	}
+	foveationApplied = -1;
+}
+
+// tcvr: fixed foveated rendering (frame-rate plan, item 6): the runtime renders the lens
+// edges, which the lenses blur anyway, with fewer pixels. Level 0 (off) to 3 (high).
+void applyFoveation(int level)
+{
+	if (createFoveationProfile == nullptr || destroyFoveationProfile == nullptr || updateSwapchain == nullptr)
+		return;
+	static const XrFoveationLevelFB levels[] { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_LOW_FB,
+			XR_FOVEATION_LEVEL_MEDIUM_FB, XR_FOVEATION_LEVEL_HIGH_FB };
+	XrFoveationLevelProfileCreateInfoFB levelInfo { XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB };
+	levelInfo.level = levels[std::clamp(level, 0, 3)];
+	levelInfo.verticalOffset = 0.f;
+	levelInfo.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
+	XrFoveationProfileCreateInfoFB profileInfo { XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB };
+	profileInfo.next = &levelInfo;
+	XrFoveationProfileFB profile = XR_NULL_HANDLE;
+	if (!XRCHECK(createFoveationProfile(session, &profileInfo, &profile)))
+		return;
+	bool ok = true;
+	for (EyeChain& c : chains)
+		if (c.chain != XR_NULL_HANDLE)
+		{
+			XrSwapchainStateFoveationFB state { XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB };
+			state.profile = profile;
+			ok = XRCHECK(updateSwapchain(c.chain, (const XrSwapchainStateBaseHeaderFB *)&state)) && ok;
+		}
+	// (the swapchains keep the setting: the profile can go)
+	destroyFoveationProfile(profile);
+	NOTICE_LOG(RENDERER, "XR: fixed foveated rendering %s%s", level <= 0 ? "off" : level == 1 ? "low" : level == 2 ? "medium" : "high",
+			ok ? "" : " (refused by the runtime)");
 }
 
 bool init()
@@ -535,6 +574,14 @@ bool init()
 		extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
 	if (perfSettings)
 		extensions.push_back(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
+	const bool foveation = has(XR_FB_FOVEATION_EXTENSION_NAME) && has(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME)
+			&& has(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
+	if (foveation)
+	{
+		extensions.push_back(XR_FB_FOVEATION_EXTENSION_NAME);
+		extensions.push_back(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME);
+		extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
+	}
 
 	XrInstanceCreateInfo createInfo { XR_TYPE_INSTANCE_CREATE_INFO };
 #ifdef __ANDROID__
@@ -553,9 +600,20 @@ bool init()
 	if (!XRCHECK(xrCreateInstance(&createInfo, &instance)))
 		return false;
 	if (refreshRates)
+	{
 		xrGetInstanceProcAddr(instance, "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction *)&requestRefreshRate);
+		xrGetInstanceProcAddr(instance, "xrGetDisplayRefreshRateFB", (PFN_xrVoidFunction *)&getRefreshRate);
+	}
 	if (perfSettings)
 		xrGetInstanceProcAddr(instance, "xrPerfSettingsSetPerformanceLevelEXT", (PFN_xrVoidFunction *)&setPerformanceLevel);
+	if (foveation)
+	{
+		xrGetInstanceProcAddr(instance, "xrCreateFoveationProfileFB", (PFN_xrVoidFunction *)&createFoveationProfile);
+		xrGetInstanceProcAddr(instance, "xrDestroyFoveationProfileFB", (PFN_xrVoidFunction *)&destroyFoveationProfile);
+		xrGetInstanceProcAddr(instance, "xrUpdateSwapchainFB", (PFN_xrVoidFunction *)&updateSwapchain);
+	}
+	else
+		NOTICE_LOG(RENDERER, "XR: no fixed foveated rendering in this runtime");
 	XrInstanceProperties instanceProps { XR_TYPE_INSTANCE_PROPERTIES };
 	if (XR_SUCCEEDED(xrGetInstanceProperties(instance, &instanceProps)))
 		NOTICE_LOG(RENDERER, "XR: runtime %s", instanceProps.runtimeName);
@@ -1474,6 +1532,49 @@ bool injectedPad(InjectedPad& out)
 	return true;
 }
 
+// tcvr: test aid: the VR menu driven from a file, for tests over adb with nobody at the
+// controllers. "files/menu.request" holds one word: toggle, up, down, left, right, accept or
+// back (echo toggle > files/menu.request). Checked ten times a second, deleted when read.
+MenuInput scriptedMenuInput()
+{
+	MenuInput in;
+	static std::chrono::steady_clock::time_point nextCheck;
+	static int release;		// a stick step is held for one check, then let go
+	const auto now = std::chrono::steady_clock::now();
+	static glm::vec2 stick;
+	if (now < nextCheck)
+	{
+		in.stick = stick;
+		return in;
+	}
+	nextCheck = now + std::chrono::milliseconds(100);
+	if (release > 0 && --release == 0)
+		stick = glm::vec2(0.f);
+	const std::string path = debugDir() + "/menu.request";
+	if (FILE *f = fopen(path.c_str(), "r"))
+	{
+		char word[32] {};
+		const int n = fscanf(f, "%31s", word);
+		fclose(f);
+		nowide::remove(path.c_str());
+		const std::string w = n == 1 ? word : "";
+		if (w == "toggle") in.toggle = true;
+		else if (w == "accept") in.accept = true;
+		else if (w == "back") in.back = true;
+		else if (w == "up") stick = glm::vec2(0.f, 1.f);
+		else if (w == "down") stick = glm::vec2(0.f, -1.f);
+		else if (w == "left") stick = glm::vec2(-1.f, 0.f);
+		else if (w == "right") stick = glm::vec2(1.f, 0.f);
+		else
+			WARN_LOG(INPUT, "XR: menu.request not understood: %s", word);
+		if (glm::length(stick) > 0.f)
+			release = 1;
+		NOTICE_LOG(INPUT, "XR: scripted menu input: %s", word);
+	}
+	in.stick = stick;
+	return in;
+}
+
 void updateGamepad(XrTime time)
 {
 	static u32 lastButtons;		// DC_* bits we hold down (1 = pressed)
@@ -1482,7 +1583,7 @@ void updateGamepad(XrTime time)
 	{
 		logged = true;
 		NOTICE_LOG(INPUT, "XR: gamepad mode for [%s]: left stick = analog, right stick = D-pad, triggers = L/R, "
-				"A B X Y = A B X Y, menu or right stick click = Start, left stick click = recenter",
+				"A B X Y = A B X Y, left menu button = Start (held 0.6 s or pressed twice: VR menu), right stick click = recenter",
 				settings.content.gameId.c_str());
 	}
 	u32 buttons = 0;
@@ -1522,10 +1623,9 @@ void updateGamepad(XrTime time)
 		if (boolAction(padBAction)) buttons |= DC_BTN_B;
 		if (boolAction(padXAction)) buttons |= DC_BTN_X;
 		if (boolAction(padYAction)) buttons |= DC_BTN_Y;
-		// Start: the left menu button for now (it opens the VR menu later), or the right stick click
-		if (boolAction(startAction, Left) || boolAction(stickClickAction, Right))
-			buttons |= DC_BTN_START;
-		const bool stickClick = boolAction(stickClickAction, Left);
+		// tcvr (Manu, 2026-11-16): recenter on the right stick click; Start on the left menu
+		// button (a short press, below), which opens the VR menu when held
+		const bool stickClick = boolAction(stickClickAction, Right);
 		if (stickClick && !stickClickWas)
 			recenterRequested = true;
 		stickClickWas = stickClick;
@@ -1541,6 +1641,90 @@ void updateGamepad(XrTime time)
 		left = std::max(left, injected.lt ? 1.f : 0.f);
 		right = std::max(right, injected.rt ? 1.f : 0.f);
 		sync = true;
+	}
+	// tcvr: the VR menu on the left menu button (backlog P0-3): while it is open, the
+	// controllers drive it and the game gets nothing (all let go)
+	{
+		static bool menuWas, aWas, bWas, longFired, startPending;
+		static std::chrono::steady_clock::time_point pressedAt, startUntil, startDue;
+		const bool menuButton = sync && boolAction(startAction, Left);
+		const bool aButton = sync && boolAction(padAAction);
+		const bool bButton = sync && boolAction(padBAction);
+		MenuInput in = scriptedMenuInput();
+		// The left menu button (Manu, 2026-11-16): a short press is the game's Start, held 0.6 s
+		// or pressed twice it opens the VR menu; with the VR menu open, a press closes it.
+		// A single press waits out the double-press window (0.25 s) before Start is sent (0.15 s).
+		const auto now = std::chrono::steady_clock::now();
+		if (menuButton && !menuWas)
+		{
+			pressedAt = now;
+			longFired = false;
+			if (startPending && now < startDue && !menuOpen())
+			{
+				// the second press: the VR menu, no Start
+				startPending = false;
+				longFired = true;	// (its release does nothing)
+				in.toggle = true;
+			}
+		}
+		if (menuButton && !longFired && now - pressedAt >= std::chrono::milliseconds(600))
+		{
+			longFired = true;
+			startPending = false;
+			if (!menuOpen())
+				in.toggle = true;
+		}
+		if (!menuButton && menuWas && !longFired)
+		{
+			if (menuOpen())
+				in.toggle = true;
+			else
+			{
+				startPending = true;
+				startDue = now + std::chrono::milliseconds(250);
+			}
+		}
+		if (startPending && now >= startDue)
+		{
+			startPending = false;
+			startUntil = now + std::chrono::milliseconds(150);
+		}
+		if (now < startUntil)
+			buttons |= DC_BTN_START;
+		in.accept = in.accept || (aButton && !aWas);
+		in.back = in.back || (bButton && !bWas);
+		if (sync)
+		{
+			const glm::vec2 l = handStick(Left), r = handStick(Right);
+			const glm::vec2 strongest = glm::length(r) > glm::length(l) ? r : l;
+			if (glm::length(strongest) > glm::length(in.stick))
+				in.stick = strongest;
+		}
+		menuWas = menuButton;
+		aWas = aButton;
+		bWas = bButton;
+		const bool wasOpen = menuOpen();
+		const glm::vec3 forward = relativeRotation(views[0].pose.orientation) * glm::vec3(0.f, 0.f, -1.f);
+		if (updateMenu(in, std::atan2(-forward.x, -forward.z)) == MenuAction::Recenter)
+			recenterRequested = true;
+		if (wasOpen || menuOpen())
+		{
+			// (A or B that closed it stays out of the game until let go)
+			buttons = 0;
+			analog = glm::vec2(0.f);
+			left = right = 0.f;
+			sync = true;	// written once, at rest
+		}
+		static bool swallow;
+		if (wasOpen && !menuOpen())
+			swallow = true;
+		if (swallow)
+		{
+			if (aButton || bButton)
+				buttons &= ~(DC_BTN_A | DC_BTN_B);
+			else
+				swallow = false;
+		}
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
@@ -2129,6 +2313,7 @@ void term()
 		NOTICE_LOG(RENDERER, "XR: render context going away, closing the session");
 		// still on the render thread with the context current: our own GL objects first
 		termGun();
+		closeMenu();
 		termPanel();
 		termVignette();
 		for (EyeChain& c : chains)
@@ -2156,7 +2341,11 @@ void term()
 	aimAction = handAction = triggerAction = startAction = skipAction = recenterAction = laserAction = hapticAction = stickAction = gripAction = XR_NULL_HANDLE;
 	padAAction = padBAction = padXAction = padYAction = stickClickAction = XR_NULL_HANDLE;
 	requestRefreshRate = nullptr;
+	getRefreshRate = nullptr;
 	setPerformanceLevel = nullptr;
+	createFoveationProfile = nullptr;
+	destroyFoveationProfile = nullptr;
+	updateSwapchain = nullptr;
 	sessionRunning = focused = drawingEye = viewsLogged = false;
 	sessionLost = exiting = false;
 	originSet = recenterRequested = false;
@@ -2214,6 +2403,35 @@ bool frame()
 		appliedResolution = resolution;
 		if (sessionLost)
 			return false;
+	}
+	// tcvr: the display rate chosen in the VR menu (vr.XrRefreshRate), applied while running
+	{
+		static float appliedRate;
+		const float rate = (float)config::VrXrRefreshRate;
+		if (sessionRunning && requestRefreshRate && rate != appliedRate)
+		{
+			XRCHECK(requestRefreshRate(session, rate));
+			float now = 0.f;
+			if (getRefreshRate)
+				getRefreshRate(session, &now);
+			// (a developer override, the debug.oculus.refreshRate property, wins over the request)
+			NOTICE_LOG(RENDERER, "XR: refresh rate %.0f Hz requested, display now %.0f Hz", rate, now);
+			appliedRate = rate;
+		}
+		if (!sessionRunning)
+			appliedRate = 0.f;
+	}
+	// tcvr: fixed foveated rendering (vr.Foveation), on the current eye buffers (new ones after
+	// an MSAA or resolution change get it again)
+	{
+		const int level = std::clamp((int)config::VrFoveation, 0, 3);
+		if (updateSwapchain != nullptr && chains[0].chain != XR_NULL_HANDLE && level != foveationApplied)
+		{
+			// (off is the runtime's default: nothing to ask for on new eye buffers)
+			if (level != 0 || foveationApplied > 0)
+				applyFoveation(level);
+			foveationApplied = level;
+		}
 	}
 
 	XrFrameWaitInfo waitInfo { XR_TYPE_FRAME_WAIT_INFO };
@@ -2314,7 +2532,8 @@ bool frame()
 		const auto now = std::chrono::steady_clock::now();
 		const double dt = last == std::chrono::steady_clock::time_point() ? 0.0 : std::chrono::duration<double>(now - last).count();
 		last = now;
-		if (showPanel || vr::isMenuFrame() || !gamepadMode())
+		noteHeadsetFrame();
+		if (showPanel || vr::isMenuFrame() || !gamepadMode() || menuOpen())
 			noteSteering(0.f);
 		vignette = updateVignette(dt);
 	}
@@ -2462,10 +2681,40 @@ bool frame()
 			glViewport(0, 0, c.width, c.height);
 			drawVignette(eyeProjection(views[i].fov), vignette);
 		}
+		if (!showPanel && menuOpen())
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+			glViewport(0, 0, c.width, c.height);
+			drawMenu(eyeProjection(views[i].fov) * view);
+		}
+		// tcvr: the frame-rate counter (vr.ShowFps), head-locked at the bottom right of the view
+		if (!showPanel && config::VrShowFps)
+		{
+			float headsetFps, gameFps;
+			frameRates(headsetFps, gameFps);
+			char line[48];
+			snprintf(line, sizeof(line), "%.0f fps  |  game %.0f", headsetFps, gameFps);
+			const glm::vec3 headPos = (relativePosition(views[0].pose.position) + relativePosition(views[1].pose.position)) * 0.5f;
+			const glm::mat4 head = glm::translate(glm::mat4(1.f), headPos) * glm::mat4_cast(relativeRotation(views[0].pose.orientation));
+			const glm::mat4 at = head * glm::translate(glm::mat4(1.f), glm::vec3(0.30f, -0.27f, -0.9f));
+			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+			glViewport(0, 0, c.width, c.height);
+			drawLabel(eyeProjection(views[i].fov) * view * at, line, 0.24f);
+		}
 		if (i == 0)
 		{
 			captureIfRequested(c.fbos[index], c.width, c.height);
 			ringCapture(c.fbos[index], c.width, c.height, !showPanel && gles_vr_have_frame());
+		}
+		// tcvr: the eye's depth and stencil are done with (the layer is colour only): the GPU can
+		// drop them from its tile memory instead of writing them out (and, with MSAA, every
+		// sample of them) to the eye buffer's memory each frame (frame-rate plan, item 1)
+		// (vr.DiscardDepth off: kept, as before, to compare)
+		if (config::VrDiscardDepth && glInvalidateFramebuffer != nullptr)
+		{
+			static const GLenum discard[] { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
+			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+			glInvalidateFramebuffer(GL_FRAMEBUFFER, 2, discard);
 		}
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		XrSwapchainImageReleaseInfo release { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };

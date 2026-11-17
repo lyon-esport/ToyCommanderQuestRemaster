@@ -1288,7 +1288,8 @@ if(NOT LIBRETRO)
 			core/rend/vr/xr_gun.cpp core/rend/vr/xr_gun.h core/rend/vr/gun_model.h
 			core/rend/vr/xr_hands.cpp core/rend/vr/xr_hands.h
 			core/rend/vr/xr_panel.cpp core/rend/vr/xr_panel.h
-			core/rend/vr/xr_vignette.cpp core/rend/vr/xr_vignette.h)
+			core/rend/vr/xr_vignette.cpp core/rend/vr/xr_vignette.h
+			core/rend/vr/xr_menu.cpp core/rend/vr/xr_menu.h)
 		endif()
 
 	elseif(APPLE)
@@ -1486,7 +1487,8 @@ if(NOT LIBRETRO)
 				core/rend/vr/xr_gun.cpp core/rend/vr/xr_gun.h core/rend/vr/gun_model.h
 				core/rend/vr/xr_hands.cpp core/rend/vr/xr_hands.h
 				core/rend/vr/xr_panel.cpp core/rend/vr/xr_panel.h
-			core/rend/vr/xr_vignette.cpp core/rend/vr/xr_vignette.h)
+			core/rend/vr/xr_vignette.cpp core/rend/vr/xr_vignette.h
+			core/rend/vr/xr_menu.cpp core/rend/vr/xr_menu.h)
 		endif()
 		if(WINDOWS_STORE)
 			file(READ shell/uwp/Package.appxmanifest MANIFEST)

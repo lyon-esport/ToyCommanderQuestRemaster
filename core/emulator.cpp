@@ -18,6 +18,9 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "rend/vr/xr_host.h"
+#ifdef USE_OPENXR
+#include "rend/vr/xr_menu.h"
+#endif
 #include "emulator.h"
 #include "types.h"
 #include "stdclass.h"
@@ -1105,6 +1108,13 @@ bool Emulator::checkStatus(bool wait)
 bool Emulator::render()
 {
 	FC_PROFILE_SCOPE;
+
+#ifdef USE_OPENXR
+	// tcvr: the VR menu stopped the game: the headset keeps drawing (the last game picture,
+	// head-tracked, and the menu) and reading the controllers, which close the menu
+	if (state == Loaded && vr::xr::enabled() && vr::xr::menuOpen())
+		return vr::xr::frame();
+#endif
 
 	if (!config::ThreadedRendering)
 	{
