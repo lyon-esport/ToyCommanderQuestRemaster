@@ -2172,7 +2172,7 @@ const ReprojectParams& update(const rend_context& ctx)
 	if (const xr::Eye *eye = xr::currentEye())
 	{
 		// In the headset: game camera at the player's head, viewed through this eye.
-		params.viewProj = eye->viewProj;
+		params.viewProj = eye->viewProj * xr::gameTurn(glm::vec2(ctx.tcvrCamYaw, ctx.tcvrCamPitch));
 		params.hudViewProj = eye->hudViewProj;
 		params.comfort = comfortParams();
 		return params;

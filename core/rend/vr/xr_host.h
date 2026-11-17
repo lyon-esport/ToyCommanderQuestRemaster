@@ -43,6 +43,9 @@ glm::vec2 headYawPitch();
 // tcvr: test aid (files/head.request): which "set camera" calls the head camera turns
 // (0 player 1's camera, the default; see xr_headcam.cpp).
 int headCameraTarget();
+// tcvr: the head camera's turn of a picture (rend_context::tcvrCamYaw/Pitch) as a matrix in the
+// rebuilt game eye space: Eye::viewProj * gameTurn(turn) puts that picture where it belongs.
+glm::mat4 gameTurn(glm::vec2 turn);
 #else
 inline bool enabled() { return false; }
 inline bool frame() { return false; }
@@ -50,6 +53,7 @@ inline const Eye *currentEye() { return nullptr; }
 inline void term() {}
 inline glm::vec2 headYawPitch() { return glm::vec2(0.f); }
 inline int headCameraTarget() { return 0; }
+inline glm::mat4 gameTurn(glm::vec2) { return glm::mat4(1.f); }
 #endif
 
 }

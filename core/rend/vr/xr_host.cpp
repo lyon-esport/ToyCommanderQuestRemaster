@@ -2378,6 +2378,18 @@ const Eye *currentEye()
 	return drawingEye ? &eye : nullptr;
 }
 
+glm::mat4 gameTurn(glm::vec2 turn)
+{
+	if (turn.x == 0.f && turn.y == 0.f)
+		return glm::mat4(1.f);
+	// gameToWorld's turn moved before its scale: S^-1 * R * S
+	const float s = worldScale();
+	const glm::mat4 scale = glm::scale(glm::mat4(1.f), glm::vec3(s, -s, s));
+	const glm::mat4 r = glm::rotate(glm::rotate(glm::mat4(1.f), turn.x * turnBackYaw.load(), glm::vec3(0.f, 1.f, 0.f)),
+			turn.y * turnBackPitch.load(), glm::vec3(1.f, 0.f, 0.f));
+	return glm::inverse(scale) * r * scale;
+}
+
 glm::vec2 headYawPitch()
 {
 	return glm::vec2(headYawNow.load() + simCamYaw.load(), headPitchNow.load() + simCamPitch.load());
@@ -2695,7 +2707,9 @@ bool frame()
 		}
 		const glm::mat4 view = glm::inverse(glm::translate(glm::mat4(1.f), relativePosition(views[i].pose.position))
 				* glm::mat4_cast(relativeRotation(views[i].pose.orientation)));
-		eye = { c.fbos[index], c.width, c.height, eyeProjection(views[i].fov) * view * gameToWorld(),
+		// (the head camera's turn of the picture is added when it is drawn, from the picture's
+		// own display list: vr::update; taken here it could be the previous picture's)
+		eye = { c.fbos[index], c.width, c.height, eyeProjection(views[i].fov) * view * gameToWorld(false),
 				eyeProjection(views[i].fov) * view * gameToWorld(false) };
 		if (showPanel)
 		{
