@@ -9,12 +9,23 @@ memory patches (no game file is modified or distributed).
 > **No game data is included.** You must own the game and supply your own disc image.
 > Only the European (PAL) release, product ID `MK-5102050`, is supported.
 
-Status: early development (private). What's next: see the [roadmap](ROADMAP.md).
+Status: first release (v1.0.0). Downloads: the repository's **Releases** page. What's next: see the
+[roadmap](ROADMAP.md).
 
-## Planned install (for players)
-1. Sideload the APK (SideQuest or `adb install`).
-2. Copy your own Toy Commander disc image (`.chd` or `.gdi`) to `Download/ToyCommanderVR/` on the headset.
-3. Launch *Toy Commander VR* and grant "All files access" when the setup panel asks.
+## Install (for players)
+
+Step-by-step guide with troubleshooting:
+**[tcvr/docs/Install.md](tcvr/docs/Install.md)**. In short:
+
+1. Turn on **developer mode** on the Quest (once, from the Meta Horizon phone app).
+2. Download `ToyCommanderVR-<version>.apk` from the latest release and install it with
+   **SideQuest** ("Install APK file from folder") or `adb install -r ToyCommanderVR-<version>.apk`.
+3. Copy **your own** European (PAL) Toy Commander disc image (`.chd`, `.gdi` + tracks, `.cue` +
+   `.bin`, or `.cdi`) to the headset's `Download/ToyCommanderVR/` folder.
+4. On the headset: **Library** → **Unknown sources** → **Toy Commander VR**. Tap **Allow** and
+   switch on "All files access" when the setup panel asks, then **Play Toy Commander**.
+
+Updating: install the new APK the same way; saves and settings are kept.
 
 ## Controls
 
@@ -27,15 +38,15 @@ Meta Touch controllers act as a Dreamcast pad:
 | Left trigger / right trigger | L / R triggers |
 | A, B (right) / X, Y (left) | A, B / X, Y |
 | Left ≡ (menu), short press | Start (the game's menu) |
-| Left ≡ (menu), long press or double press | VR menu (planned) |
+| Left ≡ (menu), long press or double press | VR menu |
 | Right thumbstick click | Recenter the view |
 | Hold a grip, then right thumbstick up / down | Make the world bigger / smaller (saved) |
 
 The view also recenters by itself when you come back to the headset after more than a few
 seconds away (system menu, headset taken off).
 
-The left thumbstick click does nothing. The VR menu (planned, see the roadmap) is drawn over
-the paused game: recenter, world size, saves, quit.
+The left thumbstick click does nothing. The VR menu is drawn over the paused game: recenter,
+comfort, picture settings, saves, quit. Full list: [tcvr/docs/Controls.md](tcvr/docs/Controls.md).
 
 ## Saves
 
@@ -77,5 +88,5 @@ attached to the release).
 *Toy Commander* is © its respective owners (originally developed by No Cliché and published
 by Sega). Dreamcast and Sega are trademarks of Sega. Meta Quest is a trademark of Meta.
 This project is not affiliated with or endorsed by any of them, and contains no Sega code,
-data, graphics or sound. The public name and icon of the app are still to be chosen (see
-roadmap item P0-7).
+data, graphics or sound. The app icon uses the original *Toy Commander* logo with a "VR"
+mark, as a fan tribute.

@@ -5,7 +5,8 @@ Toy Commander VR is an unofficial fan project: a Dreamcast emulator made for the
 
 - a Meta Quest 3 (Quest 3S and Quest 2 may work but aren't tested yet);
 - a PC (Windows, macOS or Linux) and a USB-C cable that carries data;
-- the app's APK file (`ToyCommanderVR-<version>.apk`);
+- the app's APK file (`ToyCommanderVR-<version>.apk`), from the latest release on the repository's
+  **Releases** page;
 - your own disc image of **Toy Commander (Europe) (En,Fr,De,Es)**, game ID `MK-5102050`, as a
   `.chd`, a `.gdi` with its track files, a `.cue` with its `.bin` files, or a `.cdi`. Other versions
   (US, Japan) are refused: every VR adjustment is made for the European disc.
