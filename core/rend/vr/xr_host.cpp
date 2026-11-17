@@ -771,6 +771,7 @@ std::atomic<int> simCamTarget;
 // The sense of the picture's turn back in gameToWorld, for yaw and pitch (test aid: 5th and 6th
 // numbers of head.request; to be fixed once checked on the headset).
 std::atomic<float> turnBackYaw { 1.f }, turnBackPitch { 1.f };
+std::atomic<int> camAxes;	// (7th number: 0 the camera's axes are the matrix's rows, 1 its columns)
 
 static const std::string& debugDir();
 
@@ -794,7 +795,10 @@ void readHeadRequest()
 	char mode[16] {};
 	int target = 0;
 	float ySense = 1.f, pSense = 1.f;
-	const int n = sscanf(line, "%f %f %15s %d %f %f", &yaw, &pitch, mode, &target, &ySense, &pSense);
+	int axes = 0;
+	const int n = sscanf(line, "%f %f %15s %d %f %f %d", &yaw, &pitch, mode, &target, &ySense, &pSense, &axes);
+	if (n >= 7)
+		camAxes = axes;
 	if (n >= 6)
 	{
 		turnBackYaw = ySense;
@@ -2398,6 +2402,11 @@ glm::vec2 headYawPitch()
 int headCameraTarget()
 {
 	return simCamTarget.load();
+}
+
+int headCameraAxes()
+{
+	return camAxes.load();
 }
 
 void term()

@@ -194,9 +194,20 @@ bool trap(Sh4Context *ctx, u32 pc)
 	// the camera turned in its own frame by Ry(yaw) * Rx(pitch): each new axis is a column of
 	// that matrix in the old axes
 	const float cy = std::cos(camYaw), sy = std::sin(camYaw), cp = std::cos(pitch), sp = std::sin(pitch);
-	const glm::vec3 r2 = cy * r - sy * b;
-	const glm::vec3 u2 = sy * sp * r + cp * u + cy * sp * b;
-	const glm::vec3 b2 = sy * cp * r - sp * u + cy * cp * b;
+	glm::vec3 r2 = cy * r - sy * b;
+	glm::vec3 u2 = sy * sp * r + cp * u + cy * sp * b;
+	glm::vec3 b2 = sy * cp * r - sp * u + cy * cp * b;
+	if (headCameraAxes() == 1)
+	{
+		// (test: the camera's axes are the matrix's columns: A' = A * Ry(camYaw) * Rx(pitch))
+		const glm::mat3 a(glm::vec3(m[0], m[3], m[6]), glm::vec3(m[1], m[4], m[7]), glm::vec3(m[2], m[5], m[8]));	// columns
+		const glm::mat3 ry(glm::vec3(cy, 0.f, -sy), glm::vec3(0.f, 1.f, 0.f), glm::vec3(sy, 0.f, cy));
+		const glm::mat3 rx(glm::vec3(1.f, 0.f, 0.f), glm::vec3(0.f, cp, sp), glm::vec3(0.f, -sp, cp));
+		const glm::mat3 a2 = a * ry * rx;
+		r2 = glm::vec3(a2[0][0], a2[1][0], a2[2][0]);
+		u2 = glm::vec3(a2[0][1], a2[1][1], a2[2][1]);
+		b2 = glm::vec3(a2[0][2], a2[1][2], a2[2][2]);
+	}
 	const float out[12] { r2.x, r2.y, r2.z, u2.x, u2.y, u2.z, b2.x, b2.y, b2.z, m[9], m[10], m[11] };
 	for (int i = 0; i < 12; i++)
 	{

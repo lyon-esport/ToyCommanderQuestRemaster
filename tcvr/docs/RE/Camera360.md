@@ -133,3 +133,28 @@ place with sense +1 (sense -1 shifted it by twice the angle).
   builds on its stack (look-at, the call returning to `0x8C01232A`). That call is turned too.
 - Head right turned the view left: the head's yaw goes into the game camera negated (and the picture's
   turn back takes the same value, so the two still match).
+
+## Outcome of the 2026-11-17 headset tests: parked
+
+Manu tested it worn. Final state: the direction was right and the HUD stayed with the vehicle,
+but turning was **shaky with jitter, not acceptable for play**. A 20-degree step mode
+(`vr.HeadCameraStep`) showed visible jumps at each step: the camera's turn and the picture's turn
+back do not match exactly. Manu asked to roll back to the stock view (the Quest got the known-good
+build 20261117_003835 back) and to keep this work for later.
+
+Measured on a still frame (mission paused, eyes fixed, `cam 30`): residual offsets of up to ~10 px
+at 350 px width (about 3-4 degrees), with a roll pattern (left side down, right side up, top
+left, bottom right). Most likely cause: the turn is applied about the wrong axis. The code mixes
+the matrix's **rows** (treats them as the camera's axes); if the axes are its **columns**, that
+turns the camera about the room's vertical instead of its own up axis, which a pitched (~10
+degrees) chase camera turns into exactly that roll. Also `0x8C061F10` projects with
+`sx = F0 - 604 x / z`: camera-space x points LEFT (mirrored), which is why the camera needed the
+opposite sign from the picture. The last commit has a test switch for the column version
+(7th number of head.request: `... 1 1 1`), not measured yet (needs a still scene: a paused mission).
+
+Next time, in order:
+1. Measure rows vs columns on a paused mission with `cam 30` (eye captures `files/capture.request`
+   -> `eye0.ppm`, compare patches; the scratchpad script did 6 patches by block matching).
+2. Once the residual is ~0 at 30/60/90 degrees, retest continuous follow worn; check the vehicle's
+   own look-at camera (`0x8C01232A`) separately, it has its own origin.
+3. Then: the gun sight (a scene sprite, not on the HUD plane), lock-on, radar, netplay.
