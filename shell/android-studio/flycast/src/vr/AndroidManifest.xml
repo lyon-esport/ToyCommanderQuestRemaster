@@ -28,10 +28,16 @@
         </intent>
     </queries>
 
-    <!-- tcvr: app label is "Toy Commander VR" -->
+    <!-- tcvr: app label is "Toy Commander VR". Icon and banner are single high-resolution images
+         (drawable-nodpi, made by tcvr/tools/make_icons.py): the Quest reports density 200, so a set
+         of density buckets gave the library tile a 72x72 icon, stretched and blurry. -->
     <application
         android:label="Toy Commander VR"
-        tools:replace="android:label">
+        android:icon="@drawable/tcvr_icon"
+        android:roundIcon="@drawable/tcvr_icon"
+        android:banner="@drawable/tcvr_banner"
+        android:logo="@drawable/tcvr_banner"
+        tools:replace="android:label,android:icon,android:roundIcon,android:banner,android:logo">
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|quest3s" />
         <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
         <!-- tcvr: the system splash while the app starts (assets/vr_splash.png, made by

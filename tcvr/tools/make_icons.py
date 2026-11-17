@@ -2,17 +2,20 @@
 tcvr: builds the app icon and banner of the "vr" build from the Toy Commander title screen.
 
     python -I tcvr/tools/make_icons.py <title-screen.jpg>
+    python -I tcvr/tools/make_icons.py --from-master     (no title screen: reuses tcvr/assets/icon_512.png)
 
 Keeps only the main logo ("toy COMMANDER" with its camouflage bar), cut out from the title's blue
 background by colour, and puts it on a new blue radial gradient with a white centre. Writes
-shell/android-studio/flycast/src/vr/res/drawable-*/ic_launcher.png and drawable-xhdpi/ic_banner.png
-(the vr build type's resources override main's), plus tcvr/assets/icon_512.png as the master.
+shell/android-studio/flycast/src/vr/res/drawable-nodpi/tcvr_icon.png (512x512) and tcvr_banner.png
+(1280x720), plus tcvr/assets/icon_512.png as the master. The vr manifest points android:icon/banner at
+them. They are density-independent on purpose: the Quest reports density 200, so a density bucket set
+gave the launcher and the library (and QGO) the 72x72 hdpi icon, stretched and blurry.
 
 The logo is Sega's artwork (see README: not affiliated); replace the source to change the icon.
 """
 import sys
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[2]
 RES = ROOT / 'shell' / 'android-studio' / 'flycast' / 'src' / 'vr' / 'res'
@@ -76,20 +79,33 @@ def compose(logo: Image.Image, w: int, h: int, fill: float) -> Image.Image:
     return img
 
 
+def logo_from_master(master: Image.Image) -> Image.Image:
+    """The logo back out of icon_512.png: every pixel that differs from the known background."""
+    master = master.convert('RGB')
+    diff = ImageChops.difference(master, background(*master.size)).convert('L')
+    alpha = diff.point(lambda v: 0 if v < 3 else min(255, v * 8))
+    box = alpha.getbbox()
+    logo = master.crop(box)
+    logo.putalpha(alpha.crop(box))
+    return logo
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    logo = cut_logo(Image.open(sys.argv[1]))
-    master = compose(logo, 512, 512, 0.92)
-    (ROOT / 'tcvr' / 'assets').mkdir(parents=True, exist_ok=True)
-    master.save(ROOT / 'tcvr' / 'assets' / 'icon_512.png')
-    for folder, size in (('ldpi', 36), ('mdpi', 48), ('hdpi', 72), ('xhdpi', 96), ('xxhdpi', 144), ('xxxhdpi', 192)):
-        d = RES / f'drawable-{folder}'
-        d.mkdir(parents=True, exist_ok=True)
-        master.resize((size, size), Image.LANCZOS).save(d / 'ic_launcher.png')
-    banner = compose(logo, 640, 360, 0.86).resize((320, 180), Image.LANCZOS)
-    banner.save(RES / 'drawable-xhdpi' / 'ic_banner.png')
-    print('icons written to', RES)
+    master_path = ROOT / 'tcvr' / 'assets' / 'icon_512.png'
+    if sys.argv[1] == '--from-master':
+        logo = logo_from_master(Image.open(master_path))
+    else:
+        logo = cut_logo(Image.open(sys.argv[1]))
+        master = compose(logo, 512, 512, 0.92)
+        master_path.parent.mkdir(parents=True, exist_ok=True)
+        master.save(master_path)
+    out = RES / 'drawable-nodpi'
+    out.mkdir(parents=True, exist_ok=True)
+    compose(logo, 512, 512, 0.92).save(out / 'tcvr_icon.png', optimize=True)
+    compose(logo, 1280, 720, 0.86).save(out / 'tcvr_banner.png', optimize=True)
+    print('icons written to', out)
 
 
 if __name__ == '__main__':
