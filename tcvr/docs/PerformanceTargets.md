@@ -34,7 +34,7 @@ note the frame rate), then the chosen combination for 30 minutes (T6).
 | Sharper far textures | Off | none (may shimmer) | it looks better while moving |
 | HD textures (upscale cache) | 2x | CPU while building, then texture memory | T9 holds |
 | Resolution multiplier | 100% | grows with the square of the setting (130% ≈ 1.7x the pixels) | 72 fps holds with margin |
-| Comfort vignette | Medium | negligible | — |
+| Comfort vignette | Low | negligible | — |
 
 ## Recording results
 

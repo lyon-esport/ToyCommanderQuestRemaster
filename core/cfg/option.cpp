@@ -129,7 +129,7 @@ Option<float> VrTexLodBias("vr.TexLodBias", 0.f);	// tcvr: texture mipmap bias, 
 Option<bool> VrUploadOnce("vr.UploadOnce", false);	// tcvr: the kept game frame's vertices go to the GPU once per game picture, not per eye
 Option<bool> VrDiscardDepth("vr.DiscardDepth", true);	// tcvr: drop each eye's depth/stencil after drawing (not written out to memory)
 Option<int> VrFoveation("vr.Foveation", 0);	// tcvr: fixed foveated rendering, fewer pixels at the lens edges: 0 off, 1 low, 2 medium, 3 high (the Quest only)
-Option<float> VrComfortVignette("vr.ComfortVignette", 1.f);	// tcvr: darken the view's edges while it turns on its own, 0..1 (0: off)
+Option<float> VrComfortVignette("vr.ComfortVignette", 1.f);	// tcvr: darken the view's edges while it turns on its own: 0 off, 1 low, 2 medium, 3 high (0..1 scales low)
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");
