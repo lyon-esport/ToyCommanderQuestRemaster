@@ -61,3 +61,31 @@ Every polygon of a frame: `touch files/capture.request` -> `files/polys.txt` (W 
 - `[0x8C0FD5EC]` = pointer to the view record in use (set by 0x8C060F20). In menus (after a mission) it points to
   `0x8C0D21DC`, a 640x480 view with focal ~595 (dump d11_menu_after); in missions the radar view is set last.
   The VR focal now comes from this record when it is full screen, else from 0x8C0D5910 (mission view).
+
+## Decompile review 2026-11-17 (Ghidra, static; addresses only)
+
+| Address | Meaning |
+|---|---|
+| `0x8C02796A` | game main(), called by the Shinobi start-up `0x8C0B0340`; per-frame callback `0x8C0271F0` run by the loop in pointer `0x8C0A76A0` |
+| `0x8C0610F6` / `0x8C0610DA` | set / commit the camera matrix: camera-to-world `0x8C0FD5BC` (position `0x8C0FD5E0`), world-to-camera `0x8C0FD58C`, then frustum planes (`0x8C060E20` -> `0x8C0FD62C`). Single choke point for a head-driven camera |
+| `0x8C03EC88` | per-player camera update: chase cameras `0x8C0117F4` (car), `0x8C011F6C` (plane), `0x8C012378` (heli) |
+| `0x8C0D5904` | 4 player records x 0x26C (P1 main view record `0x8C0D5910` = +0x0C) |
+| `0x8C0FD7C8` | 4 pad slots x 0x30 (+0 held, +4 pressed, +0x0C/+0x10 stick, +0x18/+0x1C triggers); input enters the simulation at `0x8C01BA36` |
+| `0x8C0A76C4` | game clock in ms; `0x8C068220` rand, seed `0x8C0AF748` (reseeded at boot and at each scene load) |
+| `0x8C040BF6` | demo playback: injects recorded pad values per frame (netplay reference) |
+| `0x8C01E97C` | mission-script statement loop; handler tables `0x8C0A57D4` (statements), `0x8C0A5614` / `0x8C0A5598` (int / float expressions, token - 163) |
+| `0x8C0C7DC4` | mission status, u16 per room, 2 bits per mission (0 locked, 1 open, 2 done, 3 done+); `0x8C0A5A5C` rooms mask; rules `0x8C02A02C` |
+| `0x8C0C902C` | mission table, 0x50 per entry (index room x 8 + mission - 1): +0x20 best time ms, +0x24 records, +0x38 names |
+| `0x8C033238` | VMU job runner; system file `TOY_COMM.___` (1,408 bytes, `0x8C03280E` pack / `0x8C032AB6` load), saved game `TOY_COMM.<name>` (384 bytes, `0x8C032DD4` / `0x8C033026`); no checksum, VMS CRC 0 |
+| `0x8C018F42` | applies the screen-format option `0x8C0A5FF8` (aspect `0x8C0A4120`) |
+| `0x8C030CF4` | menu page dispatch from request bits `0x8C0A5A6C` (0x100 options `0x8C02B238`, 0x800 screen size/borders `0x8C028114`) |
+| `0x8C07B614` | correction: the "menu hit test" `0x8C07B61A` belongs to a developer window toolkit, not the game menus |
+
+The "2D menu hit test" `0x8C07B61A` listed above is inside `0x8C07B614`, the hit test of a developer
+window toolkit (debug file browser); the game menus are Menu.ghq scripts plus the pages dispatched by
+`0x8C030CF4` (options `0x8C02B238`, screen size / borders `0x8C028114`).
+
+Save layout and "Unlock all levels": see `../Saves.md`. Mission end `0x8C022E04` (jumped to from the frame
+callback when byte `0x8C0A4130` is set) writes the best time and raises the status to 3 when the time beats
+the mission table's target (+0x4C), else to 2, then runs the unlock rules `0x8C02A02C`. Cheat matcher
+`0x8C0144DA` (17 six-button codes at `0x8C0A3F08`); code 5 (`0x8C02259A`) opens every mission.
