@@ -4,7 +4,7 @@ bad=0
 while IFS= read -r f; do
   [[ -f "$f" ]] || continue
   case "${f,,}" in
-    *.chd|*.gdi|*.cdi|*.iso|source/*|ai/*|tcvr/docs/re/dumps/*|claude.md|copilot.md|agents.md|.claude/*|.github/copilot-instructions.md) echo "BLOCKED (game/AI data): $f"; bad=1;;
+    *.chd|*.gdi|*.cdi|*.iso|*1st_read.bin|*.gpr|*.rep/*|*.gzf|*.idb|*.i64|*.bndb|decomp-workspace/*|source/*|ai/*|tcvr/docs/re/dumps/*|claude.md|copilot.md|agents.md|.claude/*|.github/copilot-instructions.md) echo "BLOCKED (game/AI data): $f"; bad=1;;
   esac
   sz=$(wc -c < "$f"); (( sz > 20971520 )) && { echo "BLOCKED (>20MB): $f"; bad=1; }
 done < <(git diff --cached --name-only --diff-filter=AM)

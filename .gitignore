@@ -48,6 +48,16 @@ HND1*.bin
 dc_boot.bin
 dc_flash.bin
 tcvr/docs/RE/dumps/
+# Decompile output and disassembler databases (game code, never commit; see tcvr/docs/Decomp.md)
+1ST_READ.BIN
+1st_read.bin
+*.gpr
+*.rep/
+*.gzf
+*.idb
+*.i64
+*.bndb
+decomp-workspace/
 # Private AI files (never publish)
 AI/
 CLAUDE.md

@@ -4,6 +4,7 @@
 # TCVR_PRIVATE_ROOT overrides), e.g.
 #   ANDROID_HOME=/x/path/to/Android/Sdk
 #   TCVR_HEADSET_IP=<the headset's LAN address>
+#   TCVR_DECOMP=/x/path/to/decompile/workspace   (outside this checkout, see tcvr/docs/Decomp.md)
 # or set them in the environment.
 _tcvr_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 _tcvr_local="${TCVR_PRIVATE_ROOT:-$_tcvr_root/..}/tools/local.env"
@@ -24,3 +25,5 @@ export MSYS_NO_PATHCONV=1
 # The headset on the LAN (adb over TLS; its port changes, found by mDNS - see connect.sh).
 # Empty: connect.sh takes the first headset mDNS finds.
 export TCVR_HEADSET_IP="${TCVR_HEADSET_IP:-}"
+# Decompile workspace (game code and data, never in git): see tcvr/docs/Decomp.md.
+export TCVR_DECOMP="${TCVR_DECOMP:-}"
