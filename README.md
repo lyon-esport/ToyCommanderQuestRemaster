@@ -10,7 +10,8 @@ memory patches (no game file is modified or distributed).
 > Only the European (PAL) release, product ID `MK-5102050`, is supported.
 
 Status: first release (v1.0.0). Downloads: the repository's **Releases** page. What's next: see the
-[roadmap](ROADMAP.md).
+[roadmap](ROADMAP.md). Deeper VR features and multiplayer are developed on the `tcvr/decomp`
+branch ([tcvr/docs/Decomp.md](tcvr/docs/Decomp.md)).
 
 ## Install (for players)
 
