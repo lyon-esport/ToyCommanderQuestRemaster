@@ -400,9 +400,10 @@ bool initSwapchains()
 	for (int i = 0; i < 2; i++)
 	{
 		EyeChain& c = chains[i];
-		const float scale = std::clamp((float)config::VrXrResolution, 0.3f, 1.5f);
-		c.width = (int)(configViews[i].recommendedImageRectWidth * scale);
-		c.height = (int)(configViews[i].recommendedImageRectHeight * scale);
+		// tcvr: up to 160% (supersampling: sharper), within what the runtime takes
+		const float scale = std::clamp((float)config::VrXrResolution, 0.3f, 1.6f);
+		c.width = std::min((int)(configViews[i].recommendedImageRectWidth * scale), (int)configViews[i].maxImageRectWidth);
+		c.height = std::min((int)(configViews[i].recommendedImageRectHeight * scale), (int)configViews[i].maxImageRectHeight);
 		XrSwapchainCreateInfo info { XR_TYPE_SWAPCHAIN_CREATE_INFO };
 		info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
 		info.format = format;
@@ -470,6 +471,22 @@ bool initSwapchains()
 	NOTICE_LOG(RENDERER, "XR: eye buffers %dx%d, %s", chains[0].width, chains[0].height,
 			chains[0].samples > 1 ? (std::to_string(chains[0].samples) + "x MSAA").c_str() : "no MSAA");
 	return true;
+}
+
+// tcvr: the eye buffers go (their settings changed: vr.Msaa, vr.XrResolution); initSwapchains
+// makes new ones
+void destroySwapchains()
+{
+	for (EyeChain& c : chains)
+	{
+		if (!c.fbos.empty())
+			glDeleteFramebuffers((GLsizei)c.fbos.size(), c.fbos.data());
+		if (c.depthStencil != 0)
+			glDeleteRenderbuffers(1, &c.depthStencil);
+		if (c.chain != XR_NULL_HANDLE)
+			xrDestroySwapchain(c.chain);
+		c = EyeChain();
+	}
 }
 
 bool init()
@@ -2174,6 +2191,29 @@ bool frame()
 		// Not shown (yet): keep the emulator's frames moving without spinning.
 		rend_vr_drain(10);
 		return false;
+	}
+
+	// tcvr: sharpness settings changed while running (the VR menu, or emu.cfg): new eye buffers,
+	// between frames, so the player can compare them at once
+	{
+		static int appliedMsaa = -1;
+		static float appliedResolution = -1.f;
+		const int msaa = config::VrMsaa;
+		const float resolution = config::VrXrResolution;
+		if (appliedMsaa != -1 && (msaa != appliedMsaa || resolution != appliedResolution) && chains[0].chain != XR_NULL_HANDLE)
+		{
+			NOTICE_LOG(RENDERER, "XR: eye buffer settings changed (MSAA %d, resolution x%.2f): new eye buffers", msaa, resolution);
+			destroySwapchains();
+			if (!initSwapchains())
+			{
+				ERROR_LOG(RENDERER, "XR: new eye buffers failed, starting the session again");
+				sessionLost = true;
+			}
+		}
+		appliedMsaa = msaa;
+		appliedResolution = resolution;
+		if (sessionLost)
+			return false;
 	}
 
 	XrFrameWaitInfo waitInfo { XR_TYPE_FRAME_WAIT_INFO };

@@ -10,6 +10,7 @@
 #include "vmu_xhair.h"
 #endif
 
+#include <algorithm>
 #include <memory>
 
 /*
@@ -169,6 +170,9 @@ void SetGPState(const PolyParam* gp,u32 cflip=0)
 	glcache.UseProgram(CurrentShader->program);
 	if (CurrentShader->trilinear_alpha != -1)
 		glUniform1f(CurrentShader->trilinear_alpha, trilinear_alpha);
+	// tcvr: sharper distant textures (a negative bias picks a larger mipmap level)
+	if (CurrentShader->lodBias != -1)
+		glUniform1f(CurrentShader->lodBias, std::clamp((float)config::VrTexLodBias, -3.f, 3.f));
 	if (gpuPalette != 0)
 	{
 		int paletteIndex;
