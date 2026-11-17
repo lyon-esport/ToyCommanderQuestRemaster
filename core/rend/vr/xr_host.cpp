@@ -1731,8 +1731,9 @@ void updateGamepad(XrTime time)
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
-	// tcvr: the left stick steers the vehicle: the view turns without the head (comfort vignette)
-	noteSteering(sync ? dead(analog.x) : 0.f);
+	// tcvr: the left stick steers the vehicle: the view turns without the head (comfort vignette).
+	// Both axes: left/right turns, up/down pitches a plane or helicopter (as strong as a turn).
+	noteSteering(sync ? std::max(std::abs(dead(analog.x)), std::abs(dead(analog.y))) : 0.f);
 	const bool active = sync && (glm::length(analog) > 0.12f || left > 0.02f || right > 0.02f);
 	if (active || padActive)
 	{
