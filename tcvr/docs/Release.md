@@ -24,6 +24,8 @@ Windows fills it in. `$env:ANDROID_HOME` is the Android SDK folder.
 | Keystore (the key) | `%USERPROFILE%\keys\tcvr-release.jks` |
 | Signing properties (paths + passwords) | `%USERPROFILE%\keys\tcvr-signing.properties` |
 | Key alias | `tcvr` |
+| Certificate (public) | `CN=Crazymonster999, OU=VR LAB, O=Toy Commander VR, O=Lyon e-Sport, L=Lyon, ST=Unknown, C=FR`, created 2026-11-17 |
+| Certificate SHA-256 (public) | `F9:FD:0F:5A:E6:A4:E8:7C:8B:F8:3F:3B:FA:0C:5B:02:AB:0D:74:73:88:9C:B7:28:D5:4B:93:16:BD:7B:B8:58` |
 | keytool | `C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe` (Android Studio's JDK; `keytool` is usually not on the PATH) |
 | apksigner | `$env:ANDROID_HOME\build-tools\36.1.0\apksigner.bat` (any recent build-tools version works) |
 
