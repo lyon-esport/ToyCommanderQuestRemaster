@@ -5,7 +5,8 @@ Toy Commander VR is an unofficial fan project: a Dreamcast emulator made for the
 
 - a Meta Quest 3 (Quest 3S and Quest 2 may work but aren't tested yet);
 - a PC (Windows, macOS or Linux) and a USB-C cable that carries data;
-- the app's APK file (`ToyCommanderVR-<version>.apk`);
+- the app's APK file (`ToyCommanderVR-<version>.apk`), from the latest release on the repository's
+  **Releases** page;
 - your own disc image of **Toy Commander (Europe) (En,Fr,De,Es)**, game ID `MK-5102050`, as a
   `.chd`, a `.gdi` with its track files, a `.cue` with its `.bin` files, or a `.cdi`. Other versions
   (US, Japan) are refused: every VR adjustment is made for the European disc.
@@ -36,6 +37,11 @@ adb install -r ToyCommanderVR-<version>.apk
 ```
 
 To update later, install the new APK the same way: your saves and settings stay.
+
+Genuine releases are signed with the project's release key. Its certificate SHA-256 fingerprint is
+`F9:FD:0F:5A:E6:A4:E8:7C:8B:F8:3F:3B:FA:0C:5B:02:AB:0D:74:73:88:9C:B7:28:D5:4B:93:16:BD:7B:B8:58`
+(check it with `apksigner verify --print-certs ToyCommanderVR-<version>.apk`, from the Android SDK
+build tools).
 
 ## 3. Copy your disc image
 
@@ -85,6 +91,7 @@ Uninstalling the app deletes its saves: export them first.
 
 | Problem | What to do |
 |---|---|
+| "App not installed" or a signature conflict when updating | An earlier test build is installed (signed with a different key). VR menu → Export saves, uninstall the app, install the new APK, then import the saves |
 | The app isn't in the library | Filter on **Unknown sources**; check that developer mode is on |
 | The setup panel keeps asking for access | Settings → Apps → Toy Commander VR → Permissions → Files: allow all |
 | "isn't the European Toy Commander disc" | Use the European disc image (`MK-5102050`) |

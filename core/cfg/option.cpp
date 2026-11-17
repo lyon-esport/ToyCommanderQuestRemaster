@@ -102,10 +102,10 @@ Option<bool> VrXr("vr.Xr", false);			// PCVR (OpenXR), when asked: the PCVR zip'
 #endif
 Option<bool> VrXrGun("vr.XrGun", true);		// the controllers drive the light gun (the one that fires holds it)
 Option<bool> VrWiden("vr.Widen", true);		// let the game profile widen the view (vr.FovScale)
-Option<float> VrWorldScale("vr.WorldScale", 0.11f);	// metres per game unit (HOTD2's camera rides 15 units over the street: eye height)
+Option<float> VrWorldScale("vr.WorldScale", 0.2f);	// tcvr default 0.2 (VR menu world size 182%, its maximum); metres per game unit (HOTD2's camera rides 15 units over the street: eye height)
 Option<float> VrXrResolution("vr.XrResolution", 1.f);	// eye buffer size, times the recommended size
-Option<int> VrMsaa("vr.Msaa", 1);		// smooth edges: multisampling, e.g. 4 (the Quest only; 1: off)
-Option<int> VrXrRefreshRate("vr.XrRefreshRate", 72);	// Hz
+Option<int> VrMsaa("vr.Msaa", 2);		// smooth edges: multisampling, e.g. 4 (the Quest only; 1: off)
+Option<int> VrXrRefreshRate("vr.XrRefreshRate", 120);	// Hz (tcvr default: 120)
 Option<bool> VrLaser("vr.Laser", true);		// aim line and dot from the gun
 Option<bool> VrShowGun("vr.ShowGun", true);	// a gun in the shooting hand
 Option<float> VrGunScale("vr.GunScale", 0.68f);	// its size, times the model's (24.7 cm long); 0.68: 17 cm, a compact pistol
@@ -128,8 +128,8 @@ Option<bool> VrShowFps("vr.ShowFps", false);	// tcvr: frame-rate counter at the 
 Option<float> VrTexLodBias("vr.TexLodBias", 0.f);	// tcvr: texture mipmap bias, negative = sharper far textures (e.g. -0.5; 0: stock)
 Option<bool> VrUploadOnce("vr.UploadOnce", true);	// tcvr: the kept game frame's vertices go to the GPU once per game picture, not per eye
 Option<bool> VrDiscardDepth("vr.DiscardDepth", true);	// tcvr: drop each eye's depth/stencil after drawing (not written out to memory)
-Option<int> VrFoveation("vr.Foveation", 0);	// tcvr: fixed foveated rendering, fewer pixels at the lens edges: 0 off, 1 low, 2 medium, 3 high (the Quest only)
-Option<float> VrComfortVignette("vr.ComfortVignette", 0.6f);	// tcvr: darken the view's edges while it turns on its own, 0..1 (0: off)
+Option<int> VrFoveation("vr.Foveation", 1);	// tcvr: fixed foveated rendering, fewer pixels at the lens edges: 0 off, 1 on (the runtime's high level; the Quest only)
+Option<float> VrComfortVignette("vr.ComfortVignette", 1.f);	// tcvr: darken the view's edges while it turns on its own: 0 off, 1 low, 2 medium, 3 high (0..1 scales low)
 Option<int> VrHeadCamera("vr.HeadCamera", 0);	// tcvr: the head turns the game camera (Toy Commander): 0 off, 1 yaw, 2 yaw and pitch
 Option<float> VrHeadCameraStep("vr.HeadCameraStep", 20.f);	// tcvr: the head camera follows the head in steps of this many degrees (0: continuously)
 Option<int> VrHeadCameraSight("vr.HeadCameraSight", 0);	// tcvr: the gun sight while the head looks away: 0 stays on the vehicle's aim, 1 hidden past 30 degrees
@@ -170,7 +170,11 @@ Option<bool> IntegerScale("rend.IntegerScale", false);
 Option<bool> LinearInterpolation("rend.LinearInterpolation", true);
 Option<bool> VSync("rend.vsync", true);
 Option<int64_t> PixelBufferSize("rend.PixelBufferSize", 512_MB);
+#ifdef USE_OPENXR
+Option<int> AnisotropicFiltering("rend.AnisotropicFiltering", 4);	// tcvr: Quest default 4x
+#else
 Option<int> AnisotropicFiltering("rend.AnisotropicFiltering", 1);
+#endif
 Option<int> TextureFiltering("rend.TextureFiltering", 0); // Default
 Option<bool> ThreadedRendering("rend.ThreadedRendering", true);
 Option<bool> DupeFrames("rend.DupeFrames", false);

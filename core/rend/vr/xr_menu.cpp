@@ -101,14 +101,14 @@ const std::vector<Choice>& choices()
 		{ Section::Performance, "Show frame rate", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrShowFps ? 1.f : 0.f; }, [](float v) { config::VrShowFps.set(v > 0.5f); config::VrShowFps.save(); } },
 		// tcvr: fixed foveated rendering: fewer pixels at the lens edges, more frame rate
-		{ Section::Performance, "Fixed foveation (edges)", { 0.f, 1.f, 2.f, 3.f }, { "Off", "Low", "Medium", "High" },
+		{ Section::Performance, "Fixed foveation (edges)", { 0.f, 1.f }, { "Off", "On" },
 			[] { return (float)config::VrFoveation; }, [](float v) { saveOption(config::VrFoveation, v); } },
 		// tcvr: the other frame-rate tweaks, each switchable to compare (both on by default)
 		{ Section::Performance, "Upload frame once", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrUploadOnce ? 1.f : 0.f; }, [](float v) { config::VrUploadOnce.set(v > 0.5f); config::VrUploadOnce.save(); } },
 		{ Section::Performance, "Discard eye depth", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrDiscardDepth ? 1.f : 0.f; }, [](float v) { config::VrDiscardDepth.set(v > 0.5f); config::VrDiscardDepth.save(); } },
-		{ Section::Comfort, "Comfort vignette", { 0.f, 0.3f, 0.6f, 1.f }, { "Off", "Low", "Medium", "High" },
+		{ Section::Comfort, "Comfort vignette", { 0.f, 1.f, 2.f, 3.f }, { "Off", "Low", "Medium", "High" },
 			[] { return (float)config::VrComfortVignette; }, [](float v) { saveOption(config::VrComfortVignette, v); } },
 		// tcvr: the head-driven camera (xr_headcam.cpp): look all around the vehicle
 		{ Section::Comfort, "Head turns the camera", { 0.f, 1.f, 2.f }, { "Off", "Left/right", "Left/right + up/down" },

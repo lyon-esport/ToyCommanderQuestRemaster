@@ -2,17 +2,20 @@
 tcvr: builds the app icon and banner of the "vr" build from the Toy Commander title screen.
 
     python -I tcvr/tools/make_icons.py <title-screen.jpg>
+    python -I tcvr/tools/make_icons.py --from-master     (no title screen: reuses tcvr/assets/icon_512.png)
 
 Keeps only the main logo ("toy COMMANDER" with its camouflage bar), cut out from the title's blue
-background by colour, and puts it on a new blue radial gradient with a white centre. Writes
-shell/android-studio/flycast/src/vr/res/drawable-*/ic_launcher.png and drawable-xhdpi/ic_banner.png
-(the vr build type's resources override main's), plus tcvr/assets/icon_512.png as the master.
+background by colour, and puts it on a new blue radial gradient with a white centre. Adds a red "VR" badge in the lower right corner of both. Writes
+shell/android-studio/flycast/src/vr/res/drawable-nodpi/tcvr_icon.png (512x512) and tcvr_banner.png
+(1280x720), plus tcvr/assets/icon_512.png as the master. The vr manifest points android:icon/banner at
+them. They are density-independent on purpose: the Quest reports density 200, so a density bucket set
+gave the launcher and the library (and QGO) the 72x72 hdpi icon, stretched and blurry.
 
 The logo is Sega's artwork (see README: not affiliated); replace the source to change the icon.
 """
 import sys
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
 RES = ROOT / 'shell' / 'android-studio' / 'flycast' / 'src' / 'vr' / 'res'
@@ -67,29 +70,101 @@ def background(w: int, h: int) -> Image.Image:
     return bg
 
 
-def compose(logo: Image.Image, w: int, h: int, fill: float) -> Image.Image:
+def compose(logo: Image.Image, w: int, h: int, fill: float, dy: float = 0.0) -> Image.Image:
+    """The logo centred on the background; dy moves it up (negative) or down, as a fraction of h."""
     img = background(w, h)
     scale = min(w * fill / logo.width, h * fill / logo.height)
     lw, lh = max(1, int(logo.width * scale)), max(1, int(logo.height * scale))
     small = logo.resize((lw, lh), Image.LANCZOS)
-    img.paste(small, ((w - lw) // 2, (h - lh) // 2), small)
+    img.paste(small, ((w - lw) // 2, (h - lh) // 2 + int(h * dy)), small)
     return img
+
+
+# fonts for the "VR" badge, first found wins (heavy sans-serif, like the logo's lettering)
+BADGE_FONTS = ('ariblk.ttf', 'Arial Black.ttf', 'Arial_Black.ttf', 'impact.ttf', 'DejaVuSans-Bold.ttf', 'arialbd.ttf')
+RED, BLACK, WHITE = (228, 12, 18), (0, 0, 0), (255, 255, 255)
+# badge height, right and bottom margins, as fractions of the image height/width/height
+ICON_BADGE = (0.25, 0.04, 0.05)
+BANNER_BADGE = (0.25, 0.035, 0.05)
+
+
+def badge_font(size: int) -> ImageFont.FreeTypeFont:
+    for name in BADGE_FONTS:
+        for path in (name, '/c/Windows/Fonts/' + name, 'C:/Windows/Fonts/' + name,
+                     '/usr/share/fonts/truetype/dejavu/' + name, '/Library/Fonts/' + name):
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                pass
+    sys.exit('no bold font found for the VR badge (tried ' + ', '.join(BADGE_FONTS) + ')')
+
+
+def vr_badge(height: int) -> Image.Image:
+    """A tilted red plate with a white "VR", outlined black then white like the logo's letters."""
+    k = 4							# drawn 4x larger, then reduced: smooth edges
+    h = height * k
+    font = badge_font(int(h * 0.62))
+    l, t, r, b = font.getbbox('VR')
+    tw, th = r - l, b - t
+    pad_x, pad_y = int(h * 0.26), (h - th) // 2
+    w = tw + 2 * pad_x
+    edge = int(h * 0.07)				# black outline width (white rim is the same)
+    size = (w + 4 * edge, h + 4 * edge)
+    img = Image.new('RGBA', size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    rad = int(h * 0.22)
+    d.rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), rad + 2 * edge, fill=BLACK)
+    d.rounded_rectangle((edge, edge, size[0] - 1 - edge, size[1] - 1 - edge), rad + edge, fill=WHITE)
+    d.rounded_rectangle((2 * edge, 2 * edge, size[0] - 1 - 2 * edge, size[1] - 1 - 2 * edge), rad, fill=RED)
+    tx, ty = 2 * edge + pad_x - l, 2 * edge + pad_y - t
+    d.text((tx, ty), 'VR', font=font, fill=WHITE, stroke_width=int(h * 0.045), stroke_fill=BLACK)
+    img = img.rotate(8, resample=Image.BICUBIC, expand=True)
+    # a soft drop shadow under it, so it lifts off the blue
+    shadow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    shadow.putalpha(img.getchannel('A').point(lambda v: v * 110 // 255))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(edge))
+    out = Image.new('RGBA', (img.width + edge * 2, img.height + edge * 2), (0, 0, 0, 0))
+    out.alpha_composite(shadow, (edge * 2, edge * 2))
+    out.alpha_composite(img, (0, 0))
+    return out.resize((out.width // k, out.height // k), Image.LANCZOS)
+
+
+def add_badge(img: Image.Image, height_frac: float, right: float, bottom: float) -> Image.Image:
+    """Puts the VR badge in the lower right corner; right/bottom are margins as fractions of the size."""
+    w, h = img.size
+    badge = vr_badge(int(h * height_frac))
+    out = img.convert('RGBA')
+    out.alpha_composite(badge, (int(w * (1 - right)) - badge.width, int(h * (1 - bottom)) - badge.height))
+    return out.convert('RGB')
+
+
+def logo_from_master(master: Image.Image) -> Image.Image:
+    """The logo back out of icon_512.png: every pixel that differs from the known background."""
+    master = master.convert('RGB')
+    diff = ImageChops.difference(master, background(*master.size)).convert('L')
+    alpha = diff.point(lambda v: 0 if v < 3 else min(255, v * 8))
+    box = alpha.getbbox()
+    logo = master.crop(box)
+    logo.putalpha(alpha.crop(box))
+    return logo
 
 
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    logo = cut_logo(Image.open(sys.argv[1]))
-    master = compose(logo, 512, 512, 0.92)
-    (ROOT / 'tcvr' / 'assets').mkdir(parents=True, exist_ok=True)
-    master.save(ROOT / 'tcvr' / 'assets' / 'icon_512.png')
-    for folder, size in (('ldpi', 36), ('mdpi', 48), ('hdpi', 72), ('xhdpi', 96), ('xxhdpi', 144), ('xxxhdpi', 192)):
-        d = RES / f'drawable-{folder}'
-        d.mkdir(parents=True, exist_ok=True)
-        master.resize((size, size), Image.LANCZOS).save(d / 'ic_launcher.png')
-    banner = compose(logo, 640, 360, 0.86).resize((320, 180), Image.LANCZOS)
-    banner.save(RES / 'drawable-xhdpi' / 'ic_banner.png')
-    print('icons written to', RES)
+    master_path = ROOT / 'tcvr' / 'assets' / 'icon_512.png'
+    if sys.argv[1] == '--from-master':
+        logo = logo_from_master(Image.open(master_path))
+    else:
+        logo = cut_logo(Image.open(sys.argv[1]))
+        master = compose(logo, 512, 512, 0.92)
+        master_path.parent.mkdir(parents=True, exist_ok=True)
+        master.save(master_path)
+    out = RES / 'drawable-nodpi'
+    out.mkdir(parents=True, exist_ok=True)
+    add_badge(compose(logo, 512, 512, 0.92, -0.08), ICON_BADGE[0], *ICON_BADGE[1:]).save(out / 'tcvr_icon.png', optimize=True)
+    add_badge(compose(logo, 1280, 720, 0.86), BANNER_BADGE[0], *BANNER_BADGE[1:]).save(out / 'tcvr_banner.png', optimize=True)
+    print('icons written to', out)
 
 
 if __name__ == '__main__':
