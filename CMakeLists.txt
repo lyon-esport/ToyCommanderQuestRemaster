@@ -93,6 +93,9 @@ option(USE_VULKAN "Build with Vulkan support" ON)
 set(MOLTENVK_DYLIB "" CACHE FILEPATH "Path to macOS MoltenVK dylib for macOS Vulkan builds")
 option(USE_DX9 "Build with Direct3D 9 support" ON)
 option(USE_OPENXR "Android: build as an immersive OpenXR headset app; Windows: PCVR (hotd2-vr)" OFF)
+# tcvr: HOTD2 VR's arcade gun model is CC BY 4.0 (core/rend/vr/gun_model.h): with it, binaries are
+# GPL-3.0. Toy Commander VR (a pad game) leaves it out and stays GPL-2.0-or-later.
+option(TCVR_GUN_MODEL "Compile in HOTD2 VR's CC BY 4.0 gun model (binaries then GPL-3.0)" OFF)
 option(USE_DX11 "Build with Direct3D 11 support" ON)
 option(LIBRETRO "Build libretro core" OFF)
 option(USE_OPENGL "Use OpenGL API" ON)
@@ -1278,6 +1281,9 @@ if(NOT LIBRETRO)
 			find_package(OpenXR REQUIRED CONFIG)
 			target_link_libraries(${PROJECT_NAME} PRIVATE OpenXR::openxr_loader)
 			target_compile_definitions(${PROJECT_NAME} PRIVATE USE_OPENXR)
+			if(NOT TCVR_GUN_MODEL)
+				target_compile_definitions(${PROJECT_NAME} PRIVATE TCVR_NO_GUN_MODEL)
+			endif()
 			target_sources(${PROJECT_NAME} PRIVATE core/rend/vr/xr_host.cpp core/rend/vr/xr_host.h
 			core/rend/vr/xr_gun.cpp core/rend/vr/xr_gun.h core/rend/vr/gun_model.h
 			core/rend/vr/xr_hands.cpp core/rend/vr/xr_hands.h
@@ -1473,6 +1479,9 @@ if(NOT LIBRETRO)
 			FetchContent_MakeAvailable(openxr_sdk)
 			target_link_libraries(${PROJECT_NAME} PRIVATE OpenXR::openxr_loader opengl32)
 			target_compile_definitions(${PROJECT_NAME} PRIVATE USE_OPENXR)
+			if(NOT TCVR_GUN_MODEL)
+				target_compile_definitions(${PROJECT_NAME} PRIVATE TCVR_NO_GUN_MODEL)
+			endif()
 			target_sources(${PROJECT_NAME} PRIVATE core/rend/vr/xr_host.cpp core/rend/vr/xr_host.h
 				core/rend/vr/xr_gun.cpp core/rend/vr/xr_gun.h core/rend/vr/gun_model.h
 				core/rend/vr/xr_hands.cpp core/rend/vr/xr_hands.h
