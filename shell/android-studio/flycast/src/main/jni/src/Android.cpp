@@ -524,8 +524,30 @@ void SaveAndroidSettings()
     jni::env()->CallVoidMethod(g_emulator, saveAndroidSettingsMid, (jstring)homeDirectory);
 }
 
+#ifdef USE_OPENXR
+// tcvr: another disc than Toy Commander (Europe) was refused (emulator.cpp): the activity sends
+// the player back to the setup panel, which says why
+static void vrUnsupportedGame(const std::string& gameId)
+{
+	if (g_activity == nullptr)
+		return;
+	JNIEnv *env = jni::env();
+	jmethodID mid = env->GetMethodID(env->GetObjectClass(g_activity), "onVrUnsupportedGame", "(Ljava/lang/String;)V");
+	if (mid == nullptr)
+	{
+		env->ExceptionClear();
+		return;
+	}
+	jni::String id(gameId);
+	env->CallVoidMethod(g_activity, mid, (jstring)id);
+}
+#endif
+
 extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_BaseGLActivity_register(JNIEnv *env, jobject obj, jobject activity)
 {
+#ifdef USE_OPENXR
+    vrUnsupportedGameHook = vrUnsupportedGame;
+#endif
     if (g_activity != nullptr) {
         env->DeleteGlobalRef(g_activity);
         g_activity = nullptr;

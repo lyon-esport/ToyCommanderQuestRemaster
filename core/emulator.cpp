@@ -54,6 +54,9 @@
 #include "oslib/i18n.h"
 
 settings_t settings;
+#ifdef USE_OPENXR
+void (*vrUnsupportedGameHook)(const std::string& gameId);
+#endif
 constexpr char const *BIOS_TITLE = "Dreamcast BIOS";
 
 static void loadSpecialSettings()
@@ -861,6 +864,22 @@ void loadGameSpecificSettings()
 		// in case there is a null character followed by garbage, which happens
 		settings.content.gameId = settings.content.gameId.c_str();
 
+#ifdef USE_OPENXR
+		// tcvr: the VR build only runs the European Toy Commander disc
+		if (settings.content.gameId != TCVR_SUPPORTED_GAME_ID)
+		{
+			const std::string version = trim_trailing_ws(std::string(ip_meta.product_version, sizeof(ip_meta.product_version)));
+			const std::string area = trim_trailing_ws(std::string(ip_meta.area_symbols, sizeof(ip_meta.area_symbols)));
+			ERROR_LOG(BOOT, "tcvr: unsupported disc [%s] version [%s] area [%s]: Toy Commander VR needs [%s]",
+					settings.content.gameId.c_str(), version.c_str(), area.c_str(), TCVR_SUPPORTED_GAME_ID);
+			if (vrUnsupportedGameHook != nullptr)
+				vrUnsupportedGameHook(settings.content.gameId);
+			throw FlycastException(strprintf("This disc (game ID %s) is not the European Toy Commander (%s).",
+					settings.content.gameId.empty() ? "none" : settings.content.gameId.c_str(), TCVR_SUPPORTED_GAME_ID));
+		}
+		NOTICE_LOG(BOOT, "tcvr: supported disc [%s] version [%s]", settings.content.gameId.c_str(),
+				trim_trailing_ws(std::string(ip_meta.product_version, sizeof(ip_meta.product_version))).c_str());
+#endif
 		if (settings.content.gameId.empty())
 			return;
 	}

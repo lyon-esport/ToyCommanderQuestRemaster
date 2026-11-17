@@ -180,6 +180,7 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             // shown in the headset, so boot the player's game directly, or show the setup
             // panel when it can't be found (or read) yet.
             String game = findVrGame();
+            vrGamePath = game;
             Log.i("flycast", "VR build started without a game, booting " + game);
             if (game == null) {
                 showVrSetup();
@@ -213,6 +214,23 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
                 dlgAlert.setCancelable(false);
                 dlgAlert.create().show();
             }
+        });
+    }
+
+    // tcvr: the disc image started from the headset's library (null otherwise)
+    private String vrGamePath;
+
+    // tcvr: called from native code (emulator.cpp) when the disc isn't Toy Commander (Europe), the
+    // only version the VR build runs: kept as refused, and back to the setup panel, which says why.
+    // The emulator's process ends: its load failed, and nothing of it can be shown in the headset.
+    public void onVrUnsupportedGame(String gameId)
+    {
+        Log.w("flycast", "tcvr: unsupported disc " + vrGamePath + " (game ID [" + gameId + "])");
+        if (vrGamePath != null)
+            VrGames.rememberRefused(getApplicationContext(), new File(vrGamePath), gameId);
+        handler.post(() -> {
+            showVrSetup();
+            handler.postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 1000);
         });
     }
 
