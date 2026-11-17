@@ -195,9 +195,24 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
         Log.i("flycast", "BaseGLActivity.onCreate done");
     }
 
+    // tcvr: the game again from a fresh process after the saves changed on disk (the emulator keeps
+    // the saves open): the setup panel, in a process of its own, ends this one and starts the game
+    // (as its Play button does). A delayed relaunch from here is refused by Android (background start).
+    private String restartForSaves(Context ctx, String done)
+    {
+        VrGames.Scan scan = VrGames.scan(ctx);
+        if (scan.game == null)
+            return done + ". Quit and start the game again to use them.";
+        Intent relaunch = new Intent(ctx, VrSetupActivity.class);
+        relaunch.putExtra(VrSetupActivity.EXTRA_RELAUNCH, scan.game.getAbsolutePath());
+        relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        handler.postDelayed(() -> startActivity(relaunch), 300);
+        return done + ". Restarting...";
+    }
+
     // tcvr: called from native code (the VR menu, core/rend/vr/xr_menu.h), on the render thread:
     // 0 export the saves to Download, 1 import the newest exported saves and start the game
-    // again, 2 quit. Returns the line the menu shows.
+    // again, 2 quit, 3 unlock all levels (then start the game again). Returns the line the menu shows.
     public String onVrMenuRequest(int request)
     {
         Context ctx = getApplicationContext();
@@ -215,17 +230,16 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             if (result.startsWith("ERROR"))
                 return result.substring(Math.min(result.length(), 7));
             Log.i("flycast", "tcvr: " + result + ", restarting");
-            // The game again from a fresh process (the emulator keeps the saves open): the setup
-            // panel, in a process of its own, ends this one and starts the game (as its Play
-            // button does). A delayed relaunch from here is refused by Android (background start).
-            VrGames.Scan scan = VrGames.scan(ctx);
-            if (scan.game == null)
-                return "Saves imported. Quit and start the game again to use them.";
-            Intent relaunch = new Intent(ctx, VrSetupActivity.class);
-            relaunch.putExtra(VrSetupActivity.EXTRA_RELAUNCH, scan.game.getAbsolutePath());
-            relaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            handler.postDelayed(() -> startActivity(relaunch), 300);
-            return "Saves imported. Restarting...";
+            return restartForSaves(ctx, "Saves imported");
+        }
+        case 3: {
+            // "Unlock all levels": patches the saved games on disk, then a fresh game reads them
+            // (the running game keeps its own copy of the progress in RAM)
+            String result = VrSaves.unlockAllLevels(ctx);
+            if (result.startsWith("ERROR"))
+                return result.substring(Math.min(result.length(), 7));
+            Log.i("flycast", "tcvr: " + result + ", restarting");
+            return restartForSaves(ctx, result);
         }
         case 2:
             Log.i("flycast", "tcvr: quit from the VR menu");

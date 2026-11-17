@@ -115,7 +115,7 @@ const std::vector<Choice>& choices()
 }
 
 // A line of the page shown.
-enum class Action { Resume, Recenter, OpenSection, Back, Choice, WorldSize, Export, Import, Quit };
+enum class Action { Resume, Recenter, OpenSection, Back, Choice, WorldSize, Export, Import, UnlockAll, Quit };
 struct Entry
 {
 	Action action;
@@ -151,6 +151,9 @@ std::vector<Entry> entries()
 	{
 		list.push_back({ Action::Export });
 		list.push_back({ Action::Import });
+		// Toy Commander (PAL) only: the save layout is known for that disc alone
+		if (settings.content.gameId == "MK-5102050")
+			list.push_back({ Action::UnlockAll });
 	}
 	return list;
 }
@@ -278,16 +281,20 @@ MenuAction accept(const Entry& e)
 		setStatus(request(MenuRequest::ExportSaves));
 		return MenuAction::None;
 	case Action::Import:
+	case Action::UnlockAll:
 	case Action::Quit:
 		// A twice
 		if (confirming != (int)e.action)
 		{
 			confirming = (int)e.action;
-			setStatus(e.action == Action::Quit ? "Press A again to quit" : "Press A again: replaces your saves and restarts the game");
+			setStatus(e.action == Action::Quit ? "Press A again to quit"
+					: e.action == Action::Import ? "Press A again: replaces your saves and restarts the game"
+					: "Press A again: opens every mission of your saved games (backed up first) and restarts the game");
 			return MenuAction::None;
 		}
 		confirming = -1;
-		setStatus(request(e.action == Action::Quit ? MenuRequest::Quit : MenuRequest::ImportSaves));
+		setStatus(request(e.action == Action::Quit ? MenuRequest::Quit
+				: e.action == Action::Import ? MenuRequest::ImportSaves : MenuRequest::UnlockAll));
 		return MenuAction::None;
 	}
 	return MenuAction::None;
@@ -318,6 +325,7 @@ std::string lineText(const Entry& e)
 	}
 	case Action::Export: return "Export saves to Download";
 	case Action::Import: return "Import saves from Download";
+	case Action::UnlockAll: return "Unlock all levels";
 	case Action::Quit: return "Quit game";
 	}
 	return "";

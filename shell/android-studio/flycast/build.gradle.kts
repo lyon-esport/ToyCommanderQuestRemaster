@@ -87,8 +87,10 @@ android {
             initWith(getByName("release"))
             // tcvr: the release key for player builds (-Ptcvr.release), else the debug key
             signingConfig = signingConfigs.getByName(if (tcvrRelease) "tcvr" else "debug")
-            // run-as for copying games into app storage and reading logs (not in player builds)
-            isDebuggable = !tcvrRelease
+            // run-as for copying games into app storage and reading logs (not in player builds).
+            // -Ptcvr.debuggable with -Ptcvr.release: a release-signed test build that installs over
+            // a player build without losing its data and still has run-as for the test aids.
+            isDebuggable = !tcvrRelease || project.hasProperty("tcvr.debuggable")
             // ...but a debuggable variant builds native code as Debug (-O0: ~20 fps).
             // The last CMAKE_BUILD_TYPE on the command line wins.
             externalNativeBuild {
