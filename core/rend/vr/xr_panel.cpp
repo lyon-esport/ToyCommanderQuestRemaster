@@ -24,6 +24,7 @@
 #endif
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <memory>
 
@@ -33,7 +34,7 @@ namespace
 {
 
 constexpr int Width = 1024, Height = 448;
-constexpr float WidthMetres = 1.3f, Distance = 1.6f;
+constexpr float Distance = 1.6f;
 
 std::unique_ptr<u8[]> fontData;
 stbtt_fontinfo font;
@@ -130,46 +131,56 @@ void text(const std::string& s, float px, int y, const glm::vec3& colour)
 	}
 }
 
-void paint(const Panel& panel)
+// The panel's picture into pixels (panel.imageWidth x panel.imageHeight, top row first).
+void paint(const Panel& panel, std::vector<u8>& out)
 {
-	canvas = &pixels;
-	canvasW = Width;
-	canvasH = Height;
-	pixels.assign((size_t)Width * Height * 4, 0);
-	for (size_t i = 0; i < pixels.size(); i += 4)
-	{
-		pixels[i] = 16;
-		pixels[i + 1] = 15;
-		pixels[i + 2] = 17;
-		pixels[i + 3] = 235;
-	}
+	const int w = panel.imageWidth, h = panel.imageHeight;
+	canvas = &out;
+	canvasW = w;
+	canvasH = h;
+	out.resize((size_t)w * h * 4);
+	// tcvr: nearly opaque, for contrast over a bright game (it was 235: the game showed through)
+	const u8 background[4] { 16, 15, 17, 246 };
+	for (size_t i = 0; i < out.size(); i += 4)
+		memcpy(&out[i], background, 4);
 	// a thin red frame, like the game's own
 	const glm::vec3 red(0.62f, 0.06f, 0.06f);
-	fill(0, 0, Width, 5, red);
-	fill(0, Height - 5, Width, Height, red);
-	fill(0, 0, 5, Height, red);
-	fill(Width - 5, 0, Width, Height, red);
+	const int edge = std::max(5, h / 90);
+	fill(0, 0, w, edge, red);
+	fill(0, h - edge, w, h, red);
+	fill(0, 0, edge, h, red);
+	fill(w - edge, 0, w, h, red);
 
 	float total = 0.f;
 	for (const PanelLine& line : panel.lines)
-		total += line.size * Height * 1.45f;
-	const int bar = panel.progress >= 0.f ? 46 : 0;
-	float y = (Height - total - bar) * 0.5f;
-	for (const PanelLine& line : panel.lines)
+		total += line.size * h * 1.45f;
+	const int bar = panel.progress >= 0.f ? h * 46 / 448 : 0;
+	float y = (h - total - bar) * 0.5f;
+	for (size_t i = 0; i < panel.lines.size(); i++)
 	{
-		const float px = line.size * Height;
+		const PanelLine& line = panel.lines[i];
+		const float px = line.size * h;
+		if ((int)i == panel.highlight)
+		{
+			// tcvr: the picked line on a lighter bar, across the middle of the panel
+			const int top = (int)(y + px * 0.2f), bottom = (int)(y + px * 1.45f + px * 0.05f);
+			fill(w * 22 / 100, top, w - w * 22 / 100, bottom, glm::vec3(0.36f, 0.08f, 0.07f), 0.85f);
+		}
 		y += px * 1.45f;
 		if (!line.text.empty())
 			text(line.text, px, (int)(y - px * 0.38f), line.colour);
 	}
 	if (panel.progress >= 0.f)
 	{
-		const int x0 = Width * 18 / 100, x1 = Width - x0, top = (int)y + 24, bottom = top + 14;
+		const int x0 = w * 18 / 100, x1 = w - x0, top = (int)y + h * 24 / 448, bottom = top + h * 14 / 448;
 		fill(x0, top, x1, bottom, glm::vec3(0.24f, 0.24f, 0.26f));
 		fill(x0, top, x0 + (int)((x1 - x0) * std::clamp(panel.progress, 0.f, 1.f)), bottom, glm::vec3(0.8f, 0.1f, 0.1f));
 	}
 	if (!panel.footer.empty())
-		text(panel.footer, Height * 0.042f, Height - 28, glm::vec3(0.55f));
+		text(panel.footer, h * 0.042f, h - h * 28 / 448, glm::vec3(0.55f));
+	canvas = &pixels;
+	canvasW = Width;
+	canvasH = Height;
 }
 
 bool initGl()
@@ -205,7 +216,8 @@ void main()
 	glUniform1i(glGetUniformLocation(program, "tex"), 0);
 	glGenTextures(1, &texture);
 	glcache.BindTexture(GL_TEXTURE_2D, texture);
-	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	// tcvr: mipmapped (the menu's picture is finer than the eye's pixels: without, its letters shimmered)
+	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -235,16 +247,18 @@ void drawPanel(const glm::mat4& viewProj, const Panel& panel)
 	std::string says;
 	for (const PanelLine& line : panel.lines)
 		says += line.text + '\n';
-	says += panel.footer + '\n' + std::to_string(panel.progress < 0.f ? -1 : (int)(panel.progress * 200.f));
+	says += panel.footer + '\n' + std::to_string(panel.progress < 0.f ? -1 : (int)(panel.progress * 200.f))
+			+ '\n' + std::to_string(panel.imageWidth) + 'x' + std::to_string(panel.imageHeight) + ' ' + std::to_string(panel.highlight);
 	glActiveTexture(GL_TEXTURE0);
 	glcache.BindTexture(GL_TEXTURE_2D, texture);
 	if (says != shown)
 	{
 		shown = says;
-		paint(panel);
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+		paint(panel, pixels);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, panel.imageWidth, panel.imageHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+		glGenerateMipmap(GL_TEXTURE_2D);
 	}
-	const float hx = WidthMetres * 0.5f, hy = hx * Height / Width;
+	const float hx = panel.widthMetres * 0.5f, hy = hx * panel.imageHeight / panel.imageWidth;
 	const float quad[] {
 		-hx,  hy, -Distance,  0.f, 0.f,
 		 hx,  hy, -Distance,  1.f, 0.f,
@@ -325,6 +339,30 @@ void drawLabel(const glm::mat4& mvp, const std::string& s, float widthMetres)
 	bindVertexArray(0);
 	glcache.Disable(GL_BLEND);
 	glcache.BindTexture(GL_TEXTURE_2D, 0);
+}
+
+void paintPanelImage(const Panel& panel, std::vector<u8>& out)
+{
+	if (!loadFont())
+		return;
+	std::vector<u8> image;
+	paint(panel, image);
+	// premultiplied alpha, and the rows bottom first
+	const size_t row = (size_t)panel.imageWidth * 4;
+	out.resize(image.size());
+	for (int y = 0; y < panel.imageHeight; y++)
+	{
+		const u8 *src = &image[(size_t)y * row];
+		u8 *dst = &out[(size_t)(panel.imageHeight - 1 - y) * row];
+		for (size_t x = 0; x < row; x += 4)
+		{
+			const unsigned a = src[x + 3];
+			dst[x] = (u8)((src[x] * a + 127) / 255);
+			dst[x + 1] = (u8)((src[x + 1] * a + 127) / 255);
+			dst[x + 2] = (u8)((src[x + 2] * a + 127) / 255);
+			dst[x + 3] = (u8)a;
+		}
+	}
 }
 
 void termPanel()
