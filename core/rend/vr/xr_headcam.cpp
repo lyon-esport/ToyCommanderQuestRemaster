@@ -70,6 +70,10 @@ u32 viewMatrix;
 // kitchen). Headset test 2026-11-17: turning only the calls above changed nothing on screen,
 // turning every call turned the view; this one is what the 3D goes through.
 constexpr u32 DrawCaller = 0x8C027DD6;
+// And a camera 0x8C012xxx builds on its stack (a look-at, returns to 0x8C01232A): the user saw
+// the vehicle stay in front of them while the room turned (2026-11-17), the test with every
+// call turned moved the vehicle too; this is the other call of a mission frame.
+constexpr u32 LocalCaller = 0x8C01232A;
 // That call also draws the title and menus' 3D: it is turned only in a frame where the 3D
 // view's own call came first (in a mission or the attract demo), so menus stay put.
 u32 vblanks, viewVblank = ~0u;
@@ -95,7 +99,7 @@ bool wanted(u32 matrix, u32 caller)
 		}
 		if (vblanks - viewVblank > 2)
 			return false;
-		return matrix == viewMatrix || caller == DrawCaller;
+		return matrix == viewMatrix || caller == DrawCaller || caller == LocalCaller;
 	}
 }
 
@@ -153,7 +157,9 @@ bool trap(Sh4Context *ctx, u32 pc)
 	if (!turn)
 		return true;
 	const glm::vec2 head = headYawPitch();
-	const float yaw = head.x;
+	// (the game's camera turns the other way for the same angle: the user, 2026-11-17, head right
+	// turned the view left. The picture's turn back takes the same value, so they still match.)
+	const float yaw = -head.x;
 	const float pitch = mode >= 2 ? std::clamp(head.y, -1.4f, 1.4f) : 0.f;
 	float m[12];
 	for (int i = 0; i < 12; i++)

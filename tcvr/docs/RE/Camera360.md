@@ -126,3 +126,10 @@ eyes as if the wearer turned (shows what they'd see), `cam` turns only the game 
 not move: checks the turn back). `off` ends it. Headset tests 2026-11-17 (attract demo): with the hook on
 the `0x8C027DD6` call, `view 60/180/-90` show other parts of the room; `cam 20/25` keep the world in
 place with sense +1 (sense -1 shifted it by twice the angle).
+
+## Fixes after the first real-head tests (2026-11-17)
+
+- The vehicle stayed in front of the wearer while the room turned: it is drawn with a camera the game
+  builds on its stack (look-at, the call returning to `0x8C01232A`). That call is turned too.
+- Head right turned the view left: the head's yaw goes into the game camera negated (and the picture's
+  turn back takes the same value, so the two still match).
