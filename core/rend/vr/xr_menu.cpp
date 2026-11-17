@@ -429,32 +429,22 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 	return MenuAction::None;
 }
 
-bool menuPanel(Panel& panel, float& yaw)
+void drawMenu(const glm::mat4& viewProj)
 {
 	if (!open)
-		return false;
-	// tcvr: brighter than before (unpicked lines were 60% grey), for contrast
-	const glm::vec3 red(0.96f, 0.24f, 0.18f), white(1.f), grey(0.66f), yellow(1.f, 0.85f, 0.3f), soft(0.86f, 0.86f, 0.9f);
-	panel = Panel();
-	// tcvr: a bigger, finer picture than the first-start panel's: 1.2 x 0.78 m at 1.6 m, the
-	// letters about 1.3 degrees high (they were 0.85), 1536 pixels across (1.5x the display's
-	// pixels there, mipmapped)
-	panel.imageWidth = 1536;
-	panel.imageHeight = 1000;
-	panel.widthMetres = 1.2f;
-	panel.lines.push_back({ "TOY COMMANDER VR", 0.052f, red });
-	panel.lines.push_back({ page < 0 ? "VR menu" : SectionNames[page], 0.04f, grey });
+		return;
+	const glm::vec3 red(0.86f, 0.13f, 0.1f), white(0.95f), grey(0.6f), yellow(1.f, 0.85f, 0.3f), soft(0.8f, 0.8f, 0.85f);
+	Panel panel;
+	panel.lines.push_back({ "TOY COMMANDER VR", 0.05f, red });
+	panel.lines.push_back({ page < 0 ? "VR menu" : SectionNames[page], 0.04f, soft });
 	const auto list = entries();
 	for (int i = 0; i < (int)list.size(); i++)
 	{
 		std::string s = lineText(list[i]);
 		const bool sel = i == selected;
 		if (sel)
-		{
 			s = hasValue(list[i]) ? "<   " + s + "   >" : ">  " + s + "  <";
-			panel.highlight = (int)panel.lines.size();
-		}
-		panel.lines.push_back({ s, 0.046f, sel ? (confirming == (int)list[i].action ? yellow : white) : soft });
+		panel.lines.push_back({ s, 0.042f, sel ? (confirming == (int)list[i].action ? yellow : white) : grey });
 	}
 	char rates[96];
 	int upscaled, queued, cached;
@@ -462,19 +452,9 @@ bool menuPanel(Panel& panel, float& yaw)
 	snprintf(rates, sizeof(rates), "Headset %.0f fps   Game %.0f fps%s   HD textures %d", headsetFps, gameFps,
 			pausedGame ? " (paused)" : "", cached);
 	const bool showStatus = !status.empty() && Clock::now() < statusUntil;
-	panel.lines.push_back({ showStatus ? status : std::string(rates), 0.032f, showStatus ? yellow : grey });
-	yaw = placedYaw;
-	return true;
-}
-
-void drawMenu(const glm::mat4& viewProj)
-{
-	Panel panel;
-	float yaw;
-	if (!menuPanel(panel, yaw))
-		return;
+	panel.lines.push_back({ showStatus ? status : std::string(rates), 0.034f, showStatus ? yellow : grey });
 	// in front of where the head looked when it opened
-	drawPanel(viewProj * glm::rotate(glm::mat4(1.f), yaw, glm::vec3(0.f, 1.f, 0.f)), panel);
+	drawPanel(viewProj * glm::rotate(glm::mat4(1.f), placedYaw, glm::vec3(0.f, 1.f, 0.f)), panel);
 }
 
 }

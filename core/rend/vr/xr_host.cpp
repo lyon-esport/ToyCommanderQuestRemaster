@@ -136,24 +136,6 @@ struct EyeChain
 	int samples = 1;	// MSAA (the GPU resolves it on the way out of its tile memory)
 };
 EyeChain chains[2];
-int64_t swapchainFormat;	// tcvr: the eye buffers' (the menu layer's too)
-
-// tcvr: the VR menu as its own compositor quad layer (vr menu sharpness): the headset's
-// compositor samples its picture once, straight to the display, with the lens correction.
-// Drawn into the eye buffers instead, it was resampled twice (into the eye, then by the
-// compositor), which made its letters soft and shimmering.
-struct MenuLayer
-{
-	XrSwapchain chain = XR_NULL_HANDLE;
-	std::vector<SwapchainImage> images;
-	int width = 0, height = 0;
-	bool failed = false;		// no layer: the menu is drawn into the eyes, as before
-	bool ready = false;			// a picture was given to the swapchain
-	std::string shown;			// what it says
-	std::vector<u8> pixels;
-};
-MenuLayer menuLayer;
-bool layerSettings;			// XR_FB_composition_layer_settings: the compositor's supersampling
 XrView views[2] { { XR_TYPE_VIEW }, { XR_TYPE_VIEW } };
 
 Eye eye;
@@ -415,7 +397,6 @@ bool initSwapchains()
 		ERROR_LOG(RENDERER, "XR: no RGBA8 swapchain format");
 		return false;
 	}
-	swapchainFormat = format;
 	u32 viewCount = 0;
 	if (!XRCHECK(xrEnumerateViewConfigurationViews(instance, systemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &viewCount, nullptr))
 			|| viewCount != 2)
@@ -516,102 +497,6 @@ void destroySwapchains()
 	foveationApplied = -1;
 }
 
-// tcvr: the menu layer's swapchain, made the first time the menu opens (mipmapped: the
-// compositor picks the level that fits the display's pixels, no shimmer)
-bool initMenuLayer(int width, int height)
-{
-	if (menuLayer.chain != XR_NULL_HANDLE && menuLayer.width == width && menuLayer.height == height)
-		return true;
-	if (menuLayer.failed || session == XR_NULL_HANDLE || swapchainFormat == 0)
-		return false;
-	if (menuLayer.chain != XR_NULL_HANDLE)
-		xrDestroySwapchain(menuLayer.chain);
-	menuLayer = MenuLayer();
-	int mips = 1;
-	while ((std::max(width, height) >> mips) > 0)
-		mips++;
-	XrSwapchainCreateInfo info { XR_TYPE_SWAPCHAIN_CREATE_INFO };
-	info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
-	info.format = swapchainFormat;
-	info.sampleCount = 1;
-	info.width = width;
-	info.height = height;
-	info.faceCount = 1;
-	info.arraySize = 1;
-	info.mipCount = mips;
-	XrResult result = xrCreateSwapchain(session, &info, &menuLayer.chain);
-	if (XR_FAILED(result))
-	{
-		// (without the transfer flag, which some runtimes don't take)
-		info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-		result = xrCreateSwapchain(session, &info, &menuLayer.chain);
-	}
-	u32 imageCount = 0;
-	if (XR_FAILED(result) || !XRCHECK(xrEnumerateSwapchainImages(menuLayer.chain, 0, &imageCount, nullptr)))
-	{
-		WARN_LOG(RENDERER, "XR: no menu layer (error %d): the menu is drawn into the eyes", (int)result);
-		if (menuLayer.chain != XR_NULL_HANDLE)
-			xrDestroySwapchain(menuLayer.chain);
-		menuLayer = MenuLayer();
-		menuLayer.failed = true;
-		return false;
-	}
-	menuLayer.images.assign(imageCount, { SwapchainImageType });
-	if (!XRCHECK(xrEnumerateSwapchainImages(menuLayer.chain, imageCount, &imageCount, (XrSwapchainImageBaseHeader *)menuLayer.images.data())))
-	{
-		xrDestroySwapchain(menuLayer.chain);
-		menuLayer = MenuLayer();
-		menuLayer.failed = true;
-		return false;
-	}
-	menuLayer.width = width;
-	menuLayer.height = height;
-	NOTICE_LOG(RENDERER, "XR: menu layer %dx%d, %d mip levels%s", width, height, mips,
-			layerSettings ? ", compositor supersampling" : "");
-	return true;
-}
-
-// tcvr: the menu's picture into the next swapchain image, when what it says changed (the
-// layer shows the last image given)
-bool updateMenuLayer(const Panel& panel)
-{
-	if (!initMenuLayer(panel.imageWidth, panel.imageHeight))
-		return false;
-	std::string says;
-	for (const PanelLine& line : panel.lines)
-		says += line.text + '\n';
-	says += std::to_string(panel.highlight);
-	for (const PanelLine& line : panel.lines)
-		says += ' ' + std::to_string((int)(line.colour.r * 255.f)) + ',' + std::to_string((int)(line.colour.g * 255.f));
-	if (menuLayer.ready && says == menuLayer.shown)
-		return true;
-	u32 index = 0;
-	XrSwapchainImageAcquireInfo acquire { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
-	XrSwapchainImageWaitInfo wait { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
-	wait.timeout = XR_INFINITE_DURATION;
-	if (!XRCHECK(xrAcquireSwapchainImage(menuLayer.chain, &acquire, &index)))
-		return menuLayer.ready;
-	if (!XRCHECK(xrWaitSwapchainImage(menuLayer.chain, &wait)))
-	{
-		XrSwapchainImageReleaseInfo release { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-		xrReleaseSwapchainImage(menuLayer.chain, &release);
-		return menuLayer.ready;
-	}
-	paintPanelImage(panel, menuLayer.pixels);
-	glActiveTexture(GL_TEXTURE0);
-	glcache.BindTexture(GL_TEXTURE_2D, menuLayer.images[index].image);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, menuLayer.width, menuLayer.height, GL_RGBA, GL_UNSIGNED_BYTE, menuLayer.pixels.data());
-	glGenerateMipmap(GL_TEXTURE_2D);
-	glcache.BindTexture(GL_TEXTURE_2D, 0);
-	XrSwapchainImageReleaseInfo release { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-	if (!XRCHECK(xrReleaseSwapchainImage(menuLayer.chain, &release)))
-		return false;
-	menuLayer.shown = says;
-	menuLayer.ready = true;
-	return true;
-}
-
 // tcvr: fixed foveated rendering (frame-rate plan, item 6): the runtime renders the lens
 // edges, which the lenses blur anyway, with fewer pixels. 0 off, 1 on: the runtime's strongest
 // level, "high", invisible in Toy Commander (Training, Quest 3, 120 Hz: 87 -> 117 fps). Meta's
@@ -700,11 +585,6 @@ bool init()
 		extensions.push_back(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME);
 		extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
 	}
-
-	// tcvr: the menu layer's supersampling (sharper letters; the Quest has it)
-	layerSettings = has(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
-	if (layerSettings)
-		extensions.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
 
 	XrInstanceCreateInfo createInfo { XR_TYPE_INSTANCE_CREATE_INFO };
 #ifdef __ANDROID__
@@ -2457,9 +2337,6 @@ void term()
 	}
 	for (EyeChain& c : chains)
 		c = EyeChain();
-	menuLayer = MenuLayer();	// (its swapchain went with the session)
-	swapchainFormat = 0;
-	layerSettings = false;
 	instance = XR_NULL_HANDLE;
 	systemId = XR_NULL_SYSTEM_ID;
 	session = XR_NULL_HANDLE;
@@ -2724,36 +2601,6 @@ bool frame()
 
 	XrCompositionLayerProjectionView projViews[2] { { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW }, { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW } };
 	const bool render = frameState.shouldRender && located;
-	// tcvr: the VR menu on its own layer, over the eyes' (see MenuLayer)
-	XrCompositionLayerQuad menuQuad { XR_TYPE_COMPOSITION_LAYER_QUAD };
-	XrCompositionLayerSettingsFB menuQuadSettings { XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB };
-	bool menuOnLayer = false;
-	{
-		Panel menu;
-		float yaw;
-		if (render && !showPanel && menuPanel(menu, yaw) && updateMenuLayer(menu))
-		{
-			menuOnLayer = true;
-			// in front of where the head looked when it opened, at eye height (room space
-			// relative to the game camera's place, then the headset's local space)
-			const glm::quat turn = glm::angleAxis(yaw, glm::vec3(0.f, 1.f, 0.f));
-			const glm::vec3 at = originPos + originRot * (turn * glm::vec3(0.f, 0.f, -MenuDistanceMetres));
-			const glm::quat facing = originRot * turn;
-			menuQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;	// (premultiplied)
-			menuQuad.space = localSpace;
-			menuQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-			menuQuad.subImage.swapchain = menuLayer.chain;
-			menuQuad.subImage.imageRect.extent = { menuLayer.width, menuLayer.height };
-			menuQuad.pose.position = { at.x, at.y, at.z };
-			menuQuad.pose.orientation = { facing.x, facing.y, facing.z, facing.w };
-			menuQuad.size = { menu.widthMetres, menu.widthMetres * menu.imageHeight / menu.imageWidth };
-			if (layerSettings)
-			{
-				menuQuadSettings.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_NORMAL_SUPER_SAMPLING_BIT_FB;
-				menuQuad.next = &menuQuadSettings;
-			}
-		}
-	}
 	bool ok = true;
 	for (int i = 0; render && i < 2; i++)
 	{
@@ -2838,7 +2685,7 @@ bool frame()
 			glViewport(0, 0, c.width, c.height);
 			drawVignette(eyeProjection(views[i].fov), vignette);
 		}
-		if (!showPanel && menuOpen() && !menuOnLayer)
+		if (!showPanel && menuOpen())
 		{
 			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
 			glViewport(0, 0, c.width, c.height);
@@ -2890,11 +2737,11 @@ bool frame()
 	layer.space = localSpace;
 	layer.viewCount = 2;
 	layer.views = projViews;
-	const XrCompositionLayerBaseHeader *layers[] { (const XrCompositionLayerBaseHeader *)&layer, (const XrCompositionLayerBaseHeader *)&menuQuad };
+	const XrCompositionLayerBaseHeader *layers[] { (const XrCompositionLayerBaseHeader *)&layer };
 	XrFrameEndInfo endInfo { XR_TYPE_FRAME_END_INFO };
 	endInfo.displayTime = frameState.predictedDisplayTime;
 	endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-	endInfo.layerCount = render && ok ? (menuOnLayer ? 2 : 1) : 0;
+	endInfo.layerCount = render && ok ? 1 : 0;
 	endInfo.layers = layers;
 	XRCHECK(xrEndFrame(session, &endInfo));
 	return render && ok;
