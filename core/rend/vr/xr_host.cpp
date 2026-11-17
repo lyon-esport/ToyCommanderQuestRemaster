@@ -761,8 +761,8 @@ glm::quat yawOnly(const glm::quat& q)
 // to the left, pitch up): "view" turns the head itself (the eye views, and so the game camera),
 // as if the wearer turned that much; "cam" turns only the game camera, the eyes stay (the world
 // must not move: checks the camera turn and the view's turn back match). "target" picks which
-// "set camera" calls the head camera turns (xr_headcam.cpp: 0 the 3D view, 1 player 1's matrix B, 2 its two matrices,
-// 3 every call). "off" ends it. Taken when read, checked five times a second.
+// "set camera" calls the head camera turns (xr_headcam.cpp: 0 the drawing cameras of a gameplay
+// frame, the default; 3 every call). "off" ends it. Taken when read, checked five times a second.
 struct HeadSim
 {
 	float yaw = 0.f, pitch = 0.f;
@@ -774,7 +774,6 @@ std::atomic<int> simCamTarget;
 // The sense of the picture's turn back in gameToWorld, for yaw and pitch (test aid: 5th and 6th
 // numbers of head.request; to be fixed once checked on the headset).
 std::atomic<float> turnBackYaw { 1.f }, turnBackPitch { 1.f };
-std::atomic<int> camAxes;	// (7th number: 0 the camera's axes are the matrix's rows, 1 its columns)
 
 static const std::string& debugDir();
 
@@ -798,10 +797,7 @@ void readHeadRequest()
 	char mode[16] {};
 	int target = 0;
 	float ySense = 1.f, pSense = 1.f;
-	int axes = 0;
-	const int n = sscanf(line, "%f %f %15s %d %f %f %d", &yaw, &pitch, mode, &target, &ySense, &pSense, &axes);
-	if (n >= 7)
-		camAxes = axes;
+	const int n = sscanf(line, "%f %f %15s %d %f %f", &yaw, &pitch, mode, &target, &ySense, &pSense);
 	if (n >= 6)
 	{
 		turnBackYaw = ySense;
@@ -2406,11 +2402,6 @@ glm::vec2 headYawPitch()
 int headCameraTarget()
 {
 	return simCamTarget.load();
-}
-
-int headCameraAxes()
-{
-	return camAxes.load();
 }
 
 void term()

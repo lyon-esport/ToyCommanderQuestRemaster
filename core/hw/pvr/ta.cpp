@@ -510,8 +510,6 @@ void ta_vtx_ListInit(bool continuation)
 	else
 		taRenderPass++;
 	SetCurrentTARC(TA_OL_BASE);
-	if (!continuation)
-		tcvrCamTurnListInit();	// tcvr: head-driven camera
 	ta_tad.ClearPartial();
 	markObjectListBlocks(taRenderPass);
 

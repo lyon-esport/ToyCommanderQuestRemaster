@@ -279,10 +279,8 @@ struct rend_context
 	std::vector<N2LightModel> lightModels;
 
 	// tcvr: how far the game camera was turned (by the head, see xr_headcam.cpp) for this
-	// picture, radians: the VR view turns the picture back by as much. Set when the list starts
-	// (ta_vtx_ListInit) or by the first camera hook after it; not reset by Clear().
+	// picture, radians: the VR view turns the picture back by as much. Set at render start.
 	float tcvrCamYaw = 0.f, tcvrCamPitch = 0.f;
-	bool tcvrCamTurnSet = false;
 
 	void Clear()
 	{
@@ -398,10 +396,10 @@ TA_context *tactx_Alloc();
 #define TACTX_NONE (0xFFFFFFFF)
 
 void SetCurrentTARC(u32 addr);
-// tcvr: the head-driven camera: the turn the game's camera got (emulator thread, from the hook),
-// and the start of a new display list (ta_vtx_ListInit), which takes a turn noted before it.
-void tcvrNoteCamTurn(float yaw, float pitch);
-void tcvrCamTurnListInit();
+// tcvr: the head-driven camera: the turn the game's cameras got for the frame the game just
+// ended (emulator thread, from the hook), and the render start that takes it for its picture.
+void tcvrSetFrameCamTurn(float yaw, float pitch);
+void tcvrTakeFrameCamTurn(rend_context& rend);
 bool QueueRender(TA_context* ctx);
 TA_context* DequeueRender();
 void FinishRender(TA_context* ctx);

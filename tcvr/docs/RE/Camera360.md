@@ -158,3 +158,57 @@ Next time, in order:
 2. Once the residual is ~0 at 30/60/90 degrees, retest continuous follow worn; check the vehicle's
    own look-at camera (`0x8C01232A`) separately, it has its own origin.
 3. Then: the gun sight (a scene sprite, not on the HUD plane), lock-on, radar, netplay.
+
+## Rework with the decompile (2026-11-17, branch tcvr/decomp-camera360)
+
+The function map of the decompile answered the open questions. Addresses only here (the
+decompiled code stays outside the repository).
+
+**Matrix layout (the jitter's main cause).** The load routine `0x8C061498` fills XMTRX back to
+front, and the vector routines (`0x8C061BC8`, `0x8C063588`) load and store x, y, z back to front
+too; the two reversals cancel. In memory order: `world = M * cam + t`, `M[row][col] = m[3*row + col]`,
+`t = m[9..11]`. **The camera's axes are the matrix's columns**, not its rows. The first hook mixed the
+rows, which turns the camera about the room's vertical instead of its own up axis; with the chase
+camera pitched down that does not match the picture's turn back (the roll pattern measured above).
+Camera space is x left, y up, z forward (`0x8C061F60`: `sx = cx - x*fx/z`, `sy = cy - y*fy/z`).
+The hook now writes `M' = M * Ry(yaw) * Rx(-pitch)`: in the VR eye space (x right, y up, z back,
+a half turn about y) that is exactly `Ry(yaw) * Rx(pitch)`, the turn back of `gameTurn()`.
+
+**Which picture gets which turn (second cause).** The turn was noted at the display list's start; a
+list could take the previous frame's head while its cameras had the new one (a one-frame mismatch,
+as large as the head moves in a frame). Now a hook at the scene's end (`0x8C057A86` rnd_FrameEnd,
+before kmRender/kmEndScene) latches the frame's turn and the render start takes it
+(`tcvrTakeFrameCamTurn` in `Renderer_if.cpp`). The head is read once per game frame, at the
+simulation's camera call.
+
+**Frame order** (main frame callback `0x8C0271F0`): simulation `0x8C01910C` (scripts, AI, physics,
+then "set camera" returning to `0x8C019278`, then 3D sound), then the render callback held at
+`0x8C0D21D0` (`0x8C01937C` in game, `0x8C027DBA` in menus). Per player in `0x8C01937C`: targeting
+(`0x8C04041A`, sets the stock camera for the lock-on), the player's camera (`0x8C03EC88`), the world
+(`0x8C0192E0`), the crosshair (`0x8C03EEF8`), the HUD (`0x8C03FDBE`), then `0x8C057A86`.
+
+**"Set camera" callers** (return addresses), now matched one by one:
+
+| Return | Caller | Turned |
+|---|---|---|
+| `0x8C019278` | end of the simulation (3D sound, culling) | yes (sound follows the head) |
+| `0x8C011F18`, `0x8C01232A`, `0x8C012622` | chase cameras: car, plane (look-at), helicopter | yes |
+| `0x8C03ED5C` | the player's camera | yes |
+| `0x8C027DD6` | the scene camera (menu scene renderer) | yes, in a gameplay frame only |
+| `0x8C03FC1C`, `0x8C03FD9E` | objective arrow's camera, and the player's put back | yes |
+| `0x8C03B6BA` | turret aim (game logic) | no |
+| `0x8C0402B4` | lock-on target search (game logic) | no |
+
+Unknown callers are left alone and logged once. A gameplay frame is one where the simulation's call
+ran in the last 2 VBlanks; in menus, the title and pause nothing is turned.
+
+**HUD and sights.** The HUD plane is drawn without the turn back (it stays with the vehicle). The
+crosshair, lock-on square and weapon sights are world points projected with the world-to-camera
+matrix `0x8C0FD58C` (`0x8C03A824`) and drawn on that plane: a hook at `0x8C03EEF8` writes the
+stock (unturned) world-to-camera matrix back there first, so they land on their point in the
+vehicle's frame. The split-screen player arrows (`0x8C03F0E8`) would need the same; the head
+camera is off in split screen (`0x8C0A72F4` player count > 1) and in netplay.
+
+**Options.** VR menu > Comfort > "Head turns the camera": Off / Left-right / Left-right + up-down.
+The step mode and the sight option are gone (the steps only hid the mismatch; the sight now follows
+the vehicle's aim by construction).

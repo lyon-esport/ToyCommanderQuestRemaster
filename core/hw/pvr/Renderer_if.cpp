@@ -602,6 +602,7 @@ void rend_start_render()
 	ctx->rend.isRTT = (FB_W_SOF1 & 0x1000000) != 0;
 	ctx->rend.fb_W_SOF1 = FB_W_SOF1;
 	ctx->rend.fb_W_CTRL.full = FB_W_CTRL.full;
+	tcvrTakeFrameCamTurn(ctx->rend);	// tcvr: the head-driven camera's turn of this picture
 
 	ctx->rend.globClip.x = (TA_GLOB_TILE_CLIP.tile_x_num + 1) * 32;
 	ctx->rend.globClip.y = (TA_GLOB_TILE_CLIP.tile_y_num + 1) * 32;

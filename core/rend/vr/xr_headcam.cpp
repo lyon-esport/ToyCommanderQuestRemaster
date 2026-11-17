@@ -2,23 +2,40 @@
 	tcvr: the head-driven game camera of Toy Commander VR (backlog P0-8). See xr_headcam.h and
 	tcvr/docs/RE/Camera360.md.
 
-	The game's cameras are records from 0x8C0D5904 (one per player; 0x8C03FFA8 returns the one in
-	use). Each holds two 3x4 camera-to-world matrices (rows: right, up, back, then the position;
-	y up, right-handed): at +0x154 and at +0x184. The renderer's "set camera" routine 0x8C0610F6
-	(r4 = such a matrix) loads it into XMTRX (0x8C061498), then at 0x8C0610DA saves it
-	(0x8C0FD5BC), inverts it into the view matrix (0x8C0FD58C) and makes the culling planes from
-	them (0x8C060E20). Everything the game then draws and culls goes through those.
+	The renderer's "set camera" routine 0x8C0610F6 (r4 = a 12-float camera-to-world matrix) loads
+	it into XMTRX (0x8C061498), saves it (0x8C0FD5BC), inverts it into the world-to-camera matrix
+	(0x8C0FD58C) and builds the culling planes (0x8C060E20). Everything the game then draws and
+	culls goes through those.
 
-	The hook is the routine's first instruction, 0x8C0610F6 ("sts.l pr,@-r15", replaced by the
-	BIOS trap opcode, which reios_trap hands to us): for the 3D view's call, the camera turned by
-	the head (yaw about its own up axis, then pitch about its right axis; the position stays) is
-	written to a scratch matrix in RAM the game doesn't use, and r4 points the routine at it. The
-	game's own camera record is left alone, so its camera logic (the chase, smoothing) and its
-	game state never see the head.
-	(A first try at 0x8C0610DA rewrote XMTRX in the CPU context after the load: the RAM dump
-	showed the routine still saved the stock matrix. The dynarec keeps the FPU registers it
-	loaded in host registers there; the start of the routine is a block start, every register
-	is in the context.)
+	The matrix layout, from the load routine's code (it fills XMTRX back to front and the vector
+	routines load x, y, z back to front too, so the two reversals cancel): in memory order,
+	world = M * cam + t with M[row][col] = m[3 * row + col] and t = m[9..11]. The camera's own
+	axes are the matrix's COLUMNS. Camera space is x left, y up, z forward (the projection
+	0x8C061F60: sx = cx - x * fx / z, sy = cy - y * fy / z).
+	(The first version of this hook mixed the rows: that turned the camera about the room's
+	vertical instead of its own up axis, which with the chase camera's downward pitch did not
+	match the picture's turn back: the residual swim was the jitter seen worn on 2026-11-17.)
+
+	The hook is the routine's first instruction ("sts.l pr,@-r15", replaced by the BIOS trap
+	opcode, which reios_trap hands to us): for the drawing cameras of a gameplay frame, the
+	camera turned by the head (C' = C * R, R a turn in the camera's own axes) is written to a
+	scratch matrix in RAM the game doesn't use, and r4 points the routine at it. The game's own
+	camera records are never written, so its camera logic and game state never see the head.
+	The picture drawn with C' is turned back by exactly R in the VR view (gameTurn), so the
+	world stays put whatever the head does, and every camera turned this way (the chase camera,
+	the vehicle's look-at, the scene's copy) lands back where the stock picture had it.
+
+	Calls left alone: the targeting (lock-on) and the turret aim use "set camera" for game
+	logic; the weapons aim with the vehicle, not the head.
+
+	Each picture is turned back by the turn of its own frame: the hook at the scene's end
+	(rnd_FrameEnd 0x8C057A86, before kmRender) latches it and the render start takes it
+	(tcvrTakeFrameCamTurn). (The first version noted it at the display list's start: a list
+	could take the previous frame's head while its cameras had the new one, another jitter.)
+
+	A second hook at the start of the crosshair drawing (0x8C03EEF8) puts the stock (unturned)
+	world-to-camera matrix back: the crosshair, lock-on square and weapon sights are world points
+	projected to the 2D HUD plane, and the HUD plane stays with the vehicle (no turn back).
 
 	This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
@@ -38,6 +55,7 @@
 #include <cmath>
 #include <cstring>
 #include <iterator>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace vr::xr
 {
@@ -45,93 +63,48 @@ namespace
 {
 
 constexpr const char *GameId = "MK-5102050";	// Toy Commander (Europe)
-constexpr u32 HookPc = 0x8C0610F6;
-// The stock words from the hook on (the hook's own first): the code must be exactly this.
-constexpr u16 Stock[] { 0x4F22, 0xD320, 0x430B, 0x0009, 0xAFEC, 0x4F26 };
-constexpr u32 CameraRecords = 0x8C0D5904;
-constexpr u32 MatrixA = 0x154, MatrixB = 0x184;
+
+struct Hook
+{
+	u32 pc;
+	u16 stock[6];	// the stock words from the hook on (the hook's own first): the code must be exactly this
+};
+// "set camera" (sts.l pr,@-r15 ...)
+constexpr Hook SetCamera { 0x8C0610F6, { 0x4F22, 0xD320, 0x430B, 0x0009, 0xAFEC, 0x4F26 } };
+// the crosshair / sights of a player (mov.l r13,@-r15 ...)
+constexpr Hook Crosshair { 0x8C03EEF8, { 0x2FD6, 0x9D7A, 0xD33F, 0x04D7, 0x9078, 0x2FC6 } };
+// the end of a scene: kmRender, kmEndScene (sts.l pr,@-r15 ...)
+constexpr Hook FrameEnd { 0x8C057A86, { 0x4F22, 0x6343, 0x2338, 0x8D09, 0x2F46, 0xD466 } };
+constexpr const Hook *Hooks[] { &SetCamera, &Crosshair, &FrameEnd };
+
+constexpr u32 CamToWorld = 0x8C0FD5BC;
+constexpr u32 WorldToCam = 0x8C0FD58C;
+constexpr u32 PlayerCount = 0x8C0A72F4;	// split screen: 1..4
 // 48 bytes for the turned matrix: in the boot area (IP.BIN, 0x8C008000-0x8C00FFFF) the game
 // leaves alone once running; zero in every dump taken (kitchen, attract demo, a mission).
 constexpr u32 Scratch = 0x8C00BF00;
 
+// The "set camera" calls, by return address (tcvr/docs/RE/Camera360.md).
+constexpr u32 SimCaller = 0x8C019278;		// end of the simulation frame (net_game_sim_frame): 3D sound, culling
+constexpr u32 TurnedCallers[] {
+	SimCaller,
+	0x8C011F18,		// chase camera, car (cam_update_mode_a)
+	0x8C01232A,		// chase camera, plane (cam_update_mode_b, a look-at on its stack)
+	0x8C012622,		// chase camera, helicopter (cam_update_mode_c)
+	0x8C03ED5C,		// the player's camera (cam_playerUpdateCamera)
+	0x8C027DD6,		// the scene's camera the 3D is drawn with (mnu_scene_render)
+	0x8C03FC1C,		// the objective arrow's camera (hud_drawObjectiveArrow)
+	0x8C03FD9E,		// and the player's camera put back after it
+};
+// Never turned (game logic): 0x8C03B6BA turret aim (anm_vehAimTurrets), 0x8C0402B4 lock-on
+// target (ai_playerFindLockTarget). Anything else is left alone and logged once.
+
 bool installed;
-
-// The 3D view's own call: 0x8C019268 gets the camera in use (0x8C03FFA8: a record from
-// 0x8C0D5904, or another one the game points to) and calls "set camera" with its matrix B, so
-// the return address is 0x8C019278 whatever record it is. (Not verified on the headset yet:
-// the first build matched player 1's record by address and the picture didn't turn.)
-constexpr u32 ViewCaller = 0x8C019278;
-// Then the same camera is set again for the drawing (from 0x8C03ED5C, 0x8C0402B4, ...): every
-// later call with the matrix the view's call had gets the same turn, else the second call
-// undid the first (the first headset build: the picture turned, the game camera didn't).
-u32 viewMatrix;
-// And the call that sets the camera the 3D is drawn with: right after the view's, from 0x8C027DD2
-// (returns to 0x8C027DD6), with a copy of the camera elsewhere in RAM (0x8CB8E738 in the
-// kitchen). Headset test 2026-11-17: turning only the calls above changed nothing on screen,
-// turning every call turned the view; this one is what the 3D goes through.
-constexpr u32 DrawCaller = 0x8C027DD6;
-// And a camera 0x8C012xxx builds on its stack (a look-at, returns to 0x8C01232A): the user saw
-// the vehicle stay in front of them while the room turned (2026-11-17), the test with every
-// call turned moved the vehicle too; this is the other call of a mission frame.
-constexpr u32 LocalCaller = 0x8C01232A;
-// That call also draws the title and menus' 3D: it is turned only in a frame where the 3D
-// view's own call came first (in a mission or the attract demo), so menus stay put.
-u32 vblanks, viewVblank = ~0u;
-
-// Which "set camera" calls get the head's turn (test aid, vr::xr::headCameraTarget()):
-// 0 the 3D view's call (the default), 1 player 1's record's matrix B, 2 its A or B,
-// 3 every call.
-bool wanted(u32 matrix, u32 caller)
-{
-	switch (headCameraTarget())
-	{
-	case 3:
-		return true;
-	case 2:
-		return matrix == CameraRecords + MatrixA || matrix == CameraRecords + MatrixB;
-	case 1:
-		return matrix == CameraRecords + MatrixB;
-	default:
-		if (caller == ViewCaller)
-		{
-			viewMatrix = matrix;
-			viewVblank = vblanks;
-		}
-		if (vblanks - viewVblank > 2)
-			return false;
-		return matrix == viewMatrix || caller == DrawCaller || caller == LocalCaller;
-	}
-}
-
-// What calls it (test aid): every new matrix address and caller, once, to the log; and how many
-// turned calls a second.
-void noteCaller(u32 matrix, u32 caller, bool turned)
-{
-	struct Seen { u32 matrix, caller; };
-	static Seen seen[32];
-	static int count;
-	bool known = false;
-	for (int i = 0; i < count && !known; i++)
-		known = seen[i].matrix == matrix && seen[i].caller == caller;
-	if (!known && count < (int)std::size(seen))
-	{
-		seen[count++] = { matrix, caller };
-		NOTICE_LOG(RENDERER, "VR head camera: set camera %08x from %08x%s", matrix, caller, turned ? " (turned)" : "");
-	}
-	static u32 turnedCalls, calls;
-	static auto since = std::chrono::steady_clock::now();
-	calls++;
-	turnedCalls += turned;
-	const auto now = std::chrono::steady_clock::now();
-	if (now - since >= std::chrono::seconds(10))
-	{
-		const glm::vec2 head = headYawPitch();
-		INFO_LOG(RENDERER, "VR head camera: %u calls, %u turned in 10 s; head %.1f %.1f degrees", calls, turnedCalls,
-				head.x * 57.29578f, head.y * 57.29578f);
-		calls = turnedCalls = 0;
-		since = now;
-	}
-}
+u32 vblanks, simVblank = ~0u;
+glm::vec2 frameHead;		// the head for every call of a game frame, taken at its first
+float stockWorldToCam[12];	// the last turned call's camera, unturned, as world-to-camera
+bool haveStock;
+glm::vec2 frameTurn;		// the turn the cameras of the frame being drawn got (0: none turned)
 
 float readFloat(u32 addr)
 {
@@ -141,90 +114,161 @@ float readFloat(u32 addr)
 	return f;
 }
 
-bool trap(Sh4Context *ctx, u32 pc)
+void writeFloat(u32 addr, float f)
 {
-	if (pc != HookPc || !installed)
+	u32 v;
+	memcpy(&v, &f, sizeof(v));
+	WriteMem32_nommu(addr, v);
+}
+
+bool gameplayFrame()
+{
+	return vblanks - simVblank <= 2;
+}
+
+// What calls it (test aid): every new caller, once, to the log; and how many turned calls.
+void noteCaller(u32 matrix, u32 caller, bool turned)
+{
+	static u32 seen[32];
+	static int count;
+	if (std::find(seen, seen + count, caller) == seen + count && count < (int)std::size(seen))
+	{
+		seen[count++] = caller;
+		NOTICE_LOG(RENDERER, "VR head camera: set camera %08x from %08x%s", matrix, caller, turned ? " (turned)" : "");
+	}
+	static u32 turnedCalls, calls;
+	static auto since = std::chrono::steady_clock::now();
+	calls++;
+	turnedCalls += turned;
+	const auto now = std::chrono::steady_clock::now();
+	if (now - since >= std::chrono::seconds(10))
+	{
+		INFO_LOG(RENDERER, "VR head camera: %u calls, %u turned in 10 s; head %.1f %.1f degrees", calls, turnedCalls,
+				frameHead.x * 57.29578f, frameHead.y * 57.29578f);
+		calls = turnedCalls = 0;
+		since = now;
+	}
+}
+
+bool wanted(u32 caller)
+{
+	if (headCameraTarget() == 3)
+		return true;
+	if (!gameplayFrame() || ReadMem32_nommu(PlayerCount) > 1)
 		return false;
+	return std::find(std::begin(TurnedCallers), std::end(TurnedCallers), caller) != std::end(TurnedCallers);
+}
+
+void setCameraTrap(Sh4Context *ctx)
+{
 	// the instruction the hook replaced: sts.l pr,@-r15
 	ctx->r[15] -= 4;
 	WriteMem32_nommu(ctx->r[15], ctx->pr);
-	ctx->pc = pc + 2;
+	ctx->pc = SetCamera.pc + 2;
 
 	const u32 matrix = ctx->r[4];
-	const int mode = config::VrHeadCamera;
-	const bool turn = mode > 0 && wanted(matrix, ctx->pr);
-	noteCaller(matrix, ctx->pr, turn);
-	if (!turn)
-		return true;
-	// the head as it was at the frame's first (view) call, for every call of the frame: the
-	// vehicle's, the room's and the view's cameras must agree, and with the picture's turn back
-	// The game camera follows the head in steps (vr.HeadCameraStep degrees, 0: continuously):
-	// between steps the picture stays put and the headset's own reprojection, at its full rate,
-	// shows the head's turn (as it does up and down). A continuously turned camera looked shaky
-	// to the user (2026-11-17).
-	static glm::vec2 frameHead;
-	if (ctx->pr == ViewCaller || headCameraTarget() != 0)
+	const u32 caller = ctx->pr;
+	if (caller == SimCaller)
 	{
-		const glm::vec2 now = headYawPitch();
-		const float step = std::max(0.f, (float)config::VrHeadCameraStep) * 0.0174533f;
-		auto wrap = [](float a) { return std::remainder(a, 6.2831853f); };
-		if (step <= 0.f)
-			frameHead = now;
-		else
-		{
-			if (std::abs(wrap(now.x - frameHead.x)) > step)
-				frameHead.x = now.x;
-			if (std::abs(now.y - frameHead.y) > step)
-				frameHead.y = now.y;
-		}
+		// a new game frame: one head direction for all its cameras
+		simVblank = vblanks;
+		frameHead = headYawPitch();
+		frameTurn = glm::vec2(0.f);
 	}
-	const glm::vec2 head = frameHead;
-	// The picture goes where the head looks (+yaw in the VR view); the game's camera formula below
-	// turns the other way for the same angle (the user, 2026-11-17: head right turned the view
-	// left), so it gets -yaw. (Negating both put the picture opposite the head: black past ~90.)
-	const float yaw = head.x;
-	const float camYaw = -yaw;
-	const float pitch = mode >= 2 ? std::clamp(head.y, -1.4f, 1.4f) : 0.f;
+	const int mode = config::VrHeadCamera;
+	const bool turn = mode > 0 && wanted(caller);
+	noteCaller(matrix, caller, turn);
+	if (!turn)
+		return;
+
 	float m[12];
 	for (int i = 0; i < 12; i++)
 		m[i] = readFloat(matrix + i * 4);
-	if (!std::isfinite(m[0]) || !std::isfinite(m[4]) || !std::isfinite(m[8]))
-		return true;
-	const glm::vec3 r(m[0], m[1], m[2]), u(m[3], m[4], m[5]), b(m[6], m[7], m[8]);
-	// the camera turned in its own frame by Ry(yaw) * Rx(pitch): each new axis is a column of
-	// that matrix in the old axes
-	const float cy = std::cos(camYaw), sy = std::sin(camYaw), cp = std::cos(pitch), sp = std::sin(pitch);
-	glm::vec3 r2 = cy * r - sy * b;
-	glm::vec3 u2 = sy * sp * r + cp * u + cy * sp * b;
-	glm::vec3 b2 = sy * cp * r - sp * u + cy * cp * b;
-	if (headCameraAxes() == 1)
-	{
-		// (test: the camera's axes are the matrix's columns: A' = A * Ry(camYaw) * Rx(pitch))
-		const glm::mat3 a(glm::vec3(m[0], m[3], m[6]), glm::vec3(m[1], m[4], m[7]), glm::vec3(m[2], m[5], m[8]));	// columns
-		const glm::mat3 ry(glm::vec3(cy, 0.f, -sy), glm::vec3(0.f, 1.f, 0.f), glm::vec3(sy, 0.f, cy));
-		const glm::mat3 rx(glm::vec3(1.f, 0.f, 0.f), glm::vec3(0.f, cp, sp), glm::vec3(0.f, -sp, cp));
-		const glm::mat3 a2 = a * ry * rx;
-		r2 = glm::vec3(a2[0][0], a2[1][0], a2[2][0]);
-		u2 = glm::vec3(a2[0][1], a2[1][1], a2[2][1]);
-		b2 = glm::vec3(a2[0][2], a2[1][2], a2[2][2]);
-	}
-	const float out[12] { r2.x, r2.y, r2.z, u2.x, u2.y, u2.z, b2.x, b2.y, b2.z, m[9], m[10], m[11] };
+	for (float f : m)
+		if (!std::isfinite(f))
+			return;
+	// The turn, in the camera's own axes (x left, y up, z forward): the head's yaw (positive to
+	// the left) about y, then its pitch (positive up) about x. The VR view's eye space is x
+	// right, y up, z back, a half turn about y from the camera's: a yaw keeps its sign there, a
+	// pitch changes it. So R = Ry(yaw) * Rx(-pitch) here is Ry(yaw) * Rx(pitch) in the eye
+	// space, exactly the turn back gameTurn() gives the picture.
+	const float yaw = frameHead.x;
+	const float pitch = mode >= 2 ? std::clamp(frameHead.y, -1.4f, 1.4f) : 0.f;
+	const glm::mat3 r = glm::mat3(glm::rotate(glm::mat4(1.f), yaw, glm::vec3(0.f, 1.f, 0.f))
+			* glm::rotate(glm::mat4(1.f), -pitch, glm::vec3(1.f, 0.f, 0.f)));
+	// M' = M * R (glm is column-major: r[col][row])
+	float out[12];
+	for (int row = 0; row < 3; row++)
+		for (int col = 0; col < 3; col++)
+			out[row * 3 + col] = m[row * 3 + 0] * r[col][0] + m[row * 3 + 1] * r[col][1] + m[row * 3 + 2] * r[col][2];
+	out[9] = m[9];
+	out[10] = m[10];
+	out[11] = m[11];
 	for (int i = 0; i < 12; i++)
-	{
-		u32 v;
-		memcpy(&v, &out[i], sizeof(v));
-		WriteMem32_nommu(Scratch + i * 4, v);
-	}
+		writeFloat(Scratch + i * 4, out[i]);
 	ctx->r[4] = Scratch;
-	tcvrNoteCamTurn(yaw, pitch);
+
+	// the stock camera as world-to-camera, for the HUD's projections (crosshairTrap):
+	// M^T and -M^T t, same layout
+	for (int row = 0; row < 3; row++)
+		for (int col = 0; col < 3; col++)
+			stockWorldToCam[row * 3 + col] = m[col * 3 + row];
+	for (int row = 0; row < 3; row++)
+		stockWorldToCam[9 + row] = -(m[0 * 3 + row] * m[9] + m[1 * 3 + row] * m[10] + m[2 * 3 + row] * m[11]);
+	haveStock = true;
+
+	frameTurn = glm::vec2(yaw, pitch);
+}
+
+void crosshairTrap(Sh4Context *ctx)
+{
+	// the instruction the hook replaced: mov.l r13,@-r15
+	ctx->r[15] -= 4;
+	WriteMem32_nommu(ctx->r[15], ctx->r[13]);
+	ctx->pc = Crosshair.pc + 2;
+	// The crosshair, the lock-on square and the weapon sights are world points projected with
+	// the world-to-camera matrix and drawn on the 2D HUD plane: project them with the stock
+	// camera, so they land on their point in the vehicle's frame (where the HUD plane is).
+	// Only the matrix in RAM: the culling planes and XMTRX stay turned; the HUD draws no 3D
+	// until the next "set camera" call.
+	if (!haveStock || config::VrHeadCamera <= 0 || !gameplayFrame())
+		return;
+	for (int i = 0; i < 12; i++)
+		writeFloat(WorldToCam + i * 4, stockWorldToCam[i]);
+}
+
+void frameEndTrap(Sh4Context *ctx)
+{
+	// the instruction the hook replaced: sts.l pr,@-r15
+	ctx->r[15] -= 4;
+	WriteMem32_nommu(ctx->r[15], ctx->pr);
+	ctx->pc = FrameEnd.pc + 2;
+	// The scene is complete: its picture (rendered from kmRender on) gets this frame's turn.
+	const glm::vec2 turn = gameplayFrame() ? frameTurn : glm::vec2(0.f);
+	tcvrSetFrameCamTurn(turn.x, turn.y);
+}
+
+bool trap(Sh4Context *ctx, u32 pc)
+{
+	if (!installed)
+		return false;
+	if (pc == SetCamera.pc)
+		setCameraTrap(ctx);
+	else if (pc == Crosshair.pc)
+		crosshairTrap(ctx);
+	else if (pc == FrameEnd.pc)
+		frameEndTrap(ctx);
+	else
+		return false;
 	return true;
 }
 
 bool codeIsStock()
 {
-	for (size_t i = 0; i < std::size(Stock); i++)
-		if (ReadMem16_nommu(HookPc + (u32)i * 2) != (i == 0 && installed ? REIOS_OPCODE : Stock[i]))
-			return false;
+	for (const Hook *h : Hooks)
+		for (size_t i = 0; i < std::size(h->stock); i++)
+			if (ReadMem16_nommu(h->pc + (u32)i * 2) != (i == 0 && installed ? REIOS_OPCODE : h->stock[i]))
+				return false;
 	return true;
 }
 
@@ -242,18 +286,23 @@ void updateHeadCamera()
 		{
 			reios_game_trap = trap;
 			// (the dynarec drops what it compiled from the page when it's written)
-			WriteMem16_nommu(HookPc, REIOS_OPCODE);
+			for (const Hook *h : Hooks)
+				WriteMem16_nommu(h->pc, REIOS_OPCODE);
 			installed = true;
-			NOTICE_LOG(RENDERER, "VR head camera: hook in at %08x", HookPc);
+			haveStock = false;
+			NOTICE_LOG(RENDERER, "VR head camera: hooks in");
 		}
 	}
 	else if (installed && (!want || !codeIsStock()))
 	{
-		if (ReadMem16_nommu(HookPc) == REIOS_OPCODE)
-			WriteMem16_nommu(HookPc, Stock[0]);
+		for (const Hook *h : Hooks)
+			if (ReadMem16_nommu(h->pc) == REIOS_OPCODE)
+				WriteMem16_nommu(h->pc, h->stock[0]);
 		installed = false;
-		NOTICE_LOG(RENDERER, "VR head camera: hook out");
+		NOTICE_LOG(RENDERER, "VR head camera: hooks out");
 	}
+	if (!installed)
+		tcvrSetFrameCamTurn(0.f, 0.f);
 }
 
 glm::vec2 shownCameraTurn()
