@@ -12,7 +12,7 @@ The Quest build starts with these settings when `emu.cfg` has no value for them
 | Sharper far textures | `vr.TexLodBias` | Off (0) | 0 |
 | Textures | `vr.UpscaleCache` | HD 2x | HD 2x |
 | Refresh rate | `vr.XrRefreshRate` | 120 Hz | 72 Hz |
-| Show frame rate | `vr.ShowFps` | On | Off |
+| Show frame rate | `vr.ShowFps` | Off | Off |
 | Fixed foveation (edges) | `vr.Foveation` | Off | Off |
 | Upload frame once | `vr.UploadOnce` | Off | On |
 | Discard eye depth | `vr.DiscardDepth` | On | On |
