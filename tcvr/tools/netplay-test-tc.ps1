@@ -1,10 +1,12 @@
 <#
   Toy Commander netplay sync test on one PC (tcvr, multiplayer phase 0, task 0.1).
 
-  Two copies of the Windows build play a 2-player battle together over the fork's GGPO
-  netplay on localhost (host = player 1, guest = player 2). Each copy is driven by a scripted
+  Two to four copies of the Windows build play a battle together over the fork's GGPO
+  netplay on localhost (copy p1 = player 1, p2 = player 2, ...). Two copies use the classic
+  two-player setup (ActAsServer + server) unless -List; three or four use the player list
+  (network:GGPOPeers + network:GGPOPlayer, every copy linked to every other). Each copy is driven by a scripted
   Dreamcast pad over UDP ("PAD" datagrams, core/input/udp_lightgun.cpp): the host goes through
-  the menus into a multiplayer arena, the guest joins on the setup page, then both drive,
+  the menus into a multiplayer arena, the others join on the setup page, then all drive,
   shoot, die and respawn on a fixed pattern. At the end each side's per-frame memory hash
   (main, video and sound RAM, HOTD2VR_SYNCLOG in core/network/ggpo.cpp) is compared: either
   "identical for N frames" or the first frame that differs, with -Pages the 64 KB pages of
@@ -16,6 +18,7 @@
   .\tcvr\tools\netplay-test-tc.ps1                         clean network, 240 s
   .\tcvr\tools\netplay-test-tc.ps1 -NetDelay 80 -Loss 2    80 ms each way (jitter), 2% lost
   .\tcvr\tools\netplay-test-tc.ps1 -Pages                  per-page hashes (sync.txt.pages)
+  .\tcvr\tools\netplay-test-tc.ps1 -Players 4 -Seconds 670 four copies, 10 min of battle
   .\tcvr\tools\netplay-test-tc.ps1 -Local 4                no network: one copy, 4 local pads
                                                            (the 4-player check), shots only
 
@@ -33,10 +36,12 @@ param(
 	[int]$NetDelay = 0,		# GGPO's simulated network delay (ms each way)
 	[int]$Loss = 0,			# % packets lost
 	[int]$Oop = 0,			# % packets out of order
-	[int]$StallGuest = 0,	# the guest's render loop stops this many ms every 20 s
+	[int]$StallGuest = 0,	# the last copy's render loop stops this many ms every 20 s
 	[switch]$Pages,
 	[string]$Dump = '',		# frames to write state + RAM of, e.g. '1200,5000'
 	[ValidateRange(0, 4)][int]$Local = 0,	# >0: no netplay, one copy with this many pads
+	[ValidateRange(2, 4)][int]$Players = 2,	# netplay: this many copies, one player each
+	[switch]$List,			# 2 players: the player list (GGPOPeers) rather than ActAsServer + server
 	[ValidateSet('wave', 'hunt')][string]$Pattern = 'wave',	# hunt: P1 chases and shoots P2 (kills, respawns)
 	[ValidateRange(0, 2)][int]$Mode = 0,	# 0 Deathmatch, 1 Cat and Mice, 2 Capture the Flag
 	[switch]$Ram,			# with -Pattern hunt: no passes, the hunter flies straight at the target (collisions)
@@ -57,7 +62,7 @@ if (-not $GamePath) {
 if (-not $GamePath -or -not (Test-Path $GamePath)) { throw 'No Toy Commander image (give -GamePath)' }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:TEMP 'tcvr-netplay' }
 if (-not $Name) {
-	$Name = if ($Local) { "local$($Local)p" } else { "net_d$($NetDelay)_l$($Loss)" + $(if ($StallGuest) { "_stall$StallGuest" } else { '' }) }
+	$Name = if ($Local) { "local$($Local)p" } else { "net$($Players)p" + $(if ($List -and $Players -eq 2) { 'list' } else { '' }) + "_d$($NetDelay)_l$($Loss)" + $(if ($StallGuest) { "_stall$StallGuest" } else { '' }) }
 }
 if (-not $OutDir) { $OutDir = Join-Path $private ("multiplayer\phase0\{0}_{1}" -f (Get-Date -Format 'yyyyMMdd_HHmmss'), $Name) }
 $shotDir = Join-Path $WorkDir "shots"
@@ -91,10 +96,12 @@ $menu = @(
 	@{ T = 54; P = 0; B = 'A'; Hold = 0.15 }			# start the battle
 )
 $playFrom = 64
-# extra Starts for players 3 and 4 in the local 4-player check
-if ($Local -ge 3) { $menu += @{ T = 45; P = 2; B = 'START'; Hold = 0.15 }; $menu += @{ T = 48; P = 2; B = 'A'; Hold = 0.15 } }
-if ($Local -ge 4) { $menu += @{ T = 46; P = 3; B = 'START'; Hold = 0.15 }; $menu += @{ T = 48.5; P = 3; B = 'A'; Hold = 0.15 } }
-$shots = @(23, 36, 43, 46, 52, 62, 75, 100, 130, 160, 200, 230, 280, 340, 380, 420, 445) | Where-Object { $_ -lt $Seconds }
+# extra Starts for players 3 and 4 (4 local pads, or 3-4 copies)
+$pads = if ($Local) { $Local } else { $Players }
+if ($pads -ge 3) { $menu += @{ T = 45; P = 2; B = 'START'; Hold = 0.15 }; $menu += @{ T = 48; P = 2; B = 'A'; Hold = 0.15 } }
+if ($pads -ge 4) { $menu += @{ T = 46; P = 3; B = 'START'; Hold = 0.15 }; $menu += @{ T = 48.5; P = 3; B = 'A'; Hold = 0.15 } }
+$shots = @(23, 36, 43, 46, 52, 62, 75, 100, 130, 160, 200, 230, 280, 340, 380, 420, 445) + @(for ($s = 500; $s -lt $Seconds; $s += 60) { $s }) |
+	Where-Object { $_ -lt $Seconds }
 
 # What a pad does at time t (s) during the battle: a fixed pattern per player (no randomness,
 # the same on every run): accelerate, steer on a slow wave, bursts of fire, a special weapon now
@@ -222,13 +229,21 @@ function Pad-Message([int]$p, [double]$t) {
 
 # ---- The copies ------------------------------------------------------------------------------
 # Both copies: the same build and saves (none: a blank VMU on each, as two fresh headsets).
+# Copy p<n> is player n; its pad listener (vr.UdpPort) is 27040 + n. Netplay ports (GGPO):
+# classic two players 19713 (host) / 19712 (guest); with the player list 19713 + n - 1.
 $peers = if ($Local) {
 	@([pscustomobject]@{ Name = 'local'; Port = 27041; Net = 'network:GGPO=no' })
-} else {
+} elseif ($Players -eq 2 -and -not $List) {
 	@(
-		[pscustomobject]@{ Name = 'host';  Port = 27041; Net = 'network:GGPO=yes,network:ActAsServer=yes' },
-		[pscustomobject]@{ Name = 'guest'; Port = 27042; Net = 'network:GGPO=yes,network:ActAsServer=no,network:server=127.0.0.1' }
+		[pscustomobject]@{ Name = 'p1'; Port = 27041; Net = 'network:GGPO=yes,network:ActAsServer=yes' },
+		[pscustomobject]@{ Name = 'p2'; Port = 27042; Net = 'network:GGPO=yes,network:ActAsServer=no,network:server=127.0.0.1' }
 	)
+} else {
+	# (in quotes: -config splits on commas outside them)
+	$peerList = (0..($Players - 1) | ForEach-Object { "127.0.0.1:$(19713 + $_)" }) -join ','
+	@(for ($i = 0; $i -lt $Players; $i++) {
+		[pscustomobject]@{ Name = "p$($i + 1)"; Port = 27041 + $i; Net = "network:GGPO=yes,network:GGPOPeers='$peerList',network:GGPOPlayer=$i" }
+	})
 }
 foreach ($peer in $peers) {
 	$dir = Join-Path $WorkDir $peer.Name
@@ -239,9 +254,9 @@ foreach ($peer in $peers) {
 	$peer | Add-Member Dir $dir
 }
 
-# OpenGL with the VR reprojection's path (as on the Quest), Dreamcast pads in A..D (4 only for
-# -Local 4), the analog stick sent over GGPO (2 axes), no head camera, 30 pictures/s.
-$pads = if ($Local) { $Local } else { 2 }
+# OpenGL with the VR reprojection's path (as on the Quest), one Dreamcast pad per player in
+# A..D (the same on every copy), no head camera, 30 pictures/s. (GGPO sends the whole pad:
+# buttons, stick, both triggers.)
 $base = 'config:pvr.rend=0,config:rend.NativeDepthInterpolation=yes,config:aica.Volume=0,log:LogToFile=yes' +
 	',config:vr.Reproject=yes,config:vr.HeadCamera=0,config:vr.Game60=no,network:EnableUPnP=no' +
 	",network:GGPODelay=$Delay,network:GGPOAnalogAxes=2"
@@ -252,7 +267,7 @@ if ($Dump) { $env:HOTD2VR_SYNCDUMP = $Dump }
 if ($Pages) { $env:HOTD2VR_SYNCPAGES = '1' }
 foreach ($peer in $peers) {
 	if (-not $Local) { $env:HOTD2VR_SYNCLOG = Join-Path $peer.Dir 'sync.txt' }
-	if ($StallGuest -and $peer.Name -eq 'guest') { $env:HOTD2VR_STALLRENDER = $StallGuest } else { Remove-Item Env:HOTD2VR_STALLRENDER -ErrorAction SilentlyContinue }
+	if ($StallGuest -and $peer -eq $peers[-1]) { $env:HOTD2VR_STALLRENDER = $StallGuest } else { Remove-Item Env:HOTD2VR_STALLRENDER -ErrorAction SilentlyContinue }
 	$cfg = "$base,config:vr.UdpPort=$($peer.Port),$($peer.Net)"
 	$peer | Add-Member Proc (Start-Process -FilePath (Join-Path $peer.Dir 'flycast.exe') `
 		-ArgumentList @('-config', $cfg, "`"$GamePath`"") -WorkingDirectory $peer.Dir -PassThru)
@@ -320,8 +335,8 @@ Start-Sleep -Milliseconds 800
 # ---- Compare ---------------------------------------------------------------------------------
 $report = [System.Collections.Generic.List[string]]::new()
 function Say([string]$s) { $report.Add($s); Write-Output $s }
-Say ("run {0}: {1} s, GGPO delay {2}, network delay {3} ms, loss {4}%, out of order {5}%, guest stall {6} ms" -f `
-	$Name, $Seconds, $Delay, $NetDelay, $Loss, $Oop, $StallGuest)
+Say ("run {0}: {1} s, {7} copies, GGPO delay {2}, network delay {3} ms, loss {4}%, out of order {5}%, last copy stall {6} ms" -f `
+	$Name, $Seconds, $Delay, $NetDelay, $Loss, $Oop, $StallGuest, $peers.Count)
 Say ("pattern {0}, mode {1}" -f $Pattern, @("Deathmatch", "Cat and Mice", "Capture the Flag")[$Mode])
 foreach ($k in $scores.Keys) { Say ("{0}: score counters 0x8C0CDC68 at the end: {1}" -f $k, $scores[$k]) }
 if ($Pattern -eq "hunt") { Say ("respawns seen (new vehicle in the player record): P1 {0}, P2 {1}" -f $hunt.Respawns[0], $hunt.Respawns[1]) }
@@ -349,8 +364,11 @@ if (-not $Local) {
 			$peer.Name, $hash.Count, $fps, $rollbacks, $deepest, (100.0 * $resim / [math]::Max(1, $hash.Count)))
 	}
 	# the last frames may still be predictions: only frames GGPO can no longer roll back count
-	$upTo = [math]::Min(($logs['host'].Keys | Measure-Object -Maximum).Maximum, ($logs['guest'].Keys | Measure-Object -Maximum).Maximum) - 10
-	$common = @($logs['host'].Keys | Where-Object { $_ -le $upTo -and $logs['guest'].ContainsKey($_) } | Sort-Object)
+	# Every copy is compared with p1's.
+	$ref = $peers[0].Name
+	$others = @($peers | Select-Object -Skip 1 | ForEach-Object { $_.Name })
+	$upTo = ($peers | ForEach-Object { ($logs[$_.Name].Keys | Measure-Object -Maximum).Maximum } | Measure-Object -Minimum).Minimum - 10
+	$common = @($logs[$ref].Keys | Where-Object { $fr = $_; $_ -le $upTo -and -not ($others | Where-Object { -not $logs[$_].ContainsKey($fr) }) } | Sort-Object)
 	# The verdict is on main RAM and video + sound RAM. The saved-state hash is only reported: the
 	# rollback state holds a few host pointers (SH-4 part; seen at frames 600 and 4000 on
 	# 2026-11-18: 8-byte values like 0x00007FF6xxxxxxxx), which differ between two processes.
@@ -359,18 +377,23 @@ if (-not $Local) {
 	$diffCount = 0
 	$stateDiff = 0
 	foreach ($fr in $common) {
-		$a = $logs['host'][$fr]; $b = $logs['guest'][$fr]
-		if ($a[2] -ne $b[2]) { $stateDiff++ }
-		$which = @(for ($i = 0; $i -lt 2; $i++) { if ($a[$i] -ne $b[$i]) { $names[$i] } })
+		$a = $logs[$ref][$fr]
+		$which = @(); $stateDiffers = $false
+		foreach ($o in $others) {
+			$b = $logs[$o][$fr]
+			if ($a[2] -ne $b[2]) { $stateDiffers = $true }
+			$which += @(for ($i = 0; $i -lt 2; $i++) { if ($a[$i] -ne $b[$i]) { "$o $($names[$i])" } })
+		}
+		if ($stateDiffers) { $stateDiff++ }
 		if ($which.Count) {
 			$diffCount++
-			if ($null -eq $firstDiff) { $firstDiff = $fr; Say ("FIRST DIFFERENCE at frame {0} ({1:0.0} s of game): {2}" -f $fr, ($fr / 60.0), ($which -join ' + ')) }
+			if ($null -eq $firstDiff) { $firstDiff = $fr; Say ("FIRST DIFFERENCE at frame {0} ({1:0.0} s of game), against {2}: {3}" -f $fr, ($fr / 60.0), $ref, ($which -join ', ')) }
 		}
 	}
 	Say ("saved-state hash (host pointers included, informative only) differs on {0} of {1} frames" -f $stateDiff, $common.Count)
 	if ($null -eq $firstDiff) {
-		Say ("IDENTICAL for {0} confirmed frames (frames {1}..{2}, {3:0.0} s of game): main RAM and video/sound RAM" -f `
-			$common.Count, $common[0], $common[-1], ($common.Count / 60.0))
+		Say ("IDENTICAL on {4} copies for {0} confirmed frames (frames {1}..{2}, {3:0.0} s of game): main RAM and video/sound RAM" -f `
+			$common.Count, $common[0], $common[-1], ($common.Count / 60.0), $peers.Count)
 	} else {
 		Say ("frames compared: {0}, frames that differ: {1}" -f $common.Count, $diffCount)
 		if ($Pages) {
@@ -383,10 +406,14 @@ if (-not $Local) {
 				$pg[$peer.Name] = $m
 			}
 			foreach ($fr in ($common | Where-Object { $_ -ge $firstDiff } | Select-Object -First 600)) {
-				$a = $pg['host'][$fr]; $b = $pg['guest'][$fr]
-				if ($null -eq $a -or $null -eq $b) { continue }
-				$bad = @(for ($i = 1; $i -lt [math]::Min($a.Count, $b.Count); $i++) { if ($a[$i] -ne $b[$i]) { '0x{0:X8}' -f (0x8C000000 + ($i - 1) * 0x10000) } })
-				if ($bad.Count) { Say ("frame {0}: 64 KB pages that differ: {1}" -f $fr, ($bad -join ' ')); break }
+				$a = $pg[$ref][$fr]
+				if ($null -eq $a) { continue }
+				$bad = @(foreach ($o in $others) {
+					$b = $pg[$o][$fr]
+					if ($null -eq $b) { continue }
+					for ($i = 1; $i -lt [math]::Min($a.Count, $b.Count); $i++) { if ($a[$i] -ne $b[$i]) { '{0} 0x{1:X8}' -f $o, (0x8C000000 + ($i - 1) * 0x10000) } }
+				})
+				if ($bad.Count) { Say ("frame {0}: 64 KB pages that differ from {1}: {2}" -f $fr, $ref, ($bad -join ', ')); break }
 			}
 		}
 	}

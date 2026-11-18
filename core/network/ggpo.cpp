@@ -82,6 +82,7 @@ static void getLocalInput(MapleInputState inputState[4])
 #include <mutex>
 #include <unordered_map>
 #include <numeric>
+#include <vector>
 #include "imgui.h"
 #include "miniupnp.h"
 #include "hw/naomi/naomi_cart.h"
@@ -102,7 +103,10 @@ namespace ggpo
 {
 using namespace std::chrono;
 
-constexpr int MAX_PLAYERS = 2;
+// tcvr: 2 to 4 players. With network:GGPOPeers empty it is the classic two-player session
+// (ActAsServer + server); otherwise one address:port per player, in player order, and
+// network:GGPOPlayer says which one is this copy. Every player is linked to every other.
+constexpr int MAX_PLAYERS = 4;
 constexpr int SERVER_PORT = 19713;
 
 constexpr u32 BTN_TRIGGER_LEFT	= DC_BTN_BITMAPPED_LAST << 1;
@@ -111,7 +115,9 @@ constexpr u32 BTN_TRIGGER_RIGHT	= DC_BTN_BITMAPPED_LAST << 2;
 #pragma pack(push, 1)
 struct VerificationData
 {
-	const int protocol = 3;		// hotd2-vr: 3 also covers the devices and the VR mod's writes (gameMD5)
+	// hotd2-vr: 3 also covers the devices and the VR mod's writes (gameMD5)
+	// tcvr: 4 = up to 4 players, the Dreamcast pad packet, 9-bit input bit numbers in GGPO
+	const int protocol = 4;
 	u8 gameMD5[16] { };
 	u8 stateMD5[16] { };
 } ;
@@ -119,8 +125,9 @@ struct VerificationData
 
 static GGPOSession *ggpoSession;
 static int localPlayerNum;
+static int numPlayers = 2;
 static GGPOPlayerHandle localPlayer;
-static GGPOPlayerHandle remotePlayer;
+static GGPOPlayerHandle playerHandles[MAX_PLAYERS];	// remote ones valid (local: localPlayer)
 static bool synchronized;
 static std::recursive_mutex ggpoMutex;
 static std::array<int, 5> msPerFrame;
@@ -131,6 +138,7 @@ static bool _endOfFrame;
 static MiniUPnP miniupnp;
 static int analogAxes;
 static bool absPointerPos;
+static bool dcPad;		// tcvr: a console pad: buttons, stick, both triggers, head (Inputs::u.pad)
 static bool keyboardGame;
 static bool mouseGame;
 static int inputSize;
@@ -180,9 +188,19 @@ struct Inputs
 			s16 wheel;
 		} relPos;
 		u8 keys[6];
+		// tcvr: a Dreamcast pad. The triggers are analog (the throttle in Toy Commander).
+		// head: reserved for the VR head's yaw and pitch, sent as zero for now.
+		struct {
+			s8 x;
+			s8 y;
+			u8 lt;
+			u8 rt;
+			u8 head[3];
+		} pad;
 	} u;
 };
-static_assert(sizeof(Inputs) == 10, "wrong Inputs size");
+static_assert(sizeof(Inputs) == 11, "wrong Inputs size");
+static_assert(sizeof(Inputs) <= 12, "GAMEINPUT_MAX_BYTES (ggpo/game_input.h)");
 static_assert(BTN_TRIGGER_RIGHT < (1 << 20));
 
 struct GameEvent
@@ -637,6 +655,78 @@ static void on_message(u8 *msg, int len)
 	}
 }
 
+struct PeerAddress
+{
+	std::string address;	// IPv4 (GGPO's UDP takes no host names)
+	u16 port;
+};
+
+static bool isIPv4(const std::string& s)
+{
+	unsigned a, b, c, d;
+	char extra;
+	return sscanf(s.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) == 4 && a < 256 && b < 256 && c < 256 && d < 256;
+}
+
+/*
+ * tcvr: the players' addresses, in player order. This copy's own entry only gives its port.
+ * network:GGPOPeers = "address:port,address:port[,...]" (2 to 4 players; no address = this
+ * PC, no port = 19713 + the player's index). Empty: the classic two players, the host
+ * (ActAsServer) is player 1 and the other side is network:server.
+ */
+static std::vector<PeerAddress> peerList(int localPort, int localPlayerNum)
+{
+	std::vector<PeerAddress> peers;
+	const std::string& list = config::GGPOPeers.get();
+	if (list.empty())
+	{
+		size_t colon = config::NetworkServer.get().find(':');
+		std::string peerIp = config::NetworkServer.get().substr(0, colon);
+		if (peerIp.empty())
+			peerIp = "127.0.0.1";
+		u16 peerPort;
+		if (colon == std::string::npos)
+		{
+			if (peerIp == "127.0.0.1")
+				peerPort = localPort ^ 1;
+			else
+				peerPort = SERVER_PORT;
+		}
+		else
+		{
+			peerPort = atoi(config::NetworkServer.get().substr(colon + 1).c_str());
+		}
+		peers.resize(2);
+		peers[localPlayerNum] = { "", (u16)localPort };
+		peers[1 - localPlayerNum] = { peerIp, peerPort };
+		return peers;
+	}
+	size_t start = 0;
+	while (start <= list.size())
+	{
+		size_t end = list.find(',', start);
+		if (end == std::string::npos)
+			end = list.size();
+		std::string item = list.substr(start, end - start);
+		item.erase(0, item.find_first_not_of(" \t"));
+		item.erase(item.find_last_not_of(" \t") + 1);
+		PeerAddress peer;
+		const size_t colon = item.rfind(':');
+		peer.address = item.substr(0, colon);
+		if (peer.address.empty())
+			peer.address = "127.0.0.1";
+		const int port = colon == std::string::npos ? SERVER_PORT + (int)peers.size() : atoi(item.substr(colon + 1).c_str());
+		if (!isIPv4(peer.address) || port <= 0 || port > 65535)
+			throw FlycastException("Netplay: bad player address \"" + item + "\" (IPv4 address:port)");
+		peer.port = (u16)port;
+		peers.push_back(peer);
+		start = end + 1;
+	}
+	if (peers.size() < 2 || peers.size() > MAX_PLAYERS)
+		throw FlycastException("Netplay: 2 to 4 player addresses are needed");
+	return peers;
+}
+
 void startSession(int localPort, int localPlayerNum)
 {
 	GGPOSessionCallbacks cb{};
@@ -652,6 +742,8 @@ void startSession(int localPort, int localPlayerNum)
 	if (const char *path = getenv("HOTD2VR_SYNCLOG"); path != nullptr && syncLog == nullptr)
 		syncLog = fopen(path, "w");
 	heldAim = {};
+	for (auto& handle : playerHandles)
+		handle = {};
 
 #ifdef SYNC_TEST
 	GGPOErrorCode result = ggpo_start_synctest(&ggpoSession, &cb, settings.content.gameId.c_str(), MAX_PLAYERS, sizeof(kcode[0]), 1);
@@ -665,26 +757,34 @@ void startSession(int localPort, int localPlayerNum)
 	ggpo::localPlayerNum = localPlayerNum;
 	GGPOPlayer player{ sizeof(GGPOPlayer), GGPO_PLAYERTYPE_LOCAL, localPlayerNum + 1 };
 	result = ggpo_add_player(ggpoSession, &player, &localPlayer);
+	numPlayers = 2;
 	player.player_num = (1 - localPlayerNum) + 1;
-	result = ggpo_add_player(ggpoSession, &player, &remotePlayer);
+	result = ggpo_add_player(ggpoSession, &player, &playerHandles[1 - localPlayerNum]);
 	synchronized = true;
 	analogAxes = 0;
 	NOTICE_LOG(NETWORK, "GGPO synctest session started");
 #else
+	const std::vector<PeerAddress> peers = peerList(localPort, localPlayerNum);
+	numPlayers = (int)peers.size();
+	if (localPlayerNum < 0 || localPlayerNum >= numPlayers)
+		throw FlycastException("Netplay: this player's number is not in the list");
 	if (settings.platform.isConsole())
 	{
 		// hotd2-vr: a light gun in port A sends where it points too (Flycast only did that
 		// for arcade games). Both peers have the same devices, so the same input size.
+		// tcvr: anything else is a pad: the whole Dreamcast pad goes (Inputs::u.pad).
 		absPointerPos = config::MapleMainDevices[0] == MDT_LightGun;
-		analogAxes = absPointerPos ? 0 : (int)config::GGPOAnalogAxes;
+		dcPad = !absPointerPos;
+		analogAxes = 0;
 		keyboardGame = false;
 		mouseGame = false;
-		NOTICE_LOG(NETWORK, "GGPO: console, %s", absPointerPos ? "light gun position" : "analog axes");
+		NOTICE_LOG(NETWORK, "GGPO: console, %s", absPointerPos ? "light gun position" : "pad (stick, triggers, head)");
 	}
 	else
 	{
 		analogAxes = 0;
 		absPointerPos = false;
+		dcPad = false;
 		keyboardGame = false;
 		mouseGame = false;
 		if (settings.input.lightgunGame)
@@ -705,7 +805,7 @@ void startSession(int localPort, int localPlayerNum)
 		}
 		NOTICE_LOG(NETWORK, "GGPO: Using %d full analog axes%s", analogAxes, absPointerPos ? ", light gun position" : "");
 	}
-	inputSize = sizeof(kcode[0]) + analogAxes + (int)absPointerPos * sizeof(Inputs::u.absPos)
+	inputSize = sizeof(kcode[0]) + analogAxes + (int)absPointerPos * sizeof(Inputs::u.absPos) + (int)dcPad * sizeof(Inputs::u.pad)
 		+ (int)keyboardGame * sizeof(Inputs::u.keys) + (int)mouseGame * sizeof(Inputs::u.relPos);
 
 	{	// which part differs when two peers don't match ("Peer verification failed")
@@ -766,6 +866,7 @@ void startSession(int localPort, int localPlayerNum)
 				hex(cpu).c_str(), arch, hex(emuSettings).c_str());
 		MD5Sum().add(settings.network.md5.bios)
 				.add(settings.network.md5.game)
+				.add((u8)numPlayers)
 				.add(devices)
 				.add(vrWrites)
 				.add(cpu)
@@ -784,7 +885,7 @@ void startSession(int localPort, int localPlayerNum)
 				.getDigest(verif.stateMD5);
 	}
 
-	GGPOErrorCode result = ggpo_start_session(&ggpoSession, &cb, settings.content.gameId.c_str(), MAX_PLAYERS, inputSize, localPort,
+	GGPOErrorCode result = ggpo_start_session(&ggpoSession, &cb, settings.content.gameId.c_str(), numPlayers, inputSize, localPort,
 			&verif, sizeof(verif));
 	if (result != GGPO_OK)
 	{
@@ -810,35 +911,28 @@ void startSession(int localPort, int localPlayerNum)
 		stopSession();
 		throw FlycastException("GGPO cannot add local player");
 	}
+	playerHandles[localPlayerNum] = localPlayer;
 	ggpo_set_frame_delay(ggpoSession, localPlayer, config::GGPODelay.get());
 
-	size_t colon = config::NetworkServer.get().find(':');
-	std::string peerIp = config::NetworkServer.get().substr(0, colon);
-	if (peerIp.empty())
-		peerIp = "127.0.0.1";
-	u32 peerPort;
-	if (colon == std::string::npos)
+	// every other player, each linked directly
+	for (int i = 0; i < numPlayers; i++)
 	{
-		if (peerIp == "127.0.0.1")
-			peerPort = localPort ^ 1;
-		else
-			peerPort = SERVER_PORT;
+		if (i == localPlayerNum)
+			continue;
+		player = GGPOPlayer{ sizeof(GGPOPlayer), GGPO_PLAYERTYPE_REMOTE, i + 1 };
+		strncpy(player.u.remote.ip_address, peers[i].address.c_str(), sizeof(player.u.remote.ip_address) - 1);
+		player.u.remote.port = peers[i].port;
+		result = ggpo_add_player(ggpoSession, &player, &playerHandles[i]);
+		if (result != GGPO_OK)
+		{
+			WARN_LOG(NETWORK, "GGPO cannot add remote player %d: %d", i + 1, result);
+			stopSession();
+			throw FlycastException("GGPO cannot add remote player");
+		}
+		INFO_LOG(NETWORK, "GGPO player %d: remote, port %d", i + 1, peers[i].port);
 	}
-	else
-	{
-		peerPort = atoi(config::NetworkServer.get().substr(colon + 1).c_str());
-	}
-	player.type = GGPO_PLAYERTYPE_REMOTE;
-	strcpy(player.u.remote.ip_address, peerIp.c_str());
-	player.u.remote.port = peerPort;
-	player.player_num = (1 - localPlayerNum) + 1;
-	result = ggpo_add_player(ggpoSession, &player, &remotePlayer);
-	if (result != GGPO_OK)
-	{
-		WARN_LOG(NETWORK, "GGPO cannot add remote player: %d", result);
-		stopSession();
-		throw FlycastException("GGPO cannot add remote player");
-	}
+	NOTICE_LOG(NETWORK, "GGPO session: %d players, local player %d, local port %d, %d bytes of input each",
+			numPlayers, localPlayerNum + 1, localPort, inputSize);
 	DEBUG_LOG(NETWORK, "GGPO session started");
 #endif
 }
@@ -872,7 +966,7 @@ void getInput(MapleInputState inputState[4])
 	for (int player = 0; player < 4; player++)
 		inputState[player] = {};
 
-	std::vector<u8> inputData(inputSize * MAX_PLAYERS);
+	std::vector<u8> inputData(inputSize * numPlayers);
 	// should not call any callback
 	GGPOErrorCode error = ggpo_synchronize_input(ggpoSession, (void *)&inputData[0], inputData.size(), nullptr);
 	if (error != GGPO_OK)
@@ -881,33 +975,42 @@ void getInput(MapleInputState inputState[4])
 		throw FlycastException("GGPO error");
 	}
 
-	for (int player = 0; player < MAX_PLAYERS; player++)
+	for (int player = 0; player < numPlayers; player++)
 	{
 		MapleInputState& state = inputState[player];
-		const Inputs *inputs = (Inputs *)&inputData[player * inputSize];
-		state.kcode = ~inputs->kcode;
+		Inputs inputs{};	// (only inputSize bytes come over)
+		memcpy(&inputs, &inputData[player * inputSize], std::min<size_t>(inputSize, sizeof(inputs)));
+		state.kcode = ~inputs.kcode;
+		if (dcPad)
+		{
+			state.fullAxes[PJAI_X1] = inputs.u.pad.x * 256;
+			state.fullAxes[PJAI_Y1] = inputs.u.pad.y * 256;
+			state.halfAxes[PJTI_L] = inputs.u.pad.lt * 257;
+			state.halfAxes[PJTI_R] = inputs.u.pad.rt * 257;
+			continue;
+		}
 		if (analogAxes > 0)
 		{
-			state.fullAxes[PJAI_X1] = inputs->u.analog.x << 8;
+			state.fullAxes[PJAI_X1] = inputs.u.analog.x << 8;
 			if (analogAxes >= 2)
-				state.fullAxes[PJAI_Y1] = inputs->u.analog.y << 8;
+				state.fullAxes[PJAI_Y1] = inputs.u.analog.y << 8;
 		}
 		else if (absPointerPos)
 		{
-			state.absPos.x = inputs->u.absPos.x;
-			state.absPos.y = inputs->u.absPos.y;
+			state.absPos.x = inputs.u.absPos.x;
+			state.absPos.y = inputs.u.absPos.y;
 		}
 		else if (keyboardGame)
 		{
-			memcpy(state.keyboard.key, inputs->u.keys, sizeof(state.keyboard.key));
-			state.keyboard.shift = inputs->kbModifiers;
+			memcpy(state.keyboard.key, inputs.u.keys, sizeof(state.keyboard.key));
+			state.keyboard.shift = inputs.kbModifiers;
 		}
 		else if (mouseGame)
 		{
-			state.relPos.x = inputs->u.relPos.x;
-			state.relPos.y = inputs->u.relPos.y;
-			state.relPos.wheel = inputs->u.relPos.wheel;
-			state.mouseButtons = ~inputs->mouseButtons;
+			state.relPos.x = inputs.u.relPos.x;
+			state.relPos.y = inputs.u.relPos.y;
+			state.relPos.wheel = inputs.u.relPos.wheel;
+			state.mouseButtons = ~inputs.mouseButtons;
 		}
 		state.halfAxes[PJTI_R] = (state.kcode & BTN_TRIGGER_RIGHT) == 0 ? 0xffff : 0;
 		state.halfAxes[PJTI_L] = (state.kcode & BTN_TRIGGER_LEFT) == 0 ? 0xffff : 0;
@@ -974,19 +1077,33 @@ bool nextFrame()
 	do {
 		if (!config::ThreadedRendering)
 			os_UpdateInputState();
-		Inputs inputs;
+		Inputs inputs{};
 		inputs.kcode = ~kcode[0];
-		if (rt[0] >= 0x4000)
-			inputs.kcode |= BTN_TRIGGER_RIGHT;
+		if (dcPad)
+		{
+			// (the triggers go as they are, not as the two buttons below)
+			inputs.kcode &= ~(BTN_TRIGGER_RIGHT | BTN_TRIGGER_LEFT);
+			inputs.u.pad.x = (s8)(joyx[0] >> 8);
+			inputs.u.pad.y = (s8)(joyy[0] >> 8);
+			inputs.u.pad.lt = (u8)(lt[0] >> 8);
+			inputs.u.pad.rt = (u8)(rt[0] >> 8);
+		}
 		else
-			inputs.kcode &= ~BTN_TRIGGER_RIGHT;
-		if (lt[0] >= 0x4000)
-			inputs.kcode |= BTN_TRIGGER_LEFT;
-		else
-			inputs.kcode &= ~BTN_TRIGGER_LEFT;
+		{
+			if (rt[0] >= 0x4000)
+				inputs.kcode |= BTN_TRIGGER_RIGHT;
+			else
+				inputs.kcode &= ~BTN_TRIGGER_RIGHT;
+			if (lt[0] >= 0x4000)
+				inputs.kcode |= BTN_TRIGGER_LEFT;
+			else
+				inputs.kcode &= ~BTN_TRIGGER_LEFT;
+		}
 		inputs.mouseButtons = 0;
 		inputs.kbModifiers = 0;
-		if (analogAxes > 0)
+		if (dcPad)
+			;	// all above
+		else if (analogAxes > 0)
 		{
 			inputs.u.analog.x = joyx[0] >> 8;
 			if (analogAxes >= 2)
@@ -1044,7 +1161,7 @@ bool nextFrame()
 	} while (active());
 #ifdef SYNC_TEST
 	u32 input = ~kcode[1 - localPlayerNum];
-	GGPOErrorCode result = ggpo_add_local_input(ggpoSession, remotePlayer, &input, sizeof(input));
+	GGPOErrorCode result = ggpo_add_local_input(ggpoSession, playerHandles[1 - localPlayerNum], &input, sizeof(input));
 	if (result != GGPO_OK)
 		WARN_LOG(NETWORK, "ggpo_add_local_input(2) failed %d", result);
 #endif
@@ -1058,6 +1175,14 @@ bool nextFrame()
 bool active()
 {
 	return ggpoSession != nullptr;
+}
+
+int localPlayerIndex() {
+	return active() ? localPlayerNum : 0;
+}
+
+int playerCount() {
+	return active() ? numPlayers : 1;
 }
 
 std::future<bool> startNetwork()
@@ -1077,7 +1202,18 @@ std::future<bool> startNetwork()
 			}
 
 			try {
-				if (config::ActAsServer)
+				if (!config::GGPOPeers.get().empty())
+				{
+					// tcvr: 2 to 4 players, this copy is network:GGPOPlayer (0 = player 1)
+					const int local = config::GGPOPlayer;
+					const std::vector<PeerAddress> peers = peerList(0, local);
+					if (local < 0 || local >= (int)peers.size())
+						throw FlycastException("Netplay: this player's number is not in the list");
+					if (config::EnableUPnP && peers[local].port != SERVER_PORT)
+						miniupnp.AddPortMapping(peers[local].port, false);
+					startSession(peers[local].port, local);
+				}
+				else if (config::ActAsServer)
 					startSession(SERVER_PORT, 0);
 				else
 					// Use SERVER_PORT-1 as local port if connecting to ourselves
@@ -1123,7 +1259,7 @@ std::future<bool> startNetwork()
 			{
 				GameEvent event;
 				event.type = GameEvent::VF4Card;
-				event.u.card.playerNum = config::ActAsServer ? 0 : 1;
+				event.u.card.playerNum = localPlayerNum;
 				memcpy(event.u.card.data, cardData, sizeof(event.u.card.data));
 				ggpo_send_message(ggpoSession, &event, sizeof(event.type) + sizeof(event.u.card), true);
 			}
@@ -1137,8 +1273,21 @@ void displayStats()
 {
 	if (!active())
 		return;
-	GGPONetworkStats stats;
-	ggpo_get_network_stats(ggpoSession, remotePlayer, &stats);
+	// tcvr: the worst of the other players
+	GGPONetworkStats stats{};
+	for (int i = 0; i < numPlayers; i++)
+	{
+		if (i == localPlayerNum)
+			continue;
+		GGPONetworkStats peer{};
+		if (ggpo_get_network_stats(ggpoSession, playerHandles[i], &peer) != GGPO_OK)
+			continue;
+		stats.network.send_queue_len = std::max(stats.network.send_queue_len, peer.network.send_queue_len);
+		stats.network.ping = std::max(stats.network.ping, peer.network.ping);
+		stats.sync.predicted_frames = std::max(stats.sync.predicted_frames, peer.sync.predicted_frames);
+		if (std::abs(peer.timesync.local_frames_behind) > std::abs(stats.timesync.local_frames_behind))
+			stats.timesync.local_frames_behind = peer.timesync.local_frames_behind;
+	}
 
 	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
@@ -1237,6 +1386,14 @@ bool nextFrame() {
 
 bool active() {
 	return false;
+}
+
+int localPlayerIndex() {
+	return 0;
+}
+
+int playerCount() {
+	return 1;
 }
 
 std::future<bool> startNetwork() {
