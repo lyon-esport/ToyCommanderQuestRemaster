@@ -109,14 +109,14 @@ To check with a controlled series: it should turn by the steering's amount, and 
 
 ## Defaults and switches (VR menu > Comfort)
 
-- **Head turns the camera** (`vr.HeadCamera`): Off / Left-right (yaw) / Left-right + up-down. Off by
-  default until a wearer has checked it. Yaw is about the camera's own up axis, so in a banking plane the
-  turn follows the plane's tilt; the reprojection shows it exactly either way. Pitch stays with the
-  reprojection by default (the widened view already covers about +-50 degrees); roll never goes into
-  the game camera.
-- **Sight when looking away** (`vr.HeadCameraSight`): the weapons aim with the vehicle. The gun sight is
-  a HUD sprite; whether the game projects it from the vehicle's aim (then it lands right in the turned
-  view) or draws it fixed on screen is still to be checked with a head; "Hidden" is reserved for that.
+- **Head turns the camera** (`vr.HeadCamera`): Off / Left-right (yaw) / Left-right + up-down.
+  Default Left-right + up-down (chosen after the worn test of 2026-11-18: smooth, no edges in any
+  direction). Yaw is about the camera's own up axis, so in a banking plane the turn follows the plane's
+  tilt; the reprojection shows it exactly either way. Roll never goes into the game camera.
+- **Aim ahead** (`vr.HeadCameraLead`): -1 (default) leads a turning head by the measured lag from the
+  head read to the picture's showing (about 165 ms at 30 pictures/s, capped at 200 ms); 0 none; N ms.
+- The weapons aim with the vehicle; the sights are drawn at their projected depth, so they stay on the
+  vehicle's aim in the turned view.
 - Off in netplay (GGPO, network, battle cable): the turned view matrix may feed the game's targeting.
 
 ## Testing without a head (head.request)
