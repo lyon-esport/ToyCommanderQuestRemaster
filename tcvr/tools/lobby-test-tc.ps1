@@ -19,8 +19,8 @@
   .\tcvr\tools\lobby-test-tc.ps1                       2 copies
   .\tcvr\tools\lobby-test-tc.ps1 -Players 4            4 copies
   .\tcvr\tools\lobby-test-tc.ps1 -NetDelay 80 -Loss 2  the match with simulated delay and loss
-  .\tcvr\tools\lobby-test-tc.ps1 -InputDelay 0         the host starts with GGPO input delay 0 (MP START 0; default 2,
-                                                       what the VR menu uses)
+  .\tcvr\tools\lobby-test-tc.ps1 -InputDelay 0         the host starts with GGPO input delay 0 (MP START 0, the default,
+                                                       as the VR menu; 2 hits an old GGPO assertion, input_queue.cpp)
 
   Windows Firewall asks once for each new flycast.exe path (one per copy folder); a prompt left unanswered
   makes a Block rule, and the copies then never connect. -WorkDir can point to folders already allowed.
@@ -36,7 +36,7 @@ param(
 	[int]$Seconds = 70,			# the match, from its first frame
 	[int]$NetDelay = 0,			# GGPO's simulated network delay (ms each way)
 	[int]$Loss = 0,				# % packets lost
-	[int]$InputDelay = 2,			# GGPO input delay (frames) the host starts the match with (MP START <delay>)
+	[int]$InputDelay = 0,			# GGPO input delay (frames) the host starts the match with (MP START <delay>; 0 as the VR menu)
 	[string]$BuildDir = '',
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
