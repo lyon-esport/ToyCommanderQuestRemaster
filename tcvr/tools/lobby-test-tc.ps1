@@ -40,7 +40,8 @@ param(
 	[string]$BuildDir = '',
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
-	[string]$Name = ''
+	[string]$Name = '',
+	[int]$PortOffset = 0		# added to the pad (27241+), GGPO (19913+) and discovery (19790) ports: two tests on one PC at once
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -78,7 +79,7 @@ $route = @(
 
 # ---- The copies ------------------------------------------------------------------------------
 $peers = @(for ($i = 0; $i -lt $Players; $i++) {
-	[pscustomobject]@{ Name = "p$($i + 1)"; Index = $i; Port = 27241 + $i; GgpoPort = 19913 + $i }
+	[pscustomobject]@{ Name = "p$($i + 1)"; Index = $i; Port = 27241 + $PortOffset + $i; GgpoPort = 19913 + $PortOffset + $i }
 })
 foreach ($peer in $peers) {
 	$dir = Join-Path $WorkDir $peer.Name
@@ -95,13 +96,14 @@ for ($i = 1; $i -le 4; $i++) { $base += ",input:device$i=" + $(if ($i -le $Playe
 
 function Start-Copy($peer, [bool]$sync) {
 	$env:TCVR_MP_PORT = $peer.GgpoPort
+	if ($PortOffset) { $env:TCVR_MP_DISCOVERY_PORT = 19790 + $PortOffset }
 	if ($sync) { $env:HOTD2VR_SYNCLOG = Join-Path $peer.Dir 'sync.txt' } else { Remove-Item Env:HOTD2VR_SYNCLOG -ErrorAction SilentlyContinue }
 	if ($NetDelay) { $env:GGPO_NETWORK_DELAY = $NetDelay }
 	if ($Loss) { $env:GGPO_PACKET_LOSS = $Loss }
 	$cfg = "$base,config:vr.UdpPort=$($peer.Port)"
 	$peer.Proc = Start-Process -FilePath (Join-Path $peer.Dir 'flycast.exe') `
 		-ArgumentList @('-config', $cfg, "`"$GamePath`"") -WorkingDirectory $peer.Dir -PassThru
-	foreach ($k in 'TCVR_MP_PORT', 'HOTD2VR_SYNCLOG', 'GGPO_NETWORK_DELAY', 'GGPO_PACKET_LOSS') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
+	foreach ($k in 'TCVR_MP_PORT', 'TCVR_MP_DISCOVERY_PORT', 'HOTD2VR_SYNCLOG', 'GGPO_NETWORK_DELAY', 'GGPO_PACKET_LOSS') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
 }
 function Stop-Copy($peer) {
 	if ($peer.Proc -and -not $peer.Proc.HasExited) { Stop-Process -Id $peer.Proc.Id -Force }

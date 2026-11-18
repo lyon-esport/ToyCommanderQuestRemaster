@@ -48,7 +48,8 @@ param(
 	[string]$BuildDir = '',	# folder with flycast.exe (default $env:TCVR_BUILD_WIN, else build-win here)
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
-	[string]$Name = ''
+	[string]$Name = '',
+	[int]$PortOffset = 0	# added to the pad listener ports (27041+) and, with the player list, the GGPO ports (19713+): two tests on one PC at once (use -List for 2 copies)
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -232,17 +233,17 @@ function Pad-Message([int]$p, [double]$t) {
 # Copy p<n> is player n; its pad listener (vr.UdpPort) is 27040 + n. Netplay ports (GGPO):
 # classic two players 19713 (host) / 19712 (guest); with the player list 19713 + n - 1.
 $peers = if ($Local) {
-	@([pscustomobject]@{ Name = 'local'; Port = 27041; Net = 'network:GGPO=no' })
+	@([pscustomobject]@{ Name = 'local'; Port = 27041 + $PortOffset; Net = 'network:GGPO=no' })
 } elseif ($Players -eq 2 -and -not $List) {
 	@(
-		[pscustomobject]@{ Name = 'p1'; Port = 27041; Net = 'network:GGPO=yes,network:ActAsServer=yes' },
-		[pscustomobject]@{ Name = 'p2'; Port = 27042; Net = 'network:GGPO=yes,network:ActAsServer=no,network:server=127.0.0.1' }
+		[pscustomobject]@{ Name = 'p1'; Port = 27041 + $PortOffset; Net = 'network:GGPO=yes,network:ActAsServer=yes' },
+		[pscustomobject]@{ Name = 'p2'; Port = 27042 + $PortOffset; Net = 'network:GGPO=yes,network:ActAsServer=no,network:server=127.0.0.1' }
 	)
 } else {
 	# (in quotes: -config splits on commas outside them)
-	$peerList = (0..($Players - 1) | ForEach-Object { "127.0.0.1:$(19713 + $_)" }) -join ','
+	$peerList = (0..($Players - 1) | ForEach-Object { "127.0.0.1:$(19713 + $PortOffset + $_)" }) -join ','
 	@(for ($i = 0; $i -lt $Players; $i++) {
-		[pscustomobject]@{ Name = "p$($i + 1)"; Port = 27041 + $i; Net = "network:GGPO=yes,network:GGPOPeers='$peerList',network:GGPOPlayer=$i" }
+		[pscustomobject]@{ Name = "p$($i + 1)"; Port = 27041 + $PortOffset + $i; Net = "network:GGPO=yes,network:GGPOPeers='$peerList',network:GGPOPlayer=$i" }
 	})
 }
 foreach ($peer in $peers) {

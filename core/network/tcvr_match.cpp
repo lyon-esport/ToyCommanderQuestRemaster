@@ -109,6 +109,8 @@ lobby::Lobby& theLobby()
 	{
 		theOne = std::make_unique<lobby::Lobby>();
 		theOne->setBroadcastHook([](bool on) { enableNetworkBroadcast(on); });
+		if (const char *port = std::getenv("TCVR_MP_DISCOVERY_PORT"))	// tests: two tests on one PC at once
+			theOne->setDiscoveryPort((uint16_t)std::atoi(port));
 	}
 	return *theOne;
 }
