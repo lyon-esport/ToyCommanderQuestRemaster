@@ -64,7 +64,7 @@ std::string restart()
 	if (restartHook != nullptr)
 		return restartHook();
 	// PC (the test script restarts the copy when it sees this line)
-	NOTICE_LOG(NETWORK, "MP RESTART");
+	WARN_LOG(NETWORK, "MP RESTART");		// (a warning: always in the log)
 	return "Restart needed";
 }
 
@@ -266,6 +266,7 @@ std::string stateLine()
 		line += p.present ? (p.ready ? '1' : '0') : '-';
 	line += " mode=" + std::to_string(v.state.settings.mode) + " room=" + std::to_string(v.state.settings.room)
 			+ " points=" + std::to_string(v.state.settings.points);
+	line += std::string(" match=") + (inMatch() ? "1" : "0");
 	if (v.phase == lobby::Phase::Started)
 		line += " index=" + std::to_string(v.start.localIndex) + " of=" + std::to_string(v.start.peers.size());
 	if (!v.message.empty())
@@ -322,6 +323,11 @@ std::string udpCommand(const char *cmd)
 			return "MPR error " + error;
 		return stateLine();
 	}
+	if (strncmp(cmd, "LEAVEMATCH", 10) == 0)
+	{
+		leaveMatch();
+		return "MPR left";
+	}
 	if (strncmp(cmd, "LEAVE", 5) == 0)
 	{
 		l.leave();
@@ -329,6 +335,8 @@ std::string udpCommand(const char *cmd)
 	}
 	if (strncmp(cmd, "STATE", 5) == 0)
 		return stateLine();
+	if (strncmp(cmd, "RETURN", 6) == 0)
+		return takeReturn() ? "MPR return=1" : "MPR return=0";
 	return "MPR unknown";
 }
 

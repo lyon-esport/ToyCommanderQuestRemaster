@@ -30,7 +30,7 @@
 		MP <command>
 
 	the multiplayer lobby (tcvr_match.cpp): HOST <name> <mode> <room> <points>, JOIN [<name> [<address>]], READY <0|1>,
-	START <delay>, LEAVE, STATE. Each answers "MPR <phase> players=n slot=n ready=.. ..." to the sender.
+	START <delay>, LEAVE, STATE, LEAVEMATCH, RETURN. Each answers "MPR <phase> players=n slot=n ready=.. ..." to the sender.
 
 		PEEK <address hex> <length, at most 256>
 
