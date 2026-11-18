@@ -2621,7 +2621,7 @@ void noteHeadCameraShown(u32 sample)
 	count++;
 	if (clock::now() - since >= std::chrono::seconds(10))
 	{
-		INFO_LOG(RENDERER, "VR head camera: lag %.1f headset frames (max %.0f), new picture every %.1f, frame %.1f ms, "
+		NOTICE_LOG(RENDERER, "VR head camera: lag %.1f headset frames (max %.0f), new picture every %.1f, frame %.1f ms, "
 				"aiming %.0f ms ahead, head turning %.0f deg/s", lagSum / count, lagMax, camPictureFrames.load(),
 				headsetFrameTime.load() * 1000.f, headCameraLead() * 1000.f, headYawRate.load() * 57.29578f);
 		lagSum = lagMax = 0.f;

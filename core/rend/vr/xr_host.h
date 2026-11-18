@@ -9,6 +9,7 @@
 	Copyright 2026 mikermak. This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #pragma once
+#include "types.h"
 #include <glm/glm.hpp>
 
 namespace vr::xr
