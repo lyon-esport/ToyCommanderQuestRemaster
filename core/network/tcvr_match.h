@@ -48,6 +48,14 @@ void gate();
 // True once after a match has ended: the menu should open on its Multiplayer page.
 bool takeReturn();
 
+// Automatic match setup (task 3.4): the buttons this copy's own pad adds to its netplay input for the
+// frame about to be sent (Dreamcast button bits, pressed = 1). Called once per new frame (never in a
+// rollback) by the netplay, only in a match. Player 1's copy goes through the game's menus to the team
+// and vehicle page and enters the match's Mode, Room and Points on the options page; the other copies
+// join the page with Start. Everything goes through the netplay as pad input, so every copy runs the
+// same game; the copies only read memory to know where the game is.
+uint32_t setupButtons();
+
 // The options a START puts in emu.cfg, as text "key=value" lines, for the tests.
 std::vector<std::string> optionsFor(const lobby::StartInfo& info, const std::string& hostAddress);
 

@@ -10,8 +10,8 @@
     2. the host presses Start (MP START): every copy writes the netplay options (network:GGPOPeers,
        GGPOPlayer, ...) into its emu.cfg and asks for a restart (the line "MP RESTART" in its log; on the
        headset the app starts itself again). The script restarts the copies, like the app does;
-    3. the restarted copies are one netplay session (the safety gate of a fresh start marker): p1 goes through
-       the game's menus to its main menu, and the per-frame memory hash of every copy is compared with p1's
+    3. the restarted copies are one netplay session (the safety gate of a fresh start marker): the automatic
+       setup takes every copy to the team and vehicle page with the host's settings, and the per-frame memory hash of every copy is compared with p1's
        (main RAM and video/sound RAM, HOTD2VR_SYNCLOG), as in netplay-test-tc.ps1;
     4. every copy leaves the match (MP LEAVEMATCH): netplay is off in emu.cfg again, the copy is restarted
        and a game start finds no match (MP STATE match=0) and a "match over" mark for the menu (MP RETURN).
@@ -19,8 +19,13 @@
   .\tcvr\tools\lobby-test-tc.ps1                       2 copies
   .\tcvr\tools\lobby-test-tc.ps1 -Players 4            4 copies
   .\tcvr\tools\lobby-test-tc.ps1 -NetDelay 80 -Loss 2  the match with simulated delay and loss
-  .\tcvr\tools\lobby-test-tc.ps1 -InputDelay 0         the host starts with GGPO input delay 0 (MP START 0, the default,
-                                                       as the VR menu; 2 hits an old GGPO assertion, input_queue.cpp)
+  .\tcvr\tools\lobby-test-tc.ps1 -InputDelay 0         the host starts with GGPO input delay 0 (MP START 0; the VR menu
+                                                       starts with 2)
+  .\tcvr\tools\lobby-test-tc.ps1 -Mode 2 -Room 7 -Points 40   other match settings
+
+  In the match nobody touches a pad: the automatic setup (task 3.4, tcvr_match.cpp setupButtons) takes every
+  copy to the game's team and vehicle page with the host's Mode, Room and Points; the test checks its log lines
+  and, through PEEK, the page, the players' slots and the options in every copy's memory.
 
   Windows Firewall asks once for each new flycast.exe path (one per copy folder); a prompt left unanswered
   makes a Block rule, and the copies then never connect. -WorkDir can point to folders already allowed.
@@ -33,10 +38,13 @@
 param(
 	[string]$GamePath = '',
 	[ValidateRange(2, 4)][int]$Players = 2,
-	[int]$Seconds = 70,			# the match, from its first frame
+	[int]$Seconds = 75,			# the match, from its first frame
 	[int]$NetDelay = 0,			# GGPO's simulated network delay (ms each way)
 	[int]$Loss = 0,				# % packets lost
-	[int]$InputDelay = 0,			# GGPO input delay (frames) the host starts the match with (MP START <delay>; 0 as the VR menu)
+	[int]$InputDelay = 2,			# GGPO input delay (frames) the host starts the match with (MP START <delay>; 2 as the VR menu)
+	[ValidateRange(0, 2)][int]$Mode = 0,	# the match settings the host creates the game with (MP HOST): 0 Deathmatch, 1 Cat and Mice, 2 Capture the Flag
+	[ValidateRange(0, 7)][int]$Room = 3,	# arena 0..7
+	[int]$Points = 15,
 	[string]$BuildDir = '',
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
@@ -68,15 +76,6 @@ function Check([bool]$ok, [string]$what) {
 
 # Dreamcast pad bits (core/input/gamepad.h)
 $BTN = @{ B = 2; A = 4; START = 8; UP = 0x10; DOWN = 0x20; LEFT = 0x40; RIGHT = 0x80 }
-# the route to the game's main menu on player 1's pad (as in netplay-test-tc.ps1), seconds after the first frame
-$route = @(
-	foreach ($at in 3, 7, 11, 15, 19) { @{ T = $at; B = 'START'; Hold = 0.15 } }
-	@{ T = 24; B = 'START'; Hold = 0.15 }
-	@{ T = 25.5; B = 'UP'; Hold = 0.15 }
-	foreach ($at in 26.5, 27.5, 28.5, 29.5) { @{ T = $at; B = 'RIGHT'; Hold = 0.15 } }
-	@{ T = 31; B = 'A'; Hold = 0.15 }
-)
-
 # ---- The copies ------------------------------------------------------------------------------
 $peers = @(for ($i = 0; $i -lt $Players; $i++) {
 	[pscustomobject]@{ Name = "p$($i + 1)"; Index = $i; Port = 27241 + $PortOffset + $i; GgpoPort = 19913 + $PortOffset + $i }
@@ -119,6 +118,18 @@ function Send-Mp($peer, [string]$cmd, [int]$timeoutMs = 8000) {
 	$ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
 	try { return [Text.Encoding]::ASCII.GetString($cmdUdp.Receive([ref]$ep)) } catch { return '' }
 }
+# "PEEK <address> <length>": main RAM bytes of a running copy (core/input/udp_lightgun.cpp), $null when no answer
+function Peek($peer, [int64]$addr, [int]$len) {
+	$cmdUdp.Client.ReceiveTimeout = 1000
+	$m = [Text.Encoding]::ASCII.GetBytes(('PEEK {0:X8} {1}' -f $addr, $len))
+	[void]$cmdUdp.Send($m, $m.Length, '127.0.0.1', $peer.Port)
+	$ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+	try { $f = [Text.Encoding]::ASCII.GetString($cmdUdp.Receive([ref]$ep)).Split(' ') } catch { return $null }
+	if ($f.Count -lt 3 -or $f[0] -ne 'PEEKR' -or $f[2] -eq 'ERR') { return $null }
+	$b = [byte[]]::new($f[2].Length / 2)
+	for ($i = 0; $i -lt $b.Length; $i++) { $b[$i] = [Convert]::ToByte($f[2].Substring($i * 2, 2), 16) }
+	return ,$b
+}
 function Wait-Mp($peer, [string]$cmd, [scriptblock]$ok, [int]$seconds) {
 	$end = (Get-Date).AddSeconds($seconds)
 	$r = ''
@@ -158,7 +169,7 @@ try {
 	}
 
 	# ---- 2. host, find, join, ready
-	$r = Send-Mp $peers[0] 'HOST P1 1 2 20'
+	$r = Send-Mp $peers[0] "HOST P1 $Mode $Room $Points"
 	Check ($r -like 'MPR lobby players=1 slot=0*') "p1 creates a game: $r"
 	$findTimes = @()
 	for ($i = 1; $i -lt $Players; $i++) {
@@ -171,9 +182,10 @@ try {
 	Check (($findTimes | Measure-Object -Maximum).Maximum -lt 3.5) ("every joiner found and joined within 3.5 s (slowest {0:0.0} s)" -f ($findTimes | Measure-Object -Maximum).Maximum)
 	$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like "MPR lobby players=$Players *" } 10
 	Check ($r -like "MPR lobby players=$Players *") "the host sees all $Players players: $r"
-	Check ($r -like '*mode=1 room=2 points=20*') 'the host settings (mode 1, room 2, 20 points) are in the lobby'
+	$want = "mode=$Mode room=$Room points=$Points"
+	Check ($r -like "*$want*") "the host settings ($want) are in the lobby"
 	$r = Send-Mp $peers[1] 'STATE'
-	Check ($r -like '*mode=1 room=2 points=20*') "a joiner sees the host's settings: $r"
+	Check ($r -like "*$want*") "a joiner sees the host's settings: $r"
 	$r = Send-Mp $peers[0] "START $InputDelay"
 	Check ($r -like 'MPR error*') "Start is refused while the joiners are not ready: $r"
 	for ($i = 1; $i -lt $Players; $i++) { [void](Send-Mp $peers[$i] 'READY 1') }
@@ -217,16 +229,31 @@ try {
 		$t = ((Get-Date) - $t0).TotalSeconds
 		if ($t -ge $Seconds) { break }
 		foreach ($peer in $peers) {
-			$state = @(0, 0, 0, 0, 0)
-			if ($peer.Index -eq 0) {
-				foreach ($m in $route) { if ($t -ge $m.T -and $t -lt $m.T + $m.Hold) { $state = @($BTN[$m.B], 0, 0, 0, 0) } }
-			}
-			$msg = [Text.Encoding]::ASCII.GetBytes(("PAD 0 {0} {1} {2} {3} {4}" -f $state))
+			# (nobody presses anything: the automatic setup does)
+			$msg = [Text.Encoding]::ASCII.GetBytes('PAD 0 0 0 0 0 0')
 			[void]$udp.Send($msg, $msg.Length, '127.0.0.1', $peer.Port)
 		}
 		Start-Sleep -Milliseconds 30
 	}
 	$udp.Close()
+
+	# the automatic setup: every copy on the team and vehicle page with the host's settings
+	foreach ($peer in $peers) {
+		$log = Log-Text $peer
+		$done = [regex]::Match($log, 'MP SETUP done[^\r\n]*')
+		Check $done.Success ("{0}: automatic setup: {1}" -f $peer.Name, $(if ($done.Success) { $done.Value } else { ([regex]::Match($log, 'MP SETUP failed[^\r\n]*')).Value + ' (no "MP SETUP done")' }))
+		$page = Peek $peer 0x8C0A5A6C 4
+		$slots = Peek $peer 0x8C0A6048 0xA0
+		$opt = Peek $peer 0x8C0A5AC8 12		# active environment, mode, room
+		if ($null -eq $page -or $null -eq $slots -or $null -eq $opt) { Check $false "$($peer.Name): PEEK answered"; continue }
+		$bits = [BitConverter]::ToUInt32($page, 0)
+		Check (($bits -band 0x4000) -ne 0 -and ($bits -band 0x10000) -eq 0) ("{0}: on the team and vehicle page (menu bits {1:X8})" -f $peer.Name, $bits)
+		$states = @(for ($i = 0; $i -lt 4; $i++) { [BitConverter]::ToUInt32($slots, $i * 0x28 + 8) })
+		$joined = @($states | Select-Object -First $Players | Where-Object { $_ -ge 2 }).Count
+		Check ($joined -eq $Players) ("{0}: {1} of {2} players on the page (slot states {3})" -f $peer.Name, $joined, $Players, ($states -join ' '))
+		$m = [BitConverter]::ToUInt32($opt, 4); $rm = [BitConverter]::ToUInt32($opt, 8)
+		Check ($m -eq $Mode -and $rm -eq $Room) ("{0}: options mode {1} room {2} (wanted {3} {4})" -f $peer.Name, $m, $rm, $Mode, $Room)
+	}
 
 	# the screens: the last picture of each copy
 	# (its own folder: -WorkDir may be shared with netplay-test-tc.ps1, whose pictures are in shots\)

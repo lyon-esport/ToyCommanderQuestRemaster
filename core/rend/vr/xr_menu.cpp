@@ -185,6 +185,7 @@ Entry infoLine(const std::string& text)
 
 bool isInfo(const Entry& e) { return e.action == Action::Info; }
 
+constexpr uint8_t MatchInputDelay = 2;
 std::string roomName(int room) { return "Arena " + std::to_string(room + 1); }
 
 std::string gameLine(const tcvr::lobby::FoundGame& g)
@@ -746,8 +747,8 @@ MenuAction accept(const Entry& e)
 	case Action::MpStartMatch:
 	{
 		std::string error;
-		// (the saved GGPO delay, 0 by default: a delay of 2 hits an old GGPO assertion, input_queue.cpp, see the PR)
-		if (!match::theLobby().start((uint8_t)std::max(0, (int)config::GGPODelay), error))
+		// 2 frames of input delay (33 ms at 60 Hz): fewer rollbacks on Wi-Fi, which the headsets pay for
+		if (!match::theLobby().start(MatchInputDelay, error))
 			setStatus(error);
 		else
 			setStatus("Starting the match...");
