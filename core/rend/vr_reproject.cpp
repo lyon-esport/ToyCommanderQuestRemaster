@@ -2154,6 +2154,7 @@ const ReprojectParams& update(const rend_context& ctx)
 		params.tanHalf = halfSize / (float)config::VrFocal;
 		params.overlay = glm::vec4(params.tanHalf, 1.f, -1.f);	// no vertex counts as overlay
 		params.viewProj = projection(params.tanHalf, zNear);
+		params.hudViewProj = params.viewProj;
 		return params;
 	}
 
@@ -2171,7 +2172,8 @@ const ReprojectParams& update(const rend_context& ctx)
 	if (const xr::Eye *eye = xr::currentEye())
 	{
 		// In the headset: game camera at the player's head, viewed through this eye.
-		params.viewProj = eye->viewProj;
+		params.viewProj = eye->viewProj * xr::gameTurn(glm::vec2(ctx.tcvrCamYaw, ctx.tcvrCamPitch));
+		params.hudViewProj = eye->hudViewProj;
 		params.comfort = comfortParams();
 		return params;
 	}
@@ -2193,6 +2195,7 @@ const ReprojectParams& update(const rend_context& ctx)
 	// The renderer's ndc y points down the image; flip into y-up space for the pose.
 	const glm::mat4 flipY = glm::scale(glm::mat4(1.f), glm::vec3(1, -1, 1));
 	params.viewProj = projection(stockTan, zNear) * flipY * glm::inverse(pose) * flipY;
+	params.hudViewProj = params.viewProj;
 
 	return params;
 }

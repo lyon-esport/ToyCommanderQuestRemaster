@@ -511,6 +511,8 @@ void ta_vtx_ListInit(bool continuation)
 		taRenderPass++;
 	SetCurrentTARC(TA_OL_BASE);
 	ta_tad.ClearPartial();
+	if (!continuation)
+		tcvrNoteListInit();	// tcvr: the head camera's turn follows the list's vertices
 	markObjectListBlocks(taRenderPass);
 
 	ta_cur_state = TAS_NS;
