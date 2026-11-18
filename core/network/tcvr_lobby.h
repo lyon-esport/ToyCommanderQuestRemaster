@@ -202,6 +202,34 @@ struct View
 // The line the menu shows for a refusal.
 const char *refuseText(RefuseReason reason);
 
+// ---- the address a host announces ----------------------------------------------------------
+// A computer can hold several IPv4 addresses: the real LAN (Wi-Fi, Ethernet, or a Hyper-V
+// external switch bridged to it), host-only virtual networks (Hyper-V "Default Switch", WSL,
+// VirtualBox, VMware, Docker), VPN tunnels, loopback and link-local. The host must announce the
+// one the other headsets can reach. The adapter that holds the default gateway wins; then a
+// physical Wi-Fi/Ethernet adapter; virtual and VPN adapters only when nothing else is there.
+
+struct NetInterface
+{
+	std::string name;			// "Wi-Fi", "wlan0", "vEthernet (Default Switch)"
+	std::string description;	// Windows adapter description ("Hyper-V Virtual Ethernet Adapter"); may be empty
+	std::string address;		// dotted IPv4
+	bool up = true;
+	bool loopback = false;
+	bool gateway = false;		// holds an IPv4 default gateway (Windows), or is the default route's interface
+	bool wireless = false;		// known to be Wi-Fi from the OS adapter type
+	bool wired = false;			// known to be Ethernet from the OS adapter type
+	bool tunnel = false;		// known to be a tunnel/PPP adapter from the OS adapter type
+	uint32_t metric = 0;		// lower is preferred (Windows interface metric; 0 = unknown)
+};
+
+// Score of one interface for announcing; negative = never usable (down, loopback, link-local, no address).
+int lanScore(const NetInterface& nif);
+// The best address in the list, or "" when none is usable.
+std::string pickLanAddress(const std::vector<NetInterface>& interfaces);
+// This computer's interfaces (Windows: GetAdaptersAddresses; elsewhere getifaddrs plus the default route).
+std::vector<NetInterface> listInterfaces();
+
 class Lobby
 {
 public:

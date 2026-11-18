@@ -10,6 +10,19 @@
 #endif
 #include <asio.hpp>
 
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "iphlpapi.lib")
+#endif
+#else
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -344,6 +357,203 @@ const char *refuseText(RefuseReason reason)
 	}
 }
 
+// ---- the address a host announces ---------------------------------------------------------------
+
+namespace
+{
+
+// The source address of the default route (nothing is sent: a UDP "connect" only picks the route).
+std::string routeAddress()
+{
+	try {
+		asio::io_context io;
+		asio::ip::udp::socket s(io);
+		s.open(asio::ip::udp::v4());
+		s.connect(asio::ip::udp::endpoint(asio::ip::make_address_v4("192.0.2.1"), 9));
+		return s.local_endpoint().address().to_string();
+	} catch (...) {
+		return {};
+	}
+}
+
+std::string lower(std::string s)
+{
+	for (char& c : s)
+		if (c >= 'A' && c <= 'Z')
+			c = c - 'A' + 'a';
+	return s;
+}
+
+bool startsWith(const std::string& s, const char *prefix)
+{
+	return s.rfind(prefix, 0) == 0;
+}
+
+bool contains(const std::string& s, const char *part)
+{
+	return s.find(part) != std::string::npos;
+}
+
+bool parseIPv4(const std::string& a, uint8_t out[4])
+{
+	asio::error_code ec;
+	const auto v4 = asio::ip::make_address_v4(a, ec);
+	if (ec)
+		return false;
+	const auto b = v4.to_bytes();
+	std::copy(b.begin(), b.end(), out);
+	return true;
+}
+
+}	// namespace
+
+int lanScore(const NetInterface& nif)
+{
+	uint8_t ip[4];
+	if (!nif.up || nif.loopback || !parseIPv4(nif.address, ip))
+		return -1;
+	if (ip[0] == 127 || ip[0] == 0 || (ip[0] == 169 && ip[1] == 254) || ip[0] >= 224)
+		return -1;	// loopback, unset, link-local (no DHCP), multicast/reserved
+
+	const std::string n = lower(nif.name);
+	const std::string d = lower(nif.description);
+	const std::string t = n + " | " + d;
+
+	// VPN and tunnels: the other headsets are not on the far side of these
+	const bool vpn = nif.tunnel
+			|| startsWith(n, "tun") || startsWith(n, "tap") || startsWith(n, "ppp") || startsWith(n, "wg")
+			|| startsWith(n, "ipsec") || startsWith(n, "utun") || startsWith(n, "zt") || startsWith(n, "tailscale")
+			|| contains(t, "vpn") || contains(t, "wireguard") || contains(t, "tailscale") || contains(t, "zerotier")
+			|| contains(t, "openvpn") || contains(t, "tap-windows") || contains(t, "wintun") || contains(t, "hamachi")
+			|| contains(t, "fortinet") || contains(t, "anyconnect") || contains(t, "globalprotect");
+	// host-only virtual networks (a Hyper-V external switch bridged to the LAN looks the same, but holds the gateway)
+	const bool virt = contains(t, "hyper-v") || contains(t, "vethernet") || contains(t, "wsl")
+			|| contains(t, "virtualbox") || contains(t, "vmware") || contains(t, "vmnet") || contains(t, "vboxnet")
+			|| contains(t, "docker") || startsWith(n, "veth") || startsWith(n, "virbr") || startsWith(n, "br-")
+			|| startsWith(n, "dummy") || contains(t, "loopback") || contains(t, "npcap");
+	// mobile data and Wi-Fi Direct: reachable by nobody in the room
+	const bool mobile = startsWith(n, "rmnet") || startsWith(n, "ccmni") || startsWith(n, "pdp") || startsWith(n, "p2p")
+			|| contains(t, "bluetooth");
+	const bool wifi = nif.wireless || startsWith(n, "wlan") || startsWith(n, "wl") || startsWith(n, "swlan")
+			|| startsWith(n, "ap") || contains(t, "wi-fi") || contains(t, "wifi") || contains(t, "wireless")
+			|| contains(t, "802.11");
+	const bool ethernet = nif.wired || startsWith(n, "eth") || startsWith(n, "en") || contains(t, "ethernet");
+
+	int score = 10;
+	if (nif.gateway)
+		score += 100;
+	if (vpn)
+		score -= 80;
+	else if (virt)
+		score -= 30;
+	else if (mobile)
+		score -= 20;
+	else if (wifi || ethernet)
+		score += 40;
+	// RFC 1918: a LAN
+	if (ip[0] == 10 || (ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31) || (ip[0] == 192 && ip[1] == 168))
+		score += 5;
+	return std::max(score, 0);
+}
+
+std::string pickLanAddress(const std::vector<NetInterface>& interfaces)
+{
+	const NetInterface *best = nullptr;
+	int bestScore = -1;
+	for (const NetInterface& nif : interfaces)
+	{
+		const int s = lanScore(nif);
+		if (s < 0)
+			continue;
+		// same score: the lower metric, then the first listed
+		if (s > bestScore || (s == bestScore && best && nif.metric != 0
+				&& (best->metric == 0 || nif.metric < best->metric)))
+		{
+			best = &nif;
+			bestScore = s;
+		}
+	}
+	return best ? best->address : std::string();
+}
+
+std::vector<NetInterface> listInterfaces()
+{
+	std::vector<NetInterface> list;
+#ifdef _WIN32
+	ULONG size = 16 * 1024;
+	std::vector<uint8_t> buf;
+	ULONG ret = ERROR_BUFFER_OVERFLOW;
+	for (int tries = 0; tries < 3 && ret == ERROR_BUFFER_OVERFLOW; tries++)
+	{
+		buf.resize(size);
+		ret = GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST
+				| GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr,
+				(IP_ADAPTER_ADDRESSES *)buf.data(), &size);
+	}
+	if (ret != NO_ERROR)
+		return list;
+	auto utf8 = [](const wchar_t *w) {
+		if (w == nullptr || *w == 0)
+			return std::string();
+		const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+		std::string s(n > 0 ? n - 1 : 0, '\0');
+		if (n > 1)
+			WideCharToMultiByte(CP_UTF8, 0, w, -1, &s[0], n, nullptr, nullptr);
+		return s;
+	};
+	for (auto a = (IP_ADAPTER_ADDRESSES *)buf.data(); a != nullptr; a = a->Next)
+	{
+		bool gateway = false;
+		for (auto g = a->FirstGatewayAddress; g != nullptr; g = g->Next)
+			if (g->Address.lpSockaddr && g->Address.lpSockaddr->sa_family == AF_INET
+					&& ((sockaddr_in *)g->Address.lpSockaddr)->sin_addr.s_addr != 0)
+				gateway = true;
+		for (auto u = a->FirstUnicastAddress; u != nullptr; u = u->Next)
+		{
+			if (!u->Address.lpSockaddr || u->Address.lpSockaddr->sa_family != AF_INET)
+				continue;
+			char text[INET_ADDRSTRLEN] {};
+			inet_ntop(AF_INET, &((sockaddr_in *)u->Address.lpSockaddr)->sin_addr, text, sizeof(text));
+			NetInterface nif;
+			nif.name = utf8(a->FriendlyName);
+			nif.description = utf8(a->Description);
+			nif.address = text;
+			nif.up = a->OperStatus == IfOperStatusUp;
+			nif.loopback = a->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
+			nif.gateway = gateway;
+			nif.wireless = a->IfType == IF_TYPE_IEEE80211;
+			nif.wired = a->IfType == IF_TYPE_ETHERNET_CSMACD;
+			nif.tunnel = a->IfType == IF_TYPE_TUNNEL || a->IfType == IF_TYPE_PPP;
+			nif.metric = a->Ipv4Metric;
+			list.push_back(nif);
+		}
+	}
+#else
+	// no gateway list here (Android hides /proc/net/route): the default route's source address stands for it
+	const std::string route = routeAddress();
+	ifaddrs *addrs = nullptr;
+	if (getifaddrs(&addrs) != 0)
+		return list;
+	for (ifaddrs *ifa = addrs; ifa != nullptr; ifa = ifa->ifa_next)
+	{
+		if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET)
+			continue;
+		char text[INET_ADDRSTRLEN] {};
+		inet_ntop(AF_INET, &((sockaddr_in *)ifa->ifa_addr)->sin_addr, text, sizeof(text));
+		NetInterface nif;
+		nif.name = ifa->ifa_name ? ifa->ifa_name : "";
+		nif.address = text;
+		nif.up = (ifa->ifa_flags & IFF_UP) != 0 && (ifa->ifa_flags & IFF_RUNNING) != 0;
+		nif.loopback = (ifa->ifa_flags & IFF_LOOPBACK) != 0;
+		nif.tunnel = (ifa->ifa_flags & IFF_POINTOPOINT) != 0;
+		nif.gateway = !route.empty() && nif.address == route;
+		list.push_back(nif);
+	}
+	freeifaddrs(addrs);
+#endif
+	return list;
+}
+
 // ---- the lobby ------------------------------------------------------------------------------
 
 using Clock = std::chrono::steady_clock;
@@ -353,18 +563,18 @@ using asio::ip::udp;
 namespace
 {
 
-// The address other computers reach this one by (nothing is sent: a UDP "connect" only picks the route).
+// The address other computers reach this one by: the best LAN interface, else the default route's
+// source address, else loopback.
 std::string localAddress()
 {
+	std::string addr;
 	try {
-		asio::io_context io;
-		udp::socket s(io);
-		s.open(udp::v4());
-		s.connect(udp::endpoint(asio::ip::make_address_v4("192.0.2.1"), 9));
-		return s.local_endpoint().address().to_string();
+		addr = pickLanAddress(listInterfaces());
 	} catch (...) {
-		return "127.0.0.1";
 	}
+	if (addr.empty())
+		addr = routeAddress();
+	return addr.empty() ? "127.0.0.1" : addr;
 }
 
 bool isLoopback(const std::string& a)
