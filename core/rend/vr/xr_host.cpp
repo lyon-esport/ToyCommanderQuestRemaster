@@ -2624,16 +2624,19 @@ bool frame()
 	// P1-8): what the app is doing, and a hint when it takes long
 	{
 		static bool sawGameFrame;
+		constexpr float MenuHintSeconds = 6.f;
 		static std::chrono::steady_clock::time_point loadingSince;
 		const auto now = std::chrono::steady_clock::now();
 		if (gles_vr_have_frame())
 			sawGameFrame = true;
 		if (loadingSince == std::chrono::steady_clock::time_point())
 			loadingSince = now;
-		if (panel.lines.empty() && !sawGameFrame)
+		// (tcvr: and for the first seconds even when the game's picture comes at once, so the
+		// VR menu hint below can be read: it came after a second, the hint was never seen)
+		const float secs = std::chrono::duration<float>(now - loadingSince).count();
+		if (panel.lines.empty() && (!sawGameFrame || secs < MenuHintSeconds))
 		{
 			const std::string& id = settings.content.gameId;
-			const float secs = std::chrono::duration<float>(now - loadingSince).count();
 			// tcvr: with how to open the VR menu (Manu): text and a picture of the button
 			panel.imageWidth = 1536;
 			panel.imageHeight = 1000;

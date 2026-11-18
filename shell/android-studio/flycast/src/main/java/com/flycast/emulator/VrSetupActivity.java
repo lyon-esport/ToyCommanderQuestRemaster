@@ -71,6 +71,20 @@ public class VrSetupActivity extends Activity
         page.addView(title);
         page.addView(text("Two steps before the first game.", 17, SOFT), spaced(4));
 
+        // tcvr: how to open the VR menu in the game (Manu), with a picture of the button, near the
+        // top so it shows without scrolling
+        LinearLayout hint = new LinearLayout(this);
+        hint.setOrientation(LinearLayout.HORIZONTAL);
+        hint.setGravity(Gravity.CENTER_VERTICAL);
+        hint.addView(new ControllerHint(this), new LinearLayout.LayoutParams(dp(330), dp(130)));
+        TextView hintText = text("In the game, the VR menu (recenter, comfort, image, saves, quit): hold the menu "
+                + "button of the left controller, or press it twice. A short press is the game's Start.", 16, TEXT);
+        hint.addView(hintText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams hintPlace = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        hintPlace.topMargin = dp(14);
+        page.addView(hint, hintPlace);
+
         page.addView(heading("1.  Let the app read your files"), spaced(24));
         page.addView(accessStatus = text("", 16, SOFT), spaced(6));
         allow = button("Allow");
@@ -87,13 +101,6 @@ public class VrSetupActivity extends Activity
         games = new LinearLayout(this);
         games.setOrientation(LinearLayout.VERTICAL);
         page.addView(games, spaced(20));
-
-        // tcvr: how to open the VR menu in the game (Manu), with a picture of the button
-        page.addView(heading("In the game: the VR menu"), spaced(28));
-        page.addView(text("Hold the menu button of the left controller (the small flat button under the stick), "
-                + "or press it twice. A short press is the game's Start. The VR menu has recenter, world size, "
-                + "comfort and image settings, save export and import, and quit.", 16, SOFT), spaced(6));
-        page.addView(new ControllerHint(this), new LinearLayout.LayoutParams(dp(470), dp(170)));
 
         page.addView(text("Bring your own copy of Toy Commander (Dreamcast disc image). Nothing of the "
                 + "game comes with this app. Unofficial fan project, not affiliated with Sega or No Cliche.", 13, SOFT), spaced(22));
