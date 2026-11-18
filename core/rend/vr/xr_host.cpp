@@ -2624,17 +2624,14 @@ bool frame()
 	// P1-8): what the app is doing, and a hint when it takes long
 	{
 		static bool sawGameFrame;
-		constexpr float MenuHintSeconds = 6.f;
 		static std::chrono::steady_clock::time_point loadingSince;
 		const auto now = std::chrono::steady_clock::now();
 		if (gles_vr_have_frame())
 			sawGameFrame = true;
 		if (loadingSince == std::chrono::steady_clock::time_point())
 			loadingSince = now;
-		// (tcvr: and for the first seconds even when the game's picture comes at once, so the
-		// VR menu hint below can be read: it came after a second, the hint was never seen)
 		const float secs = std::chrono::duration<float>(now - loadingSince).count();
-		if (panel.lines.empty() && (!sawGameFrame || secs < MenuHintSeconds))
+		if (panel.lines.empty() && !sawGameFrame)
 		{
 			const std::string& id = settings.content.gameId;
 			// tcvr: with how to open the VR menu (Manu): text and a picture of the button
@@ -2848,6 +2845,32 @@ bool frame()
 			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
 			glViewport(0, 0, c.width, c.height);
 			drawVignette(eyeProjection(views[i].fov), vignette);
+		}
+		// tcvr: how to open the VR menu, over the game's first seconds (the loading panel, which
+		// says it too, goes at the game's first picture, often after a second: too short to read;
+		// held longer over the starting game, the headset showed black). Below the view's middle.
+		if (!showPanel && gles_vr_have_frame() && !menuOpen())
+		{
+			static std::chrono::steady_clock::time_point hintSince;
+			const auto now = std::chrono::steady_clock::now();
+			if (hintSince == std::chrono::steady_clock::time_point())
+				hintSince = now;
+			if (now - hintSince < std::chrono::seconds(10))
+			{
+				Panel hint;
+				hint.imageWidth = 1024;
+				hint.imageHeight = 420;
+				hint.widthMetres = 0.85f;
+				hint.lines = {
+					{ "VR menu: hold the menu button of the left controller,", 0.08f, glm::vec3(0.95f) },
+					{ "or press it twice. A short press is the game's Start.", 0.07f, glm::vec3(0.72f) },
+				};
+				hint.menuHint = true;
+				hint.menuHintSize = 0.55f;
+				glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+				glViewport(0, 0, c.width, c.height);
+				drawPanel(eyeProjection(views[i].fov) * view * glm::translate(glm::mat4(1.f), glm::vec3(0.f, -0.42f, 0.25f)), hint);
+			}
 		}
 		if (!showPanel && menuOpen() && !menuOnLayer)
 		{

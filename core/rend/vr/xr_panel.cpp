@@ -172,7 +172,7 @@ void paint(const Panel& panel, std::vector<u8>& out)
 	float total = 0.f;
 	for (const PanelLine& line : panel.lines)
 		total += line.size * h * 1.45f;
-	const float icon = panel.menuHint ? h * 0.30f : 0.f;
+	const float icon = panel.menuHint ? h * panel.menuHintSize : 0.f;
 	total += icon;
 	const int bar = panel.progress >= 0.f ? h * 46 / 448 : 0;
 	float y = (h - total - bar) * 0.5f;
@@ -292,7 +292,7 @@ void drawPanel(const glm::mat4& viewProj, const Panel& panel)
 	for (const PanelLine& line : panel.lines)
 		says += line.text + '\n';
 	says += panel.footer + '\n' + std::to_string(panel.progress < 0.f ? -1 : (int)(panel.progress * 200.f))
-			+ '\n' + std::to_string(panel.imageWidth) + 'x' + std::to_string(panel.imageHeight) + ' ' + std::to_string(panel.highlight) + (panel.menuHint ? " hint" : "");
+			+ '\n' + std::to_string(panel.imageWidth) + 'x' + std::to_string(panel.imageHeight) + ' ' + std::to_string(panel.highlight) + (panel.menuHint ? " hint" + std::to_string(panel.menuHintSize) : "");
 	glActiveTexture(GL_TEXTURE0);
 	glcache.BindTexture(GL_TEXTURE_2D, texture);
 	if (says != shown)

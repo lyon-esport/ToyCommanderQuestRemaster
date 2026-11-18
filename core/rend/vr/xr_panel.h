@@ -33,6 +33,7 @@ struct Panel
 	// tcvr: under the lines, a picture of the left controller with its menu button lit (where
 	// the VR menu opens)
 	bool menuHint = false;
+	float menuHintSize = 0.30f;	// its height, of the panel's
 };
 
 // The panel, 1.3 m wide, 1.6 m in front of where the game camera is, at eye height. The
