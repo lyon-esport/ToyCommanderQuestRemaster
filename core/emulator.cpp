@@ -906,6 +906,9 @@ void loadGameSpecificSettings()
 
 	if (config::GGPOEnable || settings.raHardcoreMode)
 		config::Sh4Clock.override(200);
+#ifdef USE_OPENXR
+	tcvrApplyGameRate(false);
+#endif
 	if (config::GGPOEnable)
 	{
 		// hotd2-vr: online, these per-machine settings change what the emulated machine does
@@ -964,6 +967,61 @@ void Emulator::loadstate(Deserializer& deser)
 	getSh4Executor()->ResetCache();
 	EventManager::event(Event::LoadState);
 }
+
+#ifdef USE_OPENXR
+// tcvr: 60 game pictures/s in missions (vr.Game60, spg.cpp) needs a faster emulated SH-4: at the
+// stock 200 MHz a mission picture doesn't fit in one vblank and the rate settles at an uneven
+// 37.5/s (60/30 mix); 250 MHz gives ~47, 300 MHz 56-58, 360 MHz a steady 60 (headset test
+// 2026-11-18, Kitchen Training; the emulator thread stayed under ~65% of one Quest 3 core). The
+// game's clock follows the SH-4 timer, which keeps real time at any clock (mission clock matched
+// the wall clock). Not saved: the player's own Sh4Clock comes back when the option is off, and
+// while a mission that fell behind real time is back at 30 pictures/s (spg.cpp): the faster
+// clock alone cost ~2% speed in the children's bedrooms even at 30. The dynarec cache reset
+// can run from inside the emulation (as the MMU switch in ccn.cpp does).
+static bool tcvrFellBehind;	// spg.cpp: the mission went back to 30 pictures/s
+
+void tcvrGameRateFellBehind(bool behind)
+{
+	if (tcvrFellBehind == behind)
+		return;
+	tcvrFellBehind = behind;
+	tcvrApplyGameRate(true);
+}
+
+void tcvrApplyGameRate(bool running)
+{
+	constexpr int Game60Clock = 360;
+	static bool raised;
+	static int playerClock = 200;
+
+	if (settings.content.gameId != TCVR_SUPPORTED_GAME_ID || config::GGPOEnable
+			|| settings.raHardcoreMode || settings.network.online)
+		return;
+	const int before = config::Sh4Clock;
+	if (config::VrGame60 && !tcvrFellBehind)
+	{
+		if (!raised)
+			playerClock = config::Sh4Clock;
+		if (playerClock < Game60Clock)
+		{
+			config::Sh4Clock.override(Game60Clock);
+			raised = true;
+		}
+	}
+	else if (raised)
+	{
+		config::Sh4Clock.override(playerClock);
+		raised = false;
+	}
+	if (config::Sh4Clock != before)
+	{
+		NOTICE_LOG(BOOT, "tcvr: SH-4 clock %d MHz (60 game pictures/s %s)", (int)config::Sh4Clock,
+				config::VrGame60 ? "on" : "off");
+		if (running && emu.getSh4Executor() != nullptr)
+			emu.getSh4Executor()->ResetCache();	// block cycle counts are computed with the clock
+	}
+}
+#endif
 
 void Emulator::setNetworkState(bool online)
 {

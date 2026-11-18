@@ -124,6 +124,7 @@ Option<bool> VrWidenFov("vr.WidenFov", true);	// widen through the game's field 
 Option<bool> VrDropShotMarker("vr.DropShotMarker", true);	// hide the game's own 2D shot marker after shots into 3D
 Option<bool> VrDropShotFlash("vr.DropShotFlash", true);	// hide a bright full-screen flash right after any shot
 Option<bool> VrForce60Hz("vr.Force60Hz", true);	// tcvr: run Toy Commander (Europe) at 60 Hz (NTSC broadcast), not 50 Hz PAL
+Option<bool> VrGame60("vr.Game60", true);	// tcvr: Toy Commander draws 60 pictures/s in missions too (stock: 30); attract demos stay at 30
 Option<bool> VrShowFps("vr.ShowFps", true);	// tcvr: frame-rate counter (default on since 2026-11-17) at the bottom right of the view
 Option<float> VrTexLodBias("vr.TexLodBias", 0.f);	// tcvr: texture mipmap bias, negative = sharper far textures (e.g. -0.5; 0: stock)
 Option<bool> VrUploadOnce("vr.UploadOnce", true);	// tcvr: the kept game frame's vertices go to the GPU once per game picture, not per eye
