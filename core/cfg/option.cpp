@@ -133,6 +133,7 @@ Option<int> VrFoveation("vr.Foveation", 1);	// tcvr: fixed foveated rendering, f
 Option<float> VrComfortVignette("vr.ComfortVignette", 1.f);	// tcvr: darken the view's edges while it turns on its own: 0 off, 1 low, 2 medium, 3 high (0..1 scales low)
 Option<int> VrHeadCameraLead("vr.HeadCameraLead", -1);	// tcvr: head camera: how far ahead (ms) to aim the game camera at the head's turn; -1 measured, 0 none
 Option<int> VrHeadCamera("vr.HeadCamera", 2);	// tcvr: the head turns the game camera (Toy Commander): 0 off, 1 yaw, 2 yaw and pitch (default, chosen after the worn test 2026-11-18)
+Option<int> VrMpLocalPlayer("vr.MpLocalPlayer", 0);	// tcvr: split screen shows only this player's view (1..4, test without netplay); 0 auto: the netplay local player; -1 off: every view, as stock
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");

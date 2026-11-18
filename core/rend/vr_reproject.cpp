@@ -2145,6 +2145,7 @@ const ReprojectParams& update(const rend_context& ctx)
 	const glm::vec2 halfSize(dcWidth * 0.5f, dcHeight * 0.5f);
 	const bool active = config::VrReproject && !ctx.isRTT;
 	params.comfort = glm::vec3(0.f);
+	params.view = glm::vec4(halfSize, 1.f, 1.f);
 
 	const float zMax = ctx.fZ_max > 0.f && std::isfinite(ctx.fZ_max) ? ctx.fZ_max : 1.f;
 	const float zNear = NearFraction / zMax;
@@ -2160,7 +2161,17 @@ const ReprojectParams& update(const rend_context& ctx)
 
 	// The game may run with a widened view: rebuild with its live focal length, but
 	// present with the stock one so the framing and HUD size stay as designed.
-	const glm::vec2 gameFocal = readGameFocal();
+	glm::vec2 gameFocal = readGameFocal();
+	// tcvr: split screen, own view: this picture is the local player's view, in its part of the
+	// screen. Its 3D is rebuilt about that part's centre with that view's own focal length (the
+	// world then has its true size, as in one player), its 2D scaled up onto the whole plane.
+	if (ctx.tcvrView.z > 0.f && ctx.tcvrView.w > 0.f)
+	{
+		gameFocal = ctx.tcvrViewFocal;
+		const glm::vec2 centre(ctx.tcvrView.x + ctx.tcvrView.z * 0.5f, ctx.tcvrView.y + ctx.tcvrView.w * 0.5f);
+		const float scale = std::min(dcWidth / ctx.tcvrView.z, dcHeight / ctx.tcvrView.w);
+		params.view = glm::vec4(centre, scale, scale);
+	}
 	const glm::vec2 stockTan = halfSize / (float)config::VrFocal;
 	params.tanHalf = halfSize / gameFocal;
 	params.overlay = glm::vec4(stockTan, (float)config::VrHudDepth, (float)config::VrHudW);

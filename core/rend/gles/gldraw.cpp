@@ -109,6 +109,13 @@ static void SetBaseClipping()
 
 static TileClipping setTileClip(u32 tileclip, Rect& rect)
 {
+	// tcvr: an own-view picture (split screen, vr/mp_ownview.h) is moved and scaled to fill the
+	// whole view: the game's clip to the player's part of the screen would cut it
+	if (config::VrReproject && gl.rendContext->tcvrView.z > 0.f)
+	{
+		SetBaseClipping();
+		return TileClipping::Off;
+	}
 	TileClipping clipmode = gl.matrices.getTileClip(tileclip, rect);
 	if (clipmode == TileClipping::Outside)
 	{
