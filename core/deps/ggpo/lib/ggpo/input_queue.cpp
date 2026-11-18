@@ -63,9 +63,13 @@ InputQueue::DiscardConfirmedFrames(int frame)
 {
    ASSERT(frame >= 0);
 
-   if (_last_frame_requested != GameInput::NullFrame) {
-      frame = MIN(frame, _last_frame_requested);
-   }
+   /*
+    * tcvr: the original kept every frame after the last one the game asked for
+    * (_last_frame_requested). The caller (Sync::SetLastConfirmedFrame) now never discards
+    * the frame the game runs next or later ones, so that is not needed, and it was harmful:
+    * a game that stops reading the pads for a while (a loading screen) left it stale, the
+    * queue stopped emptying and overflowed after INPUT_QUEUE_LENGTH frames.
+    */
 
    Log("input q%d | discarding confirmed frames up to %d (last_added:%d length:%d [head:%d tail:%d]).", _id,
        frame, _last_added_frame, _length, _head, _tail);
