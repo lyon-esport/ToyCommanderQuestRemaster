@@ -39,6 +39,8 @@ constexpr const char *TCVR_SUPPORTED_GAME_ID = "MK-5102050";
 extern void (*vrUnsupportedGameHook)(const std::string& gameId);
 // tcvr: raise or restore the emulated SH-4 clock for vr.Game60 (running: the game already runs)
 void tcvrApplyGameRate(bool running);
+// tcvr: spg.cpp tells it when a mission falls back to 30 pictures/s (true) and when 60 is tried again
+void tcvrGameRateFellBehind(bool behind);
 #endif
 void SaveSettings();
 

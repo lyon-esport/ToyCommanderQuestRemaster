@@ -98,5 +98,13 @@ Training, 130% + MSAA 2x, head camera on:
 | on, 300 MHz | 56-58 | 63% | 4.5 | 59.73 / 59.7 s |
 | on, 360 MHz | 59.95, also flying | 61% | 7.4 | 59.60 / 59.58 s |
 
+Some rooms are too heavy for the Quest's CPU at 360 MHz and 60 pictures/s: in the children's
+bedrooms the game ran at 51 vblanks/s, its clock at 85% of real time. So `spg.cpp` watches the
+vblanks per real second: under 57 for 2 s (not judged in the first 8 s after the game sets its
+rate, the mission's loading), the mission goes back to 30 pictures/s and the SH-4 to its own clock
+(at 360 MHz and 30 pictures/s the bedrooms still ran at ~98%; at 200 MHz exactly real time). 60 is
+tried again after the next pause or mission. Logcat: `tcvr: emulation behind real time ...`.
+Kitchen Training never falls back (80 s, pause/resume).
+
 Headset frame rate is unchanged by the option (it depends on resolution and MSAA). Still to
 watch: physics feel at smaller steps, audio and cut-scenes at 360 MHz, the other rooms.

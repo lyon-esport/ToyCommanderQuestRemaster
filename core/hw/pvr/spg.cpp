@@ -58,7 +58,7 @@ u32 fskip;
 // (emulator.cpp) in real time at 60 pictures/s, and then the whole game slows down (headset
 // test 2026-11-18, the children's bedrooms: 51 vblanks/s, mission clock at 85%). When fewer
 // than 57 vblanks run per real second for 2 seconds in a row, the mission goes back to the
-// game's own 30 pictures/s (the first 8 s after the game sets its rate, the mission's loading,
+// game's own 30 pictures/s and the SH-4 to its own clock (the first 8 s after the game sets its rate, the mission's loading,
 // aren't judged); 60 is tried again after the next pause or mission load.
 static void tcvrGamePictureRate()
 {
@@ -95,7 +95,10 @@ static void tcvrGamePictureRate()
 	}
 
 	if (delay == 0 && fellBehind && !forced)
+	{
 		fellBehind = false;		// the game set 1 vblank itself (pause, menus): 60 may be tried again
+		tcvrGameRateFellBehind(false);
+	}
 	if (delay == 1)
 	{
 		forced = false;
@@ -117,6 +120,7 @@ static void tcvrGamePictureRate()
 		{
 			NOTICE_LOG(PVR, "tcvr: emulation behind real time at 60 game pictures/s: back to 30 until the next pause");
 			fellBehind = true;
+			tcvrGameRateFellBehind(true);	// and the SH-4 back to its own clock
 		}
 		WriteMem32_nommu(FlipDelay, 1);
 		forced = false;

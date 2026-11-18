@@ -974,7 +974,20 @@ void Emulator::loadstate(Deserializer& deser)
 // 37.5/s (60/30 mix); 250 MHz gives ~47, 300 MHz 56-58, 360 MHz a steady 60 (headset test
 // 2026-11-18, Kitchen Training; the emulator thread stayed under ~65% of one Quest 3 core). The
 // game's clock follows the SH-4 timer, which keeps real time at any clock (mission clock matched
-// the wall clock). Not saved: the player's own Sh4Clock comes back when the option is off.
+// the wall clock). Not saved: the player's own Sh4Clock comes back when the option is off, and
+// while a mission that fell behind real time is back at 30 pictures/s (spg.cpp): the faster
+// clock alone cost ~2% speed in the children's bedrooms even at 30. The dynarec cache reset
+// can run from inside the emulation (as the MMU switch in ccn.cpp does).
+static bool tcvrFellBehind;	// spg.cpp: the mission went back to 30 pictures/s
+
+void tcvrGameRateFellBehind(bool behind)
+{
+	if (tcvrFellBehind == behind)
+		return;
+	tcvrFellBehind = behind;
+	tcvrApplyGameRate(true);
+}
+
 void tcvrApplyGameRate(bool running)
 {
 	constexpr int Game60Clock = 360;
@@ -985,7 +998,7 @@ void tcvrApplyGameRate(bool running)
 			|| settings.raHardcoreMode || settings.network.online)
 		return;
 	const int before = config::Sh4Clock;
-	if (config::VrGame60)
+	if (config::VrGame60 && !tcvrFellBehind)
 	{
 		if (!raised)
 			playerClock = config::Sh4Clock;
