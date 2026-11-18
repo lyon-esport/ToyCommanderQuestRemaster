@@ -8,7 +8,8 @@
 #ifndef _BITVECTOR_H
 #define _BITVECTOR_H
 
-#define BITVECTOR_NIBBLE_SIZE 8
+// (tcvr: 9, for 4 players x 12 bytes = 384 input bits; the netplay protocol number covers it)
+#define BITVECTOR_NIBBLE_SIZE 9
 
 void BitVector_SetBit(uint8 *vector, int *offset);
 void BitVector_ClearBit(uint8 *vector, int *offset);

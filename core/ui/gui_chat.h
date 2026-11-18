@@ -40,12 +40,15 @@ class Chat
 	bool enable_timeout = false;
 	std::chrono::steady_clock::time_point launch_time;
 
-	std::string playerName(bool remote)
+	// (tcvr: 2 to 4 players; a set remote name is the other player's in a two-player game)
+	std::string playerName(int playerNum)
 	{
-		if (remote)
-			return !remotePlayerName.empty() ? remotePlayerName : config::ActAsServer ? i18n::T("P2") : i18n::T("P1");
-		else
-			return !localPlayerName.empty() ? localPlayerName : config::ActAsServer ? i18n::T("P1") : i18n::T("P2");
+		const bool local = playerNum == ggpo::localPlayerIndex();
+		if (local && !localPlayerName.empty())
+			return localPlayerName;
+		if (!local && !remotePlayerName.empty() && ggpo::playerCount() <= 2)
+			return remotePlayerName;
+		return "P" + std::to_string(playerNum + 1);
 	}
 
 public:
@@ -105,8 +108,8 @@ public:
 			{
 				if (buf[0] != '\0')
 				{
-					ggpo::sendChatMessage(config::ActAsServer ? 0 : 1, buf);
-					std::string line = "<" + playerName(false) + "> " + std::string(buf);
+					ggpo::sendChatMessage(ggpo::localPlayerIndex(), buf);
+					std::string line = "<" + playerName(ggpo::localPlayerIndex()) + "> " + std::string(buf);
 					lines.push_back(std::make_pair(WHITE, line));
 					buf[0] = '\0';
 					newMessage = true;
@@ -131,7 +134,7 @@ public:
 			visible = true;
 			toggle_timeout();
 		}
-		std::string line = "<" + playerName(true) + "> " + msg;
+		std::string line = "<" + playerName(playerNum) + "> " + msg;
 		lines.push_back(std::make_pair(YELLOW, line));
 		newMessage = true;
 	}
