@@ -54,34 +54,73 @@ u32 fskip;
 // so they keep 2 (demo mode at 0x8C0A72FC = 2).
 // Checked once per vblank: when the game has set 2 (value 1), it becomes 1 (value 0). Turning
 // the option off stops forcing; the game's own 2 comes back at the next mission or pause.
+// Falling behind: some rooms are too heavy for the Quest's CPU to emulate the faster SH-4
+// (emulator.cpp) in real time at 60 pictures/s, and then the whole game slows down (headset
+// test 2026-11-18, the children's bedrooms: 51 vblanks/s, mission clock at 85%). When fewer
+// than 57 vblanks run per real second for 2 seconds in a row, the mission goes back to the
+// game's own 30 pictures/s (the first 8 s after the game sets its rate, the mission's loading,
+// aren't judged); 60 is tried again after the next pause or mission load.
 static void tcvrGamePictureRate()
 {
 	constexpr u32 FlipDelay = 0x8C10FC80;	// Kamui context 0x8C10F52C + 0x754
 	constexpr u32 DemoMode = 0x8C0A72FC;	// 2: an attract demo plays
-	static bool forced;
+	static bool forced;		// we turned the game's 2 into 1
+	static bool fellBehind;	// back at 30 until the game sets its rate again
 	static bool logged;
+	static u64 windowStart;
+	static u32 windowVblanks;
+	static int slowWindows;
+	static u64 forcedSince;	// a mission load runs right after the game sets its rate: not judged
 
 	if (settings.content.gameId != TCVR_SUPPORTED_GAME_ID)
 		return;
 	const u32 delay = ReadMem32_nommu(FlipDelay);
 	const bool demo = ReadMem32_nommu(DemoMode) == 2;
+
+	// vblanks per real second while forced (a gap, e.g. the VR menu's pause, restarts it)
+	const u64 now = getTimeMs();
+	if (!forced || windowStart == 0 || now - windowStart > 1500)
+	{
+		windowStart = now;
+		windowVblanks = 0;
+		if (!forced)
+			slowWindows = 0;
+	}
+	else if (++windowVblanks, now - windowStart >= 1000)
+	{
+		const bool slow = windowVblanks * 1000 < 57 * (now - windowStart);
+		slowWindows = slow && now - forcedSince > 8000 ? slowWindows + 1 : 0;
+		windowStart = now;
+		windowVblanks = 0;
+	}
+
+	if (delay == 0 && fellBehind && !forced)
+		fellBehind = false;		// the game set 1 vblank itself (pause, menus): 60 may be tried again
 	if (delay == 1)
 	{
 		forced = false;
-		if (config::VrGame60 && !demo)
+		if (config::VrGame60 && !demo && !fellBehind)
 		{
 			WriteMem32_nommu(FlipDelay, 0);
 			forced = true;
+			forcedSince = now;
 			if (!logged)
 				NOTICE_LOG(PVR, "tcvr: 60 game pictures/s (the game asked for 30)");
 			logged = true;
 		}
 	}
-	else if (delay == 0 && forced && demo)
+	else if (delay == 0 && forced && (demo || slowWindows >= 2))
 	{
-		// a demo started after we forced the mission rate: give it back its 30
+		// a demo started after we forced the mission rate, or the emulation fell behind real
+		// time: give the game back its 30
+		if (!demo)
+		{
+			NOTICE_LOG(PVR, "tcvr: emulation behind real time at 60 game pictures/s: back to 30 until the next pause");
+			fellBehind = true;
+		}
 		WriteMem32_nommu(FlipDelay, 1);
 		forced = false;
+		slowWindows = 0;
 	}
 }
 #endif
