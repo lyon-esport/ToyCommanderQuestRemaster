@@ -291,12 +291,12 @@ public class VrSetupActivity extends Activity
         @Override
         protected void onDraw(Canvas c)
         {
-            final float sz = getHeight(), cx = sz * 0.45f, top = 0f;
+            final float sz = getHeight(), cx = sz * 0.42f, top = 0f;
             final int body = Color.rgb(77, 77, 84), dark = Color.rgb(31, 31, 33), mid = Color.rgb(133, 133, 140),
                     glow = Color.rgb(255, 217, 77);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(body);
-            c.drawOval(cx - sz * 0.30f, top + sz * 0.05f, cx + sz * 0.30f, top + sz * 0.89f, paint);
+            c.drawCircle(cx, top + sz * 0.47f, sz * 0.40f, paint);
             paint.setColor(dark);
             c.drawCircle(cx - sz * 0.06f, top + sz * 0.30f, sz * 0.10f, paint);		// the stick
             paint.setColor(mid);

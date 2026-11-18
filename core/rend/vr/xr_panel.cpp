@@ -196,7 +196,7 @@ void paint(const Panel& panel, std::vector<u8>& out)
 		const float sz = icon, cx = w * 0.5f - sz * 0.35f, top = y + sz * 0.06f;
 		const glm::vec3 body(0.30f, 0.30f, 0.33f), dark(0.12f, 0.12f, 0.13f), mid(0.52f, 0.52f, 0.55f),
 				hot(0.96f, 0.24f, 0.18f), glow(1.f, 0.85f, 0.3f);
-		ellipse(cx, top + sz * 0.47f, sz * 0.30f, sz * 0.42f, body);
+		ellipse(cx, top + sz * 0.47f, sz * 0.40f, sz * 0.40f, body);
 		ellipse(cx - sz * 0.06f, top + sz * 0.30f, sz * 0.10f, sz * 0.10f, dark);		// the stick
 		ellipse(cx - sz * 0.06f, top + sz * 0.30f, sz * 0.065f, sz * 0.065f, mid);
 		ellipse(cx + sz * 0.12f, top + sz * 0.36f, sz * 0.055f, sz * 0.055f, mid);		// Y
