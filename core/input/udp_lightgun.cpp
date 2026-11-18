@@ -27,6 +27,11 @@
 
 	saves the last game frame to that PNG file (works with the window hidden or the desktop locked).
 
+		MP <command>
+
+	the multiplayer lobby (tcvr_match.cpp): HOST <name> <mode> <room> <points>, JOIN [<name> [<address>]], READY <0|1>,
+	START <delay>, LEAVE, STATE, LEAVEMATCH, RETURN. Each answers "MPR <phase> players=n slot=n ready=.. ..." to the sender.
+
 		PEEK <address hex> <length, at most 256>
 
 	answers "PEEKR <address> <bytes as hex>" to the sender: main RAM as the game sees it (the
@@ -69,6 +74,8 @@ constexpr socket_t INVALID_SOCKET = -1;
 static void closeSocket(socket_t s) { close(s); }
 #endif
 
+std::string (*udpCommandHook)(const char *command);
+
 namespace
 {
 
@@ -95,6 +102,8 @@ std::string handle(const char *msg)
 	int player, x, y;
 	unsigned buttons;
 	int l, r;
+	if (strncmp(msg, "MP ", 3) == 0)
+		return udpCommandHook != nullptr ? udpCommandHook(msg + 3) : std::string("MPR none");
 	if (strncmp(msg, "SHOT ", 5) == 0)
 	{
 		gui_saveScreenshotTo(msg + 5);

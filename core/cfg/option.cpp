@@ -134,6 +134,11 @@ Option<float> VrComfortVignette("vr.ComfortVignette", 1.f);	// tcvr: darken the 
 Option<int> VrHeadCameraLead("vr.HeadCameraLead", -1);	// tcvr: head camera: how far ahead (ms) to aim the game camera at the head's turn; -1 measured, 0 none
 Option<int> VrHeadCamera("vr.HeadCamera", 2);	// tcvr: the head turns the game camera (Toy Commander): 0 off, 1 yaw, 2 yaw and pitch (default, chosen after the worn test 2026-11-18)
 Option<int> VrMpLocalPlayer("vr.MpLocalPlayer", 0);	// tcvr: split screen shows only this player's view (1..4, test without netplay); 0 auto: the netplay local player; -1 off: every view, as stock
+// tcvr: multiplayer (xr_mp.cpp): the 3-letter player name ("" = the name of the first saved game), the time (seconds since 1970)
+// until which the next game start is the start of a match (0: none), and a match just ended (the menu opens on Multiplayer)
+OptionString VrMpName("vr.MpName", "");
+Option<int> VrMpMarker("vr.MpMarker", 0);
+Option<bool> VrMpReturn("vr.MpReturn", false);
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");

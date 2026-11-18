@@ -17,6 +17,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/Sh4InterpreterTest.cpp
         src/MmuTest.cpp
         src/HttpTest.cpp
+        src/TcvrLobbyTest.cpp
         src/IniFileTest.cpp
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp

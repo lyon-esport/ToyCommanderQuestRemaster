@@ -212,7 +212,9 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
 
     // tcvr: called from native code (the VR menu, core/rend/vr/xr_menu.h), on the render thread:
     // 0 export the saves to Download, 1 import the newest exported saves and start the game
-    // again, 2 quit, 3 unlock all levels (then start the game again). Returns the line the menu shows.
+    // again, 2 quit, 3 unlock all levels (then start the game again), 4 the first saved game's player
+    // name ("" if none), 5 start the game again (a multiplayer match begins or ends that way, with
+    // its options already in emu.cfg). Returns the line the menu shows.
     public String onVrMenuRequest(int request)
     {
         Context ctx = getApplicationContext();
@@ -241,6 +243,11 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             Log.i("flycast", "tcvr: " + result + ", restarting");
             return restartForSaves(ctx, result);
         }
+        case 4:
+            return VrSaves.firstPlayerName(ctx);
+        case 5:
+            Log.i("flycast", "tcvr: multiplayer, restarting the game");
+            return restartForSaves(ctx, "Restarting the game");
         case 2:
             Log.i("flycast", "tcvr: quit from the VR menu");
             handler.post(() -> {

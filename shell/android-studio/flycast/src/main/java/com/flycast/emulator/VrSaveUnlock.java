@@ -48,6 +48,38 @@ public final class VrSaveUnlock {
         return fileName.startsWith(GAME_ID + "_vmu_save_") && fileName.endsWith(".bin");
     }
 
+    /**
+     * The player names of the saved games on the card (the file names are "TOY_COMM.<name>"; the
+     * options file "TOY_COMM.___" is not a saved game). Empty for a card that doesn't look right. Never throws.
+     */
+    public static java.util.List<String> playerNames(byte[] card) {
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (card == null || card.length != CARD_SIZE)
+            return names;
+        int root = 255 * 512;
+        for (int i = 0; i < 16; i++)
+            if ((card[root + i] & 0xff) != 0x55)
+                return names;
+        int dirBlock = u16(card, root + 0x4a), dirSize = u16(card, root + 0x4c);
+        if (dirBlock > 255 || dirSize == 0 || dirSize > dirBlock + 1)
+            return names;
+        for (int d = 0; d < dirSize; d++) {
+            int blk = (dirBlock - d) * 512;
+            for (int e = 0; e < 16; e++) {
+                int ent = blk + e * 32;
+                if (card[ent] == 0)
+                    continue;
+                String name = ascii(card, ent + 4, 12);
+                if (!name.startsWith("TOY_COMM.") || name.equals("TOY_COMM.___"))
+                    continue;
+                String player = name.substring(9).trim();
+                if (!player.isEmpty() && player.indexOf('\0') < 0)
+                    names.add(player);
+            }
+        }
+        return names;
+    }
+
     /** The new value of a 2-bits-per-mission word: every 0 field of the first n becomes 1. */
     static int openAll(int word, int n) {
         for (int m = 0; m < n; m++)

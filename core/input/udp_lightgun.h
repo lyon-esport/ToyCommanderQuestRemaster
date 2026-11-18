@@ -6,6 +6,7 @@
 #pragma once
 
 #include "types.h"
+#include <string>
 
 // Aim and fire the emulated light gun directly (the UDP datagrams and the headset's
 // controller both end up here). x, y in 1/10000ths of the game screen (outside is
@@ -17,3 +18,7 @@ void lightgunSet(int player, int x, int y, u32 buttons);
 // True while the UDP light gun drives this port (a datagram arrived recently).
 // Mouse and analog-stick aiming stand aside meanwhile, so they can't fight over the crosshair.
 bool udpLightgunActive(int port);
+
+// tcvr test aid: "MP <command>" datagrams go here (core/network/tcvr_match.cpp: host, join, ready, start,
+// leave and state of the multiplayer lobby, for the PC lobby test); the answer goes back to the sender.
+extern std::string (*udpCommandHook)(const char *command);

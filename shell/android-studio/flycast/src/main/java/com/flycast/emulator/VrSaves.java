@@ -168,6 +168,29 @@ public final class VrSaves {
     }
 
     /**
+     * The player name of the first saved game on the Toy Commander VMU images (the default player
+     * name of the multiplayer), "" when there is none. Never throws.
+     */
+    public static String firstPlayerName(Context ctx) {
+        try {
+            for (File f : listSaves(dataDir(ctx))) {
+                if (!VrSaveUnlock.isToyCommanderCard(f.getName()) || f.length() != VrSaveUnlock.CARD_SIZE)
+                    continue;
+                byte[] card = new byte[VrSaveUnlock.CARD_SIZE];
+                try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
+                    in.readFully(card);
+                }
+                java.util.List<String> names = VrSaveUnlock.playerNames(card);
+                if (!names.isEmpty())
+                    return names.get(0);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "VrSaves: player name: " + e);
+        }
+        return "";
+    }
+
+    /**
      * "Unlock all levels" (VR menu): opens every mission of every saved game on the Toy Commander
      * VMU images (VrSaveUnlock), after backing all saves up (save_backups, and Download when
      * allowed). Only the changed bytes are written, in place (the files keep their owner). Call
