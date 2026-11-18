@@ -2630,17 +2630,25 @@ bool frame()
 			sawGameFrame = true;
 		if (loadingSince == std::chrono::steady_clock::time_point())
 			loadingSince = now;
+		const float secs = std::chrono::duration<float>(now - loadingSince).count();
 		if (panel.lines.empty() && !sawGameFrame)
 		{
 			const std::string& id = settings.content.gameId;
-			const float secs = std::chrono::duration<float>(now - loadingSince).count();
+			// tcvr: with how to open the VR menu (Manu): text and a picture of the button
+			panel.imageWidth = 1536;
+			panel.imageHeight = 1000;
+			panel.widthMetres = 1.3f;
 			panel.lines = {
-				{ "TOY COMMANDER VR", 0.085f, red },
-				{ "", 0.03f, white },
-				{ id.empty() ? "Reading your disc..." : "Starting Toy Commander...", 0.064f, white },
+				{ "TOY COMMANDER VR", 0.058f, red },
+				{ "", 0.02f, white },
+				{ id.empty() ? "Reading your disc..." : "Starting Toy Commander...", 0.045f, white },
 				{ secs > 25.f ? "Still starting. If nothing comes, quit and start the app again."
-						: "Your own disc image, from the Download folder.", 0.047f, grey },
+						: "Your own disc image, from the Download folder.", 0.033f, grey },
+				{ "", 0.03f, white },
+				{ "VR menu: hold the menu button of the left controller, or press it twice.", 0.036f, white },
+				{ "A short press is the game's Start.", 0.033f, grey },
 			};
+			panel.menuHint = true;
 			if (!id.empty())
 				panel.footer = "Disc " + id;
 			static bool logged;
@@ -2837,6 +2845,32 @@ bool frame()
 			glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
 			glViewport(0, 0, c.width, c.height);
 			drawVignette(eyeProjection(views[i].fov), vignette);
+		}
+		// tcvr: how to open the VR menu, over the game's first seconds (the loading panel, which
+		// says it too, goes at the game's first picture, often after a second: too short to read;
+		// held longer over the starting game, the headset showed black). Below the view's middle.
+		if (!showPanel && gles_vr_have_frame() && !menuOpen())
+		{
+			static std::chrono::steady_clock::time_point hintSince;
+			const auto now = std::chrono::steady_clock::now();
+			if (hintSince == std::chrono::steady_clock::time_point())
+				hintSince = now;
+			if (now - hintSince < std::chrono::seconds(10))
+			{
+				Panel hint;
+				hint.imageWidth = 1024;
+				hint.imageHeight = 420;
+				hint.widthMetres = 0.85f;
+				hint.lines = {
+					{ "VR menu: hold the menu button of the left controller,", 0.08f, glm::vec3(0.95f) },
+					{ "or press it twice. A short press is the game's Start.", 0.07f, glm::vec3(0.72f) },
+				};
+				hint.menuHint = true;
+				hint.menuHintSize = 0.55f;
+				glBindFramebuffer(GL_FRAMEBUFFER, c.fbos[index]);
+				glViewport(0, 0, c.width, c.height);
+				drawPanel(eyeProjection(views[i].fov) * view * glm::translate(glm::mat4(1.f), glm::vec3(0.f, -0.42f, 0.25f)), hint);
+			}
 		}
 		if (!showPanel && menuOpen() && !menuOnLayer)
 		{
