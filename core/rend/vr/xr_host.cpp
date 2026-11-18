@@ -2634,13 +2634,21 @@ bool frame()
 		{
 			const std::string& id = settings.content.gameId;
 			const float secs = std::chrono::duration<float>(now - loadingSince).count();
+			// tcvr: with how to open the VR menu (Manu): text and a picture of the button
+			panel.imageWidth = 1536;
+			panel.imageHeight = 1000;
+			panel.widthMetres = 1.3f;
 			panel.lines = {
-				{ "TOY COMMANDER VR", 0.085f, red },
-				{ "", 0.03f, white },
-				{ id.empty() ? "Reading your disc..." : "Starting Toy Commander...", 0.064f, white },
+				{ "TOY COMMANDER VR", 0.058f, red },
+				{ "", 0.02f, white },
+				{ id.empty() ? "Reading your disc..." : "Starting Toy Commander...", 0.045f, white },
 				{ secs > 25.f ? "Still starting. If nothing comes, quit and start the app again."
-						: "Your own disc image, from the Download folder.", 0.047f, grey },
+						: "Your own disc image, from the Download folder.", 0.033f, grey },
+				{ "", 0.03f, white },
+				{ "VR menu: hold the menu button of the left controller, or press it twice.", 0.036f, white },
+				{ "A short press is the game's Start.", 0.033f, grey },
 			};
+			panel.menuHint = true;
 			if (!id.empty())
 				panel.footer = "Disc " + id;
 			static bool logged;

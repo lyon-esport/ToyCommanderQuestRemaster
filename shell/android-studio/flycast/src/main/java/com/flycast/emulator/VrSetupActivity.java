@@ -6,7 +6,10 @@ import android.app.ActivityManager;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -84,6 +87,13 @@ public class VrSetupActivity extends Activity
         games = new LinearLayout(this);
         games.setOrientation(LinearLayout.VERTICAL);
         page.addView(games, spaced(20));
+
+        // tcvr: how to open the VR menu in the game (Manu), with a picture of the button
+        page.addView(heading("In the game: the VR menu"), spaced(28));
+        page.addView(text("Hold the menu button of the left controller (the small flat button under the stick), "
+                + "or press it twice. A short press is the game's Start. The VR menu has recenter, world size, "
+                + "comfort and image settings, save export and import, and quit.", 16, SOFT), spaced(6));
+        page.addView(new ControllerHint(this), new LinearLayout.LayoutParams(dp(470), dp(170)));
 
         page.addView(text("Bring your own copy of Toy Commander (Dreamcast disc image). Nothing of the "
                 + "game comes with this app. Unofficial fan project, not affiliated with Sega or No Cliche.", 13, SOFT), spaced(22));
@@ -266,5 +276,56 @@ public class VrSetupActivity extends Activity
     private int dp(int v)
     {
         return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    /** tcvr: the left controller seen from above, its menu button lit (the same picture as the loading panel's). */
+    private static class ControllerHint extends View
+    {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        ControllerHint(Context context)
+        {
+            super(context);
+        }
+
+        @Override
+        protected void onDraw(Canvas c)
+        {
+            final float sz = getHeight(), cx = sz * 0.45f, top = 0f;
+            final int body = Color.rgb(77, 77, 84), dark = Color.rgb(31, 31, 33), mid = Color.rgb(133, 133, 140),
+                    glow = Color.rgb(255, 217, 77);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(body);
+            c.drawOval(cx - sz * 0.30f, top + sz * 0.05f, cx + sz * 0.30f, top + sz * 0.89f, paint);
+            paint.setColor(dark);
+            c.drawCircle(cx - sz * 0.06f, top + sz * 0.30f, sz * 0.10f, paint);		// the stick
+            paint.setColor(mid);
+            c.drawCircle(cx - sz * 0.06f, top + sz * 0.30f, sz * 0.065f, paint);
+            c.drawCircle(cx + sz * 0.12f, top + sz * 0.36f, sz * 0.055f, paint);	// Y
+            c.drawCircle(cx + sz * 0.16f, top + sz * 0.52f, sz * 0.055f, paint);	// X
+            paint.setColor(dark);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setFakeBoldText(true);
+            paint.setTextSize(sz * 0.08f);
+            c.drawText("Y", cx + sz * 0.12f, top + sz * 0.388f, paint);
+            c.drawText("X", cx + sz * 0.16f, top + sz * 0.548f, paint);
+            final float bx = cx - sz * 0.07f, by = top + sz * 0.66f;				// the menu button
+            paint.setColor(glow);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(sz * 0.025f);
+            c.drawCircle(bx, by, sz * 0.092f, paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(RED);
+            c.drawCircle(bx, by, sz * 0.055f, paint);
+            paint.setColor(Color.WHITE);
+            for (int i = -1; i <= 1; i++)
+                c.drawRect(bx - sz * 0.028f, by + i * sz * 0.018f - sz * 0.005f, bx + sz * 0.028f, by + i * sz * 0.018f + sz * 0.005f, paint);
+            // its label, to the right
+            paint.setColor(glow);
+            c.drawRect(bx + sz * 0.12f, by - sz * 0.006f, cx + sz * 0.62f, by + sz * 0.006f, paint);
+            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setTextSize(sz * 0.13f);
+            c.drawText("hold, or press twice", cx + sz * 0.66f, by + sz * 0.045f, paint);
+        }
     }
 }
