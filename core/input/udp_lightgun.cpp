@@ -27,6 +27,11 @@
 
 	saves the last game frame to that PNG file (works with the window hidden or the desktop locked).
 
+		PEEK <address hex> <length, at most 256>
+
+	answers "PEEKR <address> <bytes as hex>" to the sender: main RAM as the game sees it (the
+	netplay test steers a hunting player from both vehicles' positions).
+
 	Copyright 2026 mikermak. This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #include "udp_lightgun.h"
@@ -39,12 +44,14 @@
 #include "log/Log.h"
 #include "rend/vr_reproject.h"
 #include "ui/gui.h"
+#include "hw/sh4/sh4_mem.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <cstdio>
+#include <string>
 #include <thread>
 
 #ifdef _WIN32
@@ -82,7 +89,8 @@ void setButton(int player, u32 key, bool pressed)
 		kcode[player] |= key;
 }
 
-void handle(const char *msg)
+// returns the reply to send back, if any
+std::string handle(const char *msg)
 {
 	int player, x, y;
 	unsigned buttons;
@@ -90,7 +98,24 @@ void handle(const char *msg)
 	if (strncmp(msg, "SHOT ", 5) == 0)
 	{
 		gui_saveScreenshotTo(msg + 5);
-		return;
+		return {};
+	}
+	unsigned addr, len;
+	if (sscanf(msg, "PEEK %x %u", &addr, &len) == 2)
+	{
+		// main RAM only (0x8C000000.., mirrors folded); read while the game runs (a test aid)
+		std::string reply = "PEEKR " + std::string(msg + 5, strcspn(msg + 5, " "));
+		len = std::min(len, 256u);
+		if (RAM_SIZE == 0 || &mem_b[0] == nullptr)
+			return reply + " ERR";
+		reply += ' ';
+		char hex[3];
+		for (u32 i = 0; i < len; i++)
+		{
+			snprintf(hex, sizeof(hex), "%02x", mem_b[(addr + i) & (RAM_SIZE - 1)]);
+			reply += hex;
+		}
+		return reply;
 	}
 	if (sscanf(msg, "LG %d %d %d %u", &player, &x, &y, &buttons) == 4)
 		lightgunSet(player, x, y, buttons);
@@ -108,6 +133,7 @@ void handle(const char *msg)
 		if (changed != 0)
 			INFO_LOG(INPUT, "Scripted pad P%d: buttons %x stick %d,%d L %d R %d", player + 1, buttons, x, y, l, r);
 	}
+	return {};
 }
 
 }
@@ -178,11 +204,15 @@ void listen(int port)
 	char buf[512];
 	while (running)
 	{
-		int n = (int)recv(sock, buf, sizeof(buf) - 1, 0);
+		sockaddr_in from{};
+		socklen_t fromLen = sizeof(from);
+		int n = (int)recvfrom(sock, buf, sizeof(buf) - 1, 0, (sockaddr *)&from, &fromLen);
 		if (n <= 0)
 			continue;
 		buf[n] = '\0';
-		handle(buf);
+		const std::string reply = handle(buf);
+		if (!reply.empty())		// (PEEK) back to the sender
+			sendto(sock, reply.c_str(), (int)reply.size(), 0, (sockaddr *)&from, fromLen);
 	}
 	closeSocket(sock);
 }
