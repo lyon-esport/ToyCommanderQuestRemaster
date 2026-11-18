@@ -498,6 +498,8 @@ extern Option<bool> VrDiscardDepth;
 extern Option<bool> VrGame60;
 extern Option<bool> VrShowFps;
 extern Option<float> VrComfortVignette;
+extern Option<int> VrHeadCamera;
+extern Option<int> VrHeadCameraLead;
 extern Option<bool> CustomTextures;
 extern Option<bool> PreloadCustomTextures;
 extern Option<bool> DumpTextures;

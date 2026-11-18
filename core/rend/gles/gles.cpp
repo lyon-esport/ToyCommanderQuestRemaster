@@ -91,6 +91,7 @@ uniform highp mat4 ndcMat;
 uniform highp float sp_FOG_DENSITY;
 #if VR_REPROJECT == 1
 uniform highp mat4 vrMat;
+uniform highp mat4 vrHudMat;	// tcvr: the 2D plane (HUD) without the head-driven camera's turn
 uniform highp vec2 vrTan;
 uniform highp vec4 vrOverlay;
 uniform highp vec3 vrComfort;
@@ -141,7 +142,7 @@ void main()
 			// vr::dropShotMarker at TA parse time.)
 			{
 				highp vec2 ndc = vpos.xy / vpos.w;
-				vpos = vrMat * vec4(ndc * vrOverlay.xy * vrOverlay.z, -vrOverlay.z, 1.0);
+				vpos = vrHudMat * vec4(ndc * vrOverlay.xy * vrOverlay.z, -vrOverlay.z, 1.0);
 			}
 		}
 		else
@@ -907,6 +908,7 @@ bool CompilePipelineShader(PipelineShader* s)
 	}
 	s->ndcMat = glGetUniformLocation(s->program, "ndcMat");
 	s->vrMat = glGetUniformLocation(s->program, "vrMat");
+	s->vrHudMat = glGetUniformLocation(s->program, "vrHudMat");
 	s->vrTan = glGetUniformLocation(s->program, "vrTan");
 	s->vrOverlay = glGetUniformLocation(s->program, "vrOverlay");
 	s->vrComfort = glGetUniformLocation(s->program, "vrComfort");
@@ -937,6 +939,7 @@ static void create_modvol_shader()
 	gl.modvol_shader.program = gl_CompileAndLink(vertexShader.generate().c_str(), fragmentShader.generate().c_str());
 	gl.modvol_shader.ndcMat = glGetUniformLocation(gl.modvol_shader.program, "ndcMat");
 	gl.modvol_shader.vrMat = glGetUniformLocation(gl.modvol_shader.program, "vrMat");
+	gl.modvol_shader.vrHudMat = glGetUniformLocation(gl.modvol_shader.program, "vrHudMat");
 	gl.modvol_shader.vrTan = glGetUniformLocation(gl.modvol_shader.program, "vrTan");
 	gl.modvol_shader.vrOverlay = glGetUniformLocation(gl.modvol_shader.program, "vrOverlay");
 	gl.modvol_shader.vrComfort = glGetUniformLocation(gl.modvol_shader.program, "vrComfort");
@@ -1235,6 +1238,7 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 	{
 		const vr::ReprojectParams& vrParams = vr::update(*gl.rendContext);
 		ShaderUniforms.vrMat = vrParams.viewProj;
+		ShaderUniforms.vrHudMat = vrParams.hudViewProj;
 		ShaderUniforms.vrTan = vrParams.tanHalf;
 		ShaderUniforms.vrOverlay = vrParams.overlay;
 		ShaderUniforms.vrComfort = vrParams.comfort;
@@ -1264,6 +1268,8 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 		glUniformMatrix4fv(gl.modvol_shader.ndcMat, 1, GL_FALSE, &ShaderUniforms.ndcMat[0][0]);
 		if (gl.modvol_shader.vrMat != -1)
 			glUniformMatrix4fv(gl.modvol_shader.vrMat, 1, GL_FALSE, &ShaderUniforms.vrMat[0][0]);
+		if (gl.modvol_shader.vrHudMat != -1)
+			glUniformMatrix4fv(gl.modvol_shader.vrHudMat, 1, GL_FALSE, &ShaderUniforms.vrHudMat[0][0]);
 		if (gl.modvol_shader.vrTan != -1)
 			glUniform2fv(gl.modvol_shader.vrTan, 1, &ShaderUniforms.vrTan[0]);
 		if (gl.modvol_shader.vrOverlay != -1)
@@ -1505,6 +1511,8 @@ void gles_vr_present()
 		std::swap(vrFrame, vrPending);
 		gles_vr_frame_changed();
 		vrFrameValid = true;
+		if (vrFrame.tcvrCamSample != 0)
+			vr::xr::noteHeadCameraShown(vrFrame.tcvrCamSample);
 		vrShowFramebuffer = false;
 		break;
 	case VrPending::Framebuffer:
@@ -1520,6 +1528,12 @@ void gles_vr_present()
 
 bool gles_vr_have_frame() {
 	return vrFrameValid || vrShowFramebuffer;
+}
+
+glm::vec2 gles_vr_frame_cam_turn() {
+	if (!vrFrameValid || vrShowFramebuffer)
+		return glm::vec2(0.f);
+	return glm::vec2(vrFrame.tcvrCamYaw, vrFrame.tcvrCamPitch);
 }
 
 bool gles_vr_showing_framebuffer() {

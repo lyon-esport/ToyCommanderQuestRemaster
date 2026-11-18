@@ -9,6 +9,7 @@
 	Copyright 2026 mikermak. This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #pragma once
+#include "types.h"
 #include <glm/glm.hpp>
 
 namespace vr::xr
@@ -21,6 +22,8 @@ struct Eye
 	int height;
 	// Rebuilt game eye space (renderer y convention, game units) -> this eye's clip space.
 	glm::mat4 viewProj;
+	// tcvr: the same without the head-driven camera's turn, for the HUD plane
+	glm::mat4 hudViewProj;
 };
 
 #ifdef USE_OPENXR
@@ -38,12 +41,26 @@ void term();
 // yaw (radians, positive to the left) and pitch (radians, positive up), at the last headset
 // frame. Any thread. For the head-driven game camera (backlog P0-8).
 glm::vec2 headYawPitch();
+// tcvr: the head camera's lag: the headset frame now (when the head is read for a game picture),
+// and a picture read at that frame going on show (gles_vr_present).
+u32 headFrame();
+void noteHeadCameraShown(u32 sample);
+// tcvr: test aid (files/head.request): which "set camera" calls the head camera turns
+// (0 the drawing cameras, the default; 3 every call; see xr_headcam.cpp).
+int headCameraTarget();
+// tcvr: the head camera's turn of a picture (rend_context::tcvrCamYaw/Pitch) as a matrix in the
+// rebuilt game eye space: Eye::viewProj * gameTurn(turn) puts that picture where it belongs.
+glm::mat4 gameTurn(glm::vec2 turn);
 #else
 inline bool enabled() { return false; }
 inline bool frame() { return false; }
 inline const Eye *currentEye() { return nullptr; }
 inline void term() {}
 inline glm::vec2 headYawPitch() { return glm::vec2(0.f); }
+inline u32 headFrame() { return 0; }
+inline void noteHeadCameraShown(u32) {}
+inline int headCameraTarget() { return 0; }
+inline glm::mat4 gameTurn(glm::vec2) { return glm::mat4(1.f); }
 #endif
 
 }

@@ -113,6 +113,9 @@ const std::vector<Choice>& choices()
 			[] { return config::VrDiscardDepth ? 1.f : 0.f; }, [](float v) { config::VrDiscardDepth.set(v > 0.5f); config::VrDiscardDepth.save(); } },
 		{ Section::Comfort, "Comfort vignette", { 0.f, 1.f, 2.f, 3.f }, { "Off", "Low", "Medium", "High" },
 			[] { return (float)config::VrComfortVignette; }, [](float v) { saveOption(config::VrComfortVignette, v); } },
+		// tcvr: the head-driven camera (xr_headcam.cpp): look all around the vehicle
+		{ Section::Comfort, "Head turns the camera", { 0.f, 1.f, 2.f }, { "Off", "Left/right", "Left/right + up/down" },
+			[] { return (float)config::VrHeadCamera; }, [](float v) { saveOption(config::VrHeadCamera, v); } },
 	};
 	return list;
 }
