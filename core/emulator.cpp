@@ -40,6 +40,7 @@
 #include "hw/pvr/Renderer_if.h"
 #include "hw/arm7/arm7_rec.h"
 #include "network/ggpo.h"
+#include "network/tcvr_match.h"
 #include "network/ice.h"
 #include "hw/mem/mem_watch.h"
 #include "network/net_handshake.h"
@@ -609,6 +610,8 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 
 		config::Settings::instance().reset();
 		config::Settings::instance().load(false);
+		// tcvr: a multiplayer match starts here (or a left-over one is switched off)
+		tcvr::match::gate();
 		dc_reset(true);
 		memset(&settings.network.md5, 0, sizeof(settings.network.md5));
 
@@ -907,6 +910,15 @@ void loadGameSpecificSettings()
 	if (config::GGPOEnable || settings.raHardcoreMode)
 		config::Sh4Clock.override(200);
 #ifdef USE_OPENXR
+	if (config::GGPOEnable)
+	{
+		// tcvr: in a netplay match every copy runs the same: 60 Hz, no 60 pictures/s option, no head
+		// camera, view widened. Set for this run only: the player's saved choices stay.
+		config::VrForce60Hz.override(true);
+		config::VrGame60.override(false);
+		config::VrHeadCamera.override(0);
+		config::VrWiden.override(true);
+	}
 	tcvrApplyGameRate(false);
 #endif
 	if (config::GGPOEnable)

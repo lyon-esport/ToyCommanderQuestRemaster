@@ -2,9 +2,14 @@
 	tcvr: the VR menu. See xr_menu.h.
 
 	Grouped in sections (Manu, 2026-11-16): the top page has Resume, Recenter view, one line per
-	section (Display, Image quality, Performance, Comfort, Saves) and Quit game; A opens a section,
-	"Back" or B returns to the top page, B on the top page closes the menu. A section without any
-	line in this build isn't shown.
+	section (Display, Image quality, Performance, Comfort, Saves, Multiplayer) and Quit game; A opens a
+	section, "Back" or B returns to the top page, B on the top page closes the menu. A section without
+	any line in this build isn't shown.
+
+	Multiplayer (tasks 3.2 and 3.3): Create game, Join game and Player name; the lobby page once a game
+	is created or joined (tcvr_lobby.h, tcvr_match.h). In a match the menu doesn't freeze the game: it
+	offers Resume, Recenter, Display/Image/Performance/Comfort (the settings that must be the same on
+	every copy are locked), Leave match and Quit.
 
 	This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
@@ -15,6 +20,8 @@
 #include "hw/pvr/Renderer_if.h"
 #include "rend/CustomTexture.h"
 #include "log/Log.h"
+#include "network/tcvr_lobby.h"
+#include "network/tcvr_match.h"
 #include "stdclass.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -35,8 +42,15 @@ namespace
 
 using Clock = std::chrono::steady_clock;
 
-enum class Section { Display, Image, Performance, Comfort, Saves, Count };
-const char *const SectionNames[] = { "Display", "Image quality", "Performance", "Comfort", "Saves" };
+enum class Section { Display, Image, Performance, Comfort, Saves, Multiplayer, Count };
+const char *const SectionNames[] = { "Display", "Image quality", "Performance", "Comfort", "Saves", "Multiplayer" };
+
+// The Multiplayer section's own pages.
+enum class MpPage { Top, Create, Join, Lobby };
+const char *const MpPageNames[] = { "Multiplayer", "Create game", "Join game", "Lobby" };
+const char *const ModeNames[] = { "Deathmatch", "Cat and Mice", "Capture the Flag" };
+constexpr int RoomCount = 8;		// (names come with the game's own options page, task 3.4)
+const uint16_t PointSteps[] = { 5, 10, 15, 20, 30, 50 };
 
 bool open;
 bool pausedGame;			// the menu stopped the emulator (and starts it again)
@@ -46,6 +60,25 @@ int selected;
 std::string status;			// the last action's result
 Clock::time_point statusUntil;
 int confirming = -1;		// the action waiting for a second A (import, quit)
+
+MpPage mpPage = MpPage::Top;
+tcvr::lobby::Settings mpSettings;	// the Create game page's choices
+std::string mpAddress;				// "Enter address" on the Join page
+bool mpReady;						// this copy's Ready in the lobby
+bool mpSearching;					// the Join page listens
+bool checkedReturn;					// (a match just ended: the menu opens on Multiplayer, once)
+
+// A short text edited with the stick: up/down changes the letter, left/right moves, A keeps it, B drops it.
+struct TextEdit
+{
+	bool active = false;
+	int action = -1;			// the Action it was started on
+	std::string text;
+	int cursor = 0;
+	const char *charset = "";	// the last one stands for "nothing" (a space)
+	size_t maxLen = 3;
+};
+TextEdit edit;
 
 // stick navigation, with key-repeat
 int heldDir;				// 0 none, 1 up, 2 down, 3 left, 4 right
@@ -66,6 +99,7 @@ struct Choice
 	std::vector<const char *> names;
 	std::function<float()> get;
 	std::function<void(float)> set;
+	bool matchLocked = false;	// the same on every copy in a match: not changeable there (it shows how it is forced)
 };
 
 void pauseGame();
@@ -99,7 +133,7 @@ const std::vector<Choice>& choices()
 			[] { return (float)config::VrXrRefreshRate; }, [](float v) { saveOption(config::VrXrRefreshRate, v); } },
 		// tcvr: the game's own picture rate in missions (spg.cpp): 60/s instead of the stock 30/s
 		{ Section::Performance, "Game pictures in missions", { 0.f, 1.f }, { "30/s (original)", "60/s" },
-			[] { return config::VrGame60 ? 1.f : 0.f; }, [](float v) { config::VrGame60.set(v > 0.5f); config::VrGame60.save(); tcvrApplyGameRate(true); } },
+			[] { return config::VrGame60 ? 1.f : 0.f; }, [](float v) { config::VrGame60.set(v > 0.5f); config::VrGame60.save(); tcvrApplyGameRate(true); }, true },
 		// the frame-rate counter at the bottom right of the view
 		{ Section::Performance, "Show frame rate", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrShowFps ? 1.f : 0.f; }, [](float v) { config::VrShowFps.set(v > 0.5f); config::VrShowFps.save(); } },
@@ -115,38 +149,165 @@ const std::vector<Choice>& choices()
 			[] { return (float)config::VrComfortVignette; }, [](float v) { saveOption(config::VrComfortVignette, v); } },
 		// tcvr: the head-driven camera (xr_headcam.cpp): look all around the vehicle
 		{ Section::Comfort, "Head turns the camera", { 0.f, 1.f, 2.f }, { "Off", "Left/right", "Left/right + up/down" },
-			[] { return (float)config::VrHeadCamera; }, [](float v) { saveOption(config::VrHeadCamera, v); } },
+			[] { return (float)config::VrHeadCamera; }, [](float v) { saveOption(config::VrHeadCamera, v); }, true },
 	};
 	return list;
 }
 
 // A line of the page shown.
-enum class Action { Resume, Recenter, OpenSection, Back, Choice, WorldSize, Export, Import, UnlockAll, Quit };
+enum class Action { Resume, Recenter, OpenSection, Back, Choice, WorldSize, Export, Import, UnlockAll, Quit,
+	// Multiplayer
+	MpCreate, MpJoin, MpName, MpMode, MpRoom, MpPoints, MpStartHosting, MpGame, MpRefresh, MpAddress,
+	MpReady, MpStartMatch, MpLeave, LeaveMatch, Info };
 struct Entry
 {
 	Action action;
 	int index = -1;		// the choice (Choice) or the section (OpenSection)
+	uint32_t id = 0;	// MpGame: the host's id
+	std::string text;	// Info, MpGame
 };
+
+bool inMatch() { return tcvr::match::inMatch(); }
+bool lobbyActive()
+{
+	if (!tcvr::match::lobbyStarted())
+		return false;
+	const auto phase = tcvr::match::theLobby().view().phase;
+	return phase != tcvr::lobby::Phase::Idle;
+}
+
+Entry infoLine(const std::string& text)
+{
+	Entry e { Action::Info };
+	e.text = text;
+	return e;
+}
+
+bool isInfo(const Entry& e) { return e.action == Action::Info; }
+
+std::string roomName(int room) { return "Arena " + std::to_string(room + 1); }
+
+std::string gameLine(const tcvr::lobby::FoundGame& g)
+{
+	const tcvr::lobby::Beacon& b = g.beacon;
+	char buf[128];
+	snprintf(buf, sizeof(buf), "%s   %s   %s   %d/%d%s", b.hostName.c_str(), ModeNames[b.settings.mode % 3],
+			roomName(b.settings.room % RoomCount).c_str(), b.players, b.maxPlayers, b.started ? "  (started)" : "");
+	return buf;
+}
+
+// The pages of the Multiplayer section.
+std::vector<Entry> mpEntries()
+{
+	using namespace tcvr;
+	std::vector<Entry> list;
+	switch (mpPage)
+	{
+	case MpPage::Top:
+		list.push_back({ Action::Back });
+		list.push_back({ Action::MpCreate });
+		list.push_back({ Action::MpJoin });
+		list.push_back({ Action::MpName });
+		break;
+	case MpPage::Create:
+		list.push_back({ Action::Back });
+		list.push_back({ Action::MpMode });
+		list.push_back({ Action::MpRoom });
+		list.push_back({ Action::MpPoints });
+		list.push_back({ Action::MpStartHosting });
+		break;
+	case MpPage::Join:
+	{
+		list.push_back({ Action::Back });
+		const auto games = match::theLobby().games();
+		for (const auto& g : games)
+		{
+			Entry e { Action::MpGame };
+			e.id = g.hostId;
+			e.text = gameLine(g);
+			list.push_back(e);
+		}
+		if (games.empty())
+			list.push_back(infoLine("No game found yet. Is the host on the same Wi-Fi?"));
+		list.push_back({ Action::MpRefresh });
+		list.push_back({ Action::MpAddress });
+		break;
+	}
+	case MpPage::Lobby:
+	{
+		const lobby::View v = match::theLobby().view();
+		if (v.phase == lobby::Phase::InLobby)
+		{
+			const lobby::State& s = v.state;
+			list.push_back(infoLine("Host " + s.players[0].name + "   " + ModeNames[s.settings.mode % 3]));
+			list.push_back(infoLine(roomName(s.settings.room % RoomCount) + "   " + std::to_string(s.settings.points) + " points to win"));
+			for (int i = 0; i < lobby::MaxPlayers; i++)
+			{
+				const lobby::PlayerInfo& p = s.players[i];
+				if (!p.present)
+					continue;
+				std::string line = std::to_string(i + 1) + "   " + p.name;
+				if (i == v.mySlot)
+					line += "  (you)";
+				line += i == 0 ? "   host" : p.ready ? "   ready" : "   not ready";
+				list.push_back(infoLine(line));
+			}
+			if (v.role == lobby::Role::Host)
+			{
+				list.push_back(infoLine("To join by hand: address " + v.hostAddress));
+				list.push_back({ Action::MpStartMatch });
+			}
+			else
+				list.push_back({ Action::MpReady });
+			list.push_back({ Action::MpLeave });
+		}
+		else if (v.phase == lobby::Phase::Connecting)
+		{
+			list.push_back(infoLine("Connecting..."));
+			list.push_back({ Action::MpLeave });
+		}
+		else if (v.phase == lobby::Phase::Started)
+			list.push_back(infoLine("Starting the match..."));
+		else
+		{
+			// refused, host left, failed: say it, and Back
+			list.push_back(infoLine(v.message.empty() ? "The game is closed" : v.message));
+			list.push_back({ Action::Back });
+		}
+		break;
+	}
+	}
+	return list;
+}
 
 std::vector<Entry> entries()
 {
 	std::vector<Entry> list;
 	const auto& all = choices();
+	const bool match = inMatch();
 	if (page < 0)
 	{
 		list.push_back({ Action::Resume });
 		list.push_back({ Action::Recenter });
 		for (int s = 0; s < (int)Section::Count; s++)
 		{
-			bool any = (Section)s == Section::Display || (Section)s == Section::Saves;
+			const Section sec = (Section)s;
+			// (saving, importing and the multiplayer pages start the game again: not in a match)
+			if (match && (sec == Section::Saves || sec == Section::Multiplayer))
+				continue;
+			bool any = sec == Section::Display || sec == Section::Saves || sec == Section::Multiplayer;
 			for (const Choice& c : all)
-				any = any || c.section == (Section)s;
+				any = any || c.section == sec;
 			if (any)
 				list.push_back({ Action::OpenSection, s });
 		}
+		if (match)
+			list.push_back({ Action::LeaveMatch });
 		list.push_back({ Action::Quit });
 		return list;
 	}
+	if ((Section)page == Section::Multiplayer)
+		return mpEntries();
 	list.push_back({ Action::Back });
 	if ((Section)page == Section::Display)
 		list.push_back({ Action::WorldSize });
@@ -162,6 +323,15 @@ std::vector<Entry> entries()
 			list.push_back({ Action::UnlockAll });
 	}
 	return list;
+}
+
+// The first line to pick on a page: after Back (and after the information lines).
+int firstSelectable(const std::vector<Entry>& list)
+{
+	for (int i = 0; i < (int)list.size(); i++)
+		if (!isInfo(list[i]) && !(i == 0 && list[i].action == Action::Back && list.size() > 1))
+			return i;
+	return 0;
 }
 
 int nearestIndex(const Choice& c)
@@ -205,6 +375,33 @@ void resumeGame()
 	}
 }
 
+void mpStopSearch()
+{
+	if (!mpSearching)
+		return;
+	mpSearching = false;
+	tcvr::match::theLobby().stopSearch();
+}
+
+// A page of the Multiplayer section.
+void mpShow(MpPage p)
+{
+	if (mpPage == MpPage::Join && p != MpPage::Join)
+		mpStopSearch();
+	mpPage = p;
+	confirming = -1;
+	edit.active = false;
+	if (p == MpPage::Join)
+	{
+		auto& l = tcvr::match::theLobby();
+		l.startSearch();
+		mpSearching = true;
+		if (!mpAddress.empty())
+			l.query(mpAddress);
+	}
+	selected = firstSelectable(entries());
+}
+
 void openMenu(float headYaw)
 {
 	open = true;
@@ -213,10 +410,13 @@ void openMenu(float headYaw)
 	selected = 0;
 	confirming = -1;
 	heldDir = 0;
+	edit.active = false;
 	status.clear();
-	// always frozen behind the menu (Manu): the game must not go on without the player
-	pauseGame();
-	NOTICE_LOG(RENDERER, "XR menu: open (game %s)", pausedGame ? "paused" : "not running");
+	// always frozen behind the menu (Manu): the game must not go on without the player. Except in a
+	// multiplayer match: the other players' game goes on (the vehicle stands idle), and so does this one.
+	if (!inMatch())
+		pauseGame();
+	NOTICE_LOG(RENDERER, "XR menu: open (game %s)", pausedGame ? "paused" : inMatch() ? "in a match, running" : "not running");
 }
 
 void showPage(int newPage)
@@ -225,6 +425,9 @@ void showPage(int newPage)
 	page = newPage;
 	confirming = -1;
 	selected = 0;
+	edit.active = false;
+	if (from == (int)Section::Multiplayer && newPage != from)
+		mpStopSearch();
 	if (newPage < 0)
 	{
 		// back on the top page: on the section left
@@ -233,10 +436,34 @@ void showPage(int newPage)
 			if (list[i].action == Action::OpenSection && list[i].index == from)
 				selected = i;
 	}
+	else if (newPage == (int)Section::Multiplayer)
+	{
+		// a game already created or joined: its lobby
+		mpPage = lobbyActive() ? MpPage::Lobby : MpPage::Top;
+		if (mpPage == MpPage::Join)
+			mpStopSearch();
+		selected = firstSelectable(entries());
+	}
 	else
 		selected = 1;	// the section's first setting, below Back
 	if (newPage >= 0)
 		NOTICE_LOG(RENDERER, "XR menu: section %s", SectionNames[newPage]);
+}
+
+// One step back: out of a Multiplayer page, or out of the section.
+void goBack()
+{
+	if (page == (int)Section::Multiplayer && mpPage != MpPage::Top)
+	{
+		if (mpPage == MpPage::Lobby)
+		{
+			tcvr::match::theLobby().leave();
+			mpReady = false;
+		}
+		mpShow(MpPage::Top);
+		return;
+	}
+	showPage(-1);
 }
 
 std::string request(MenuRequest r)
@@ -244,6 +471,47 @@ std::string request(MenuRequest r)
 	if (menuRequestHook == nullptr)
 		return "Not available on this platform";
 	return menuRequestHook(r);
+}
+
+// What the Multiplayer code needs of the platform: start the game again, the first saved game's name.
+struct MpHooks
+{
+	MpHooks()
+	{
+		tcvr::match::restartHook = [] () -> std::string { return request(MenuRequest::Restart); };
+		tcvr::match::saveNameHook = [] () -> std::string { return menuRequestHook == nullptr ? std::string() : request(MenuRequest::SaveName); };
+	}
+} mpHooks;
+
+bool isMatchLocked(const Entry& e)
+{
+	return e.action == Action::Choice && inMatch() && choices()[e.index].matchLocked;
+}
+
+int pointsIndex()
+{
+	int best = 0;
+	for (int i = 1; i < (int)(sizeof(PointSteps) / sizeof(PointSteps[0])); i++)
+		if (std::abs((int)PointSteps[i] - (int)mpSettings.points) < std::abs((int)PointSteps[best] - (int)mpSettings.points))
+			best = i;
+	return best;
+}
+
+// Mode, Room and Points to win: step (stick) or go round (A).
+void mpChange(Action a, int step, bool wrap)
+{
+	auto move = [&](int value, int count) {
+		int v = value + step;
+		if (wrap)
+			v = (v + count) % count;
+		return std::clamp(v, 0, count - 1);
+	};
+	if (a == Action::MpMode)
+		mpSettings.mode = (uint8_t)move(mpSettings.mode, 3);
+	else if (a == Action::MpRoom)
+		mpSettings.room = (uint8_t)move(mpSettings.room, RoomCount);
+	else if (a == Action::MpPoints)
+		mpSettings.points = PointSteps[move(pointsIndex(), (int)(sizeof(PointSteps) / sizeof(PointSteps[0])))];
 }
 
 void change(const Entry& e, int step)
@@ -254,8 +522,25 @@ void change(const Entry& e, int step)
 		saveOption(config::VrWorldScale, scale);
 		return;
 	}
+	if (e.action == Action::MpMode || e.action == Action::MpRoom || e.action == Action::MpPoints)
+	{
+		mpChange(e.action, step, false);
+		return;
+	}
+	if (e.action == Action::MpReady)
+	{
+		const bool ready = step > 0;
+		if (ready != mpReady)
+		{
+			mpReady = ready;
+			tcvr::match::theLobby().setReady(mpReady);
+		}
+		return;
+	}
 	if (e.action == Action::Choice)
 	{
+		if (isMatchLocked(e))
+			return;
 		const Choice& c = choices()[e.index];
 		const int i = std::clamp(nearestIndex(c) + step, 0, (int)c.values.size() - 1);
 		c.set(c.values[i]);
@@ -263,8 +548,94 @@ void change(const Entry& e, int step)
 	}
 }
 
+// Text editing (player name, address).
+void beginEdit(Action a)
+{
+	edit = TextEdit();
+	edit.active = true;
+	edit.action = (int)a;
+	if (a == Action::MpName)
+	{
+		edit.text = tcvr::match::playerName();
+		edit.charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
+		edit.maxLen = 3;
+		edit.cursor = 0;
+	}
+	else
+	{
+		edit.text = mpAddress;
+		edit.charset = "0123456789. ";
+		edit.maxLen = 15;
+		edit.cursor = (int)std::min(edit.text.size(), edit.maxLen - 1);
+	}
+	setStatus("Stick: up/down letter, left/right move. A keeps it, B drops it");
+}
+
+std::string editDisplay()
+{
+	std::string s;
+	const int n = (int)std::max<size_t>(edit.text.size(), edit.cursor + 1);
+	for (int i = 0; i < n; i++)
+	{
+		char c = i < (int)edit.text.size() ? edit.text[i] : ' ';
+		if (c == ' ')
+			c = '_';
+		if (i == edit.cursor)
+			s += std::string("[") + c + "]";
+		else
+			s += c;
+	}
+	return s;
+}
+
+void editStep(int dir)
+{
+	const std::string cs = edit.charset;
+	if (dir == 3)
+		edit.cursor = std::max(0, edit.cursor - 1);
+	else if (dir == 4)
+	{
+		if (edit.cursor + 1 < (int)edit.maxLen)
+			edit.cursor++;
+	}
+	else
+	{
+		while ((int)edit.text.size() <= edit.cursor)
+			edit.text.push_back(' ');
+		const size_t at = cs.find(edit.text[edit.cursor]);
+		const int count = (int)cs.size();
+		int i = at == std::string::npos ? 0 : (int)at;
+		i = (i + (dir == 1 ? 1 : count - 1)) % count;
+		edit.text[edit.cursor] = cs[i];
+	}
+}
+
+void commitEdit()
+{
+	std::string t = edit.text;
+	while (!t.empty() && t.back() == ' ')
+		t.pop_back();
+	edit.active = false;
+	if (edit.action == (int)Action::MpName)
+	{
+		if (t.empty())
+			return;
+		tcvr::match::setPlayerName(t);
+		setStatus("Player name: " + tcvr::match::playerName());
+	}
+	else
+	{
+		mpAddress = t;
+		if (t.empty())
+			return;
+		tcvr::match::theLobby().query(t);
+		setStatus("Asking " + t + " ...");
+	}
+}
+
 MenuAction accept(const Entry& e)
 {
+	using namespace tcvr;
 	switch (e.action)
 	{
 	case Action::Resume:
@@ -277,9 +648,16 @@ MenuAction accept(const Entry& e)
 		showPage(e.index);
 		return MenuAction::None;
 	case Action::Back:
-		showPage(-1);
+		goBack();
 		return MenuAction::None;
 	case Action::Choice:
+		if (isMatchLocked(e))
+		{
+			setStatus("Fixed during a match: the same on every copy");
+			return MenuAction::None;
+		}
+		change(e, 1);
+		return MenuAction::None;
 	case Action::WorldSize:
 		change(e, 1);
 		return MenuAction::None;
@@ -289,18 +667,95 @@ MenuAction accept(const Entry& e)
 	case Action::Import:
 	case Action::UnlockAll:
 	case Action::Quit:
+	case Action::LeaveMatch:
+	{
 		// A twice
 		if (confirming != (int)e.action)
 		{
 			confirming = (int)e.action;
 			setStatus(e.action == Action::Quit ? "Press A again to quit"
+					: e.action == Action::LeaveMatch ? "Press A again: leaves the match and restarts the game"
 					: e.action == Action::Import ? "Press A again: replaces your saves and restarts the game"
 					: "Press A again: opens every mission of your saved games (backed up first) and restarts the game");
 			return MenuAction::None;
 		}
 		confirming = -1;
-		setStatus(request(e.action == Action::Quit ? MenuRequest::Quit
-				: e.action == Action::Import ? MenuRequest::ImportSaves : MenuRequest::UnlockAll));
+		if (e.action == Action::LeaveMatch)
+			setStatus(match::leaveMatch());
+		else
+			setStatus(request(e.action == Action::Quit ? MenuRequest::Quit
+					: e.action == Action::Import ? MenuRequest::ImportSaves : MenuRequest::UnlockAll));
+		return MenuAction::None;
+	}
+	case Action::MpCreate:
+		mpShow(MpPage::Create);
+		return MenuAction::None;
+	case Action::MpJoin:
+		mpShow(MpPage::Join);
+		return MenuAction::None;
+	case Action::MpName:
+	case Action::MpAddress:
+		beginEdit(e.action);
+		return MenuAction::None;
+	case Action::MpMode:
+	case Action::MpRoom:
+	case Action::MpPoints:
+		mpChange(e.action, 1, true);
+		return MenuAction::None;
+	case Action::MpStartHosting:
+	{
+		std::string error;
+		if (match::theLobby().host(match::identity(), mpSettings, error))
+		{
+			mpReady = false;
+			mpShow(MpPage::Lobby);
+		}
+		else
+			setStatus(error);
+		return MenuAction::None;
+	}
+	case Action::MpGame:
+	{
+		for (const auto& g : match::theLobby().games())
+			if (g.hostId == e.id)
+			{
+				mpStopSearch();
+				mpReady = false;
+				match::theLobby().join(match::identity(), g.address, g.beacon.lobbyPort);
+				mpShow(MpPage::Lobby);
+				return MenuAction::None;
+			}
+		setStatus("That game is gone");
+		return MenuAction::None;
+	}
+	case Action::MpRefresh:
+	{
+		auto& l = match::theLobby();
+		l.stopSearch();
+		l.startSearch();
+		mpSearching = true;
+		if (!mpAddress.empty())
+			l.query(mpAddress);
+		setStatus("Searching...");
+		return MenuAction::None;
+	}
+	case Action::MpReady:
+		change(e, mpReady ? -1 : 1);
+		return MenuAction::None;
+	case Action::MpStartMatch:
+	{
+		std::string error;
+		// (a little input delay: the Wi-Fi's jitter is absorbed by the rollback netplay, the delay costs responsiveness)
+		if (!match::theLobby().start((uint8_t)std::max(2, (int)config::GGPODelay), error))
+			setStatus(error);
+		else
+			setStatus("Starting the match...");
+		return MenuAction::None;
+	}
+	case Action::MpLeave:
+		goBack();
+		return MenuAction::None;
+	case Action::Info:
 		return MenuAction::None;
 	}
 	return MenuAction::None;
@@ -308,12 +763,15 @@ MenuAction accept(const Entry& e)
 
 bool hasValue(const Entry& e)
 {
-	return e.action == Action::Choice || e.action == Action::WorldSize;
+	if (isMatchLocked(e))
+		return false;
+	return e.action == Action::Choice || e.action == Action::WorldSize || e.action == Action::MpMode
+			|| e.action == Action::MpRoom || e.action == Action::MpPoints || e.action == Action::MpReady;
 }
 
 std::string lineText(const Entry& e)
 {
-	char buf[96];
+	char buf[160];
 	switch (e.action)
 	{
 	case Action::Resume: return "Resume";
@@ -326,13 +784,37 @@ std::string lineText(const Entry& e)
 	case Action::Choice:
 	{
 		const Choice& c = choices()[e.index];
-		snprintf(buf, sizeof(buf), "%s:  %s", c.label, c.names[nearestIndex(c)]);
+		snprintf(buf, sizeof(buf), "%s:  %s%s", c.label, c.names[nearestIndex(c)], isMatchLocked(e) ? "  (fixed in a match)" : "");
 		return buf;
 	}
 	case Action::Export: return "Export saves to Download";
 	case Action::Import: return "Import saves from Download";
 	case Action::UnlockAll: return "Unlock all levels";
 	case Action::Quit: return "Quit game";
+	case Action::LeaveMatch: return "Leave match";
+	case Action::MpCreate: return "Create game  ...";
+	case Action::MpJoin: return "Join game  ...";
+	case Action::MpName:
+		return "Player name:  " + (edit.active && edit.action == (int)Action::MpName ? editDisplay() : tcvr::match::playerName());
+	case Action::MpMode: return std::string("Mode:  ") + ModeNames[mpSettings.mode % 3];
+	case Action::MpRoom: return "Room:  " + roomName(mpSettings.room % RoomCount);
+	case Action::MpPoints: return "Points to win:  " + std::to_string(mpSettings.points);
+	case Action::MpStartHosting: return "Start hosting";
+	case Action::MpGame: return e.text;
+	case Action::MpRefresh: return "Refresh";
+	case Action::MpAddress:
+		if (edit.active && edit.action == (int)Action::MpAddress)
+			return "Address:  " + editDisplay();
+		return "Address:  " + (mpAddress.empty() ? std::string("enter one") : mpAddress);
+	case Action::MpReady: return mpReady ? "Ready:  Yes" : "Ready:  No";
+	case Action::MpStartMatch:
+	{
+		std::string why;
+		const bool can = tcvr::match::theLobby().canStart(why);
+		return can ? "Start match" : "Start match   (" + why + ")";
+	}
+	case Action::MpLeave: return "Leave game";
+	case Action::Info: return e.text;
 	}
 	return "";
 }
@@ -357,6 +839,8 @@ void closeMenu()
 	open = false;
 	confirming = -1;
 	page = -1;
+	edit.active = false;
+	mpStopSearch();
 	resumeGame();
 	NOTICE_LOG(RENDERER, "XR menu: closed");
 }
@@ -384,6 +868,20 @@ void noteHeadsetFrame()
 
 MenuAction updateMenu(const MenuInput& input, float headYaw)
 {
+	// (also with the menu closed: START from the host arrives whenever it likes)
+	tcvr::match::poll();
+	if (!checkedReturn)
+	{
+		checkedReturn = true;
+		if (tcvr::match::takeReturn())
+		{
+			// a match ended (or didn't start): the game is back, on the Multiplayer pages
+			openMenu(headYaw);
+			showPage((int)Section::Multiplayer);
+			setStatus("The match is over");
+			return MenuAction::None;
+		}
+	}
 	if (input.toggle)
 	{
 		if (open)
@@ -396,9 +894,11 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 		return MenuAction::None;
 	if (input.back)
 	{
-		// B: out of a section, or the menu closes
-		if (page >= 0)
-			showPage(-1);
+		// B: drops a text edit, goes out of a section (or a page of it), or the menu closes
+		if (edit.active)
+			edit.active = false;
+		else if (page >= 0)
+			goBack();
 		else
 			closeMenu();
 		return MenuAction::None;
@@ -423,12 +923,26 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 		step = true;
 		nextRepeat = now + std::chrono::milliseconds(140);
 	}
+	if (edit.active)
+	{
+		if (step)
+			editStep(dir);
+		if (input.accept)
+			commitEdit();
+		return MenuAction::None;
+	}
 	if (step)
 	{
 		const int count = (int)list.size();
 		if (dir == 1 || dir == 2)
 		{
-			selected = (selected + (dir == 1 ? -1 : 1) + count) % count;
+			// (the information lines of the lobby are skipped)
+			for (int tries = 0; tries < count; tries++)
+			{
+				selected = (selected + (dir == 1 ? -1 : 1) + count) % count;
+				if (!isInfo(list[selected]))
+					break;
+			}
 			confirming = -1;
 		}
 		else if (hasValue(list[selected]))
@@ -436,10 +950,13 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 		else if (dir == 4 && list[selected].action == Action::OpenSection)
 			showPage(list[selected].index);		// right opens a section too
 		else if (dir == 3 && page >= 0)
-			showPage(-1);						// left goes back
+			goBack();							// left goes back
 	}
 	if (input.accept)
-		return accept(entries()[std::clamp(selected, 0, (int)entries().size() - 1)]);
+	{
+		const auto now2 = entries();
+		return accept(now2[std::clamp(selected, 0, (int)now2.size() - 1)]);
+	}
 	return MenuAction::None;
 }
 
@@ -457,18 +974,22 @@ bool menuPanel(Panel& panel, float& yaw)
 	panel.imageHeight = 1000;
 	panel.widthMetres = 1.2f;
 	panel.lines.push_back({ "TOY COMMANDER VR", 0.052f, red });
-	panel.lines.push_back({ page < 0 ? "VR menu" : SectionNames[page], 0.04f, grey });
+	const bool mp = page == (int)Section::Multiplayer;
+	panel.lines.push_back({ page < 0 ? (inMatch() ? "VR menu   (match running)" : "VR menu")
+			: mp ? MpPageNames[(int)mpPage] : SectionNames[page], 0.04f, grey });
 	const auto list = entries();
+	const float lineSize = list.size() > 9 ? 0.039f : 0.046f;
 	for (int i = 0; i < (int)list.size(); i++)
 	{
 		std::string s = lineText(list[i]);
 		const bool sel = i == selected;
-		if (sel)
+		const bool info = isInfo(list[i]);
+		if (sel && !info)
 		{
 			s = hasValue(list[i]) ? "<   " + s + "   >" : ">  " + s + "  <";
 			panel.highlight = (int)panel.lines.size();
 		}
-		panel.lines.push_back({ s, 0.046f, sel ? (confirming == (int)list[i].action ? yellow : white) : soft });
+		panel.lines.push_back({ s, lineSize, sel && !info ? (confirming == (int)list[i].action ? yellow : white) : info ? grey : soft });
 	}
 	char rates[96];
 	int upscaled, queued, cached;

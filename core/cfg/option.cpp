@@ -133,6 +133,11 @@ Option<int> VrFoveation("vr.Foveation", 1);	// tcvr: fixed foveated rendering, f
 Option<float> VrComfortVignette("vr.ComfortVignette", 1.f);	// tcvr: darken the view's edges while it turns on its own: 0 off, 1 low, 2 medium, 3 high (0..1 scales low)
 Option<int> VrHeadCameraLead("vr.HeadCameraLead", -1);	// tcvr: head camera: how far ahead (ms) to aim the game camera at the head's turn; -1 measured, 0 none
 Option<int> VrHeadCamera("vr.HeadCamera", 2);	// tcvr: the head turns the game camera (Toy Commander): 0 off, 1 yaw, 2 yaw and pitch (default, chosen after the worn test 2026-11-18)
+// tcvr: multiplayer (xr_mp.cpp): the 3-letter player name ("" = the name of the first saved game), the time (seconds since 1970)
+// until which the next game start is the start of a match (0: none), and a match just ended (the menu opens on Multiplayer)
+OptionString VrMpName("vr.MpName", "");
+Option<int> VrMpMarker("vr.MpMarker", 0);
+Option<bool> VrMpReturn("vr.MpReturn", false);
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");

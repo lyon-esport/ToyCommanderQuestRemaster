@@ -52,9 +52,11 @@ void closeMenu();
 
 // What the platform does for the menu (Android.cpp): export the saves to Download, import the
 // newest exported ones and start the game again, quit, open every level of the saved games
-// (Toy Commander only) and start the game again. Returns a line for the menu to show.
+// (Toy Commander only) and start the game again, the first saved game's name ("" if none; the
+// default player name of the multiplayer), start the game again (a multiplayer match starts and ends
+// that way). Returns a line for the menu to show.
 // The values are BaseGLActivity.onVrMenuRequest's request numbers.
-enum class MenuRequest { ExportSaves, ImportSaves, Quit, UnlockAll };
+enum class MenuRequest { ExportSaves, ImportSaves, Quit, UnlockAll, SaveName, Restart };
 extern std::string (*menuRequestHook)(MenuRequest request);
 
 }

@@ -77,6 +77,17 @@ public class VrSaveUnlockTest {
         check(diff <= 18, "only status bytes changed (" + diff + ")");
         check(Arrays.equals(Arrays.copyOfRange(c, q - 128, q + 384), Arrays.copyOfRange(before, q - 128, q + 384)), "rejected file untouched");
 
+        // the multiplayer's default player name: the saved games' names, in directory order (the options file isn't one)
+        byte[] named = card();
+        addSavedGame(named, 0, "ABC", 199, 198, "TOY SAVED GAME  ");
+        addSavedGame(named, 1, "XYZ", 197, 196, "TOY SAVED GAME  ");
+        int opt = 253 * 512 + 2 * 32;
+        named[opt] = 0x33;
+        put(named, opt + 4, "TOY_COMM.___");
+        check(VrSaveUnlock.playerNames(named).equals(Arrays.asList("ABC", "XYZ")), "player names: " + VrSaveUnlock.playerNames(named));
+        check(VrSaveUnlock.playerNames(new byte[256 * 512]).isEmpty() && VrSaveUnlock.playerNames(null).isEmpty(),
+                "no player names on an unformatted card");
+
         byte[] again = c.clone();
         VrSaveUnlock.Result r2 = VrSaveUnlock.patch(again);
         check(r2.changed == 0 && Arrays.equals(again, c), "second run changes nothing");
