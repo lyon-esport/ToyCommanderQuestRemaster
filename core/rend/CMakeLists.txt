@@ -19,6 +19,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         vr/hands_build.h
         vr/hands_rip.cpp
         vr/hands_rip.h
+        vr/mp_ownview.cpp
+        vr/mp_ownview.h
         norend/norend.cpp)
 
 if(USE_OPENGL)

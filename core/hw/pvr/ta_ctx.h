@@ -283,6 +283,10 @@ struct rend_context
 	float tcvrCamYaw = 0.f, tcvrCamPitch = 0.f;
 	// (and the headset frame its head direction was read at, 0: none; to measure the lag)
 	u32 tcvrCamSample = 0;
+	// tcvr: split screen, own view (vr/mp_ownview.h): the local player's view in this picture,
+	// DC pixels (x, y, width, height; width 0: not an own-view picture), and its focal length.
+	glm::vec4 tcvrView { 0.f };
+	glm::vec2 tcvrViewFocal { 0.f };
 
 	void Clear()
 	{

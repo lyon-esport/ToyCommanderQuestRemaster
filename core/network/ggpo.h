@@ -31,6 +31,8 @@ void stopSession();
 void getInput(MapleInputState inputState[4]);
 bool nextFrame();
 bool active();
+// tcvr: the local player's number in the session (0-based), -1 when no session is running
+int localPlayerIndex();
 void displayStats();
 void endOfFrame();
 void sendChatMessage(int playerNum, const std::string& msg);

@@ -65,6 +65,7 @@ struct PipelineShader
 	GLint vrTan;
 	GLint vrOverlay;
 	GLint vrComfort;
+	GLint vrView;
 	GLint palette_index;
 	GLint ditherDivisor;
 	GLint texSize;
@@ -271,6 +272,7 @@ struct gl_ctx
 		GLint vrTan;
 		GLint vrOverlay;
 		GLint vrComfort;
+		GLint vrView;
 	} modvol_shader;
 
 	struct
@@ -459,6 +461,7 @@ extern struct ShaderUniforms_t
 	glm::vec2 vrTan;
 	glm::vec4 vrOverlay;
 	glm::vec3 vrComfort;	// world scale, comfort start, comfort minimum (metres); 0: off
+	glm::vec4 vrView { 0.f, 0.f, 1.f, 1.f };	// tcvr: own view: its centre (ndc) and its 2D's scale
 	struct {
 		bool enabled;
 		int x;
@@ -503,6 +506,8 @@ extern struct ShaderUniforms_t
 			glUniform4fv(s->vrOverlay, 1, &vrOverlay[0]);
 		if (s->vrComfort != -1)
 			glUniform3fv(s->vrComfort, 1, &vrComfort[0]);
+		if (s->vrView != -1)
+			glUniform4fv(s->vrView, 1, &vrView[0]);
 
 		if (s->ditherDivisor != -1)
 			glUniform4fv(s->ditherDivisor, 1, ditherDivisor);

@@ -14,6 +14,7 @@
 #include "naomi2.h"
 #include "oslib/i18n.h"
 #include "rend/vr_reproject.h"
+#include "rend/vr/mp_ownview.h"
 #include "rend/vr/xr_host.h"
 
 #ifdef TEST_AUTOMATION
@@ -95,6 +96,7 @@ uniform highp mat4 vrHudMat;	// tcvr: the 2D plane (HUD) without the head-driven
 uniform highp vec2 vrTan;
 uniform highp vec4 vrOverlay;
 uniform highp vec3 vrComfort;
+uniform highp vec4 vrView;	// tcvr: split screen, own view: the view's centre (ndc) and its 2D's scale
 #endif
 
 /* Vertex input */
@@ -141,13 +143,13 @@ void main()
 			// (The cinematic letterbox, whole opaque black polygons, is taken out before this:
 			// vr::dropShotMarker at TA parse time.)
 			{
-				highp vec2 ndc = vpos.xy / vpos.w;
+				highp vec2 ndc = (vpos.xy / vpos.w - vrView.xy) * vrView.zw;
 				vpos = vrHudMat * vec4(ndc * vrOverlay.xy * vrOverlay.z, -vrOverlay.z, 1.0);
 			}
 		}
 		else
 		{
-			highp vec3 p = vec3(vpos.xy * vrTan, -vpos.w);
+			highp vec3 p = vec3((vpos.xy - vrView.xy * vpos.w) * vrTan, -vpos.w);
 			// Comfort: what comes closer than vrComfort.y metres in front of you (a zombie in
 			// your face) is pulled back along the line of sight, smoothly, to no closer than
 			// vrComfort.z. Only straight ahead: the floor at your feet stays where it is.
@@ -912,6 +914,7 @@ bool CompilePipelineShader(PipelineShader* s)
 	s->vrTan = glGetUniformLocation(s->program, "vrTan");
 	s->vrOverlay = glGetUniformLocation(s->program, "vrOverlay");
 	s->vrComfort = glGetUniformLocation(s->program, "vrComfort");
+	s->vrView = glGetUniformLocation(s->program, "vrView");
 	s->ditherDivisor = glGetUniformLocation(s->program, "ditherDivisor");
 	s->texSize = glGetUniformLocation(s->program, "texSize");
 
@@ -943,6 +946,7 @@ static void create_modvol_shader()
 	gl.modvol_shader.vrTan = glGetUniformLocation(gl.modvol_shader.program, "vrTan");
 	gl.modvol_shader.vrOverlay = glGetUniformLocation(gl.modvol_shader.program, "vrOverlay");
 	gl.modvol_shader.vrComfort = glGetUniformLocation(gl.modvol_shader.program, "vrComfort");
+	gl.modvol_shader.vrView = glGetUniformLocation(gl.modvol_shader.program, "vrView");
 	gl.modvol_shader.sp_ShaderColor = glGetUniformLocation(gl.modvol_shader.program, "sp_ShaderColor");
 	gl.modvol_shader.depth_scale = glGetUniformLocation(gl.modvol_shader.program, "depth_scale");
 
@@ -1242,6 +1246,15 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 		ShaderUniforms.vrTan = vrParams.tanHalf;
 		ShaderUniforms.vrOverlay = vrParams.overlay;
 		ShaderUniforms.vrComfort = vrParams.comfort;
+		// (the view's centre into the renderer's ndc, as its vertices: ndcMat)
+		// (only for an own-view picture: any other keeps the stock centre, ndc 0)
+		if (gl.rendContext->tcvrView.z > 0.f)
+		{
+			const glm::vec4 centre = ShaderUniforms.ndcMat * glm::vec4(vrParams.view.x, vrParams.view.y, 0.f, 1.f);
+			ShaderUniforms.vrView = glm::vec4(centre.x, centre.y, vrParams.view.z, vrParams.view.w);
+		}
+		else
+			ShaderUniforms.vrView = glm::vec4(0.f, 0.f, 1.f, 1.f);
 	}
 
 	ShaderUniforms.depth_coefs[0] = 2.f / vtx_max_fZ;
@@ -1276,6 +1289,8 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 			glUniform4fv(gl.modvol_shader.vrOverlay, 1, &ShaderUniforms.vrOverlay[0]);
 		if (gl.modvol_shader.vrComfort != -1)
 			glUniform3fv(gl.modvol_shader.vrComfort, 1, &ShaderUniforms.vrComfort[0]);
+		if (gl.modvol_shader.vrView != -1)
+			glUniform4fv(gl.modvol_shader.vrView, 1, &ShaderUniforms.vrView[0]);
 		glUniform1f(gl.modvol_shader.sp_ShaderColor, 1 - FPU_SHAD_SCALE.scale_factor / 256.f);
 
 		glcache.UseProgram(gl.n2ModVolShader.program);
@@ -1377,7 +1392,9 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 	else
 		glcache.ClearColor(0.f, 0.f, 0.f, 0.f);
 
-	if (is_rtt || gl.rendContext->clearFramebuffer || vrEye)
+	// tcvr: an own-view picture (split screen, see vr/mp_ownview.h) fills the whole screen
+	const bool ownView = !is_rtt && config::VrReproject && gl.rendContext->tcvrView.z > 0.f;
+	if (is_rtt || gl.rendContext->clearFramebuffer || vrEye || ownView)
 		glClear(GL_COLOR_BUFFER_BIT);
 	// tcvr: in the headset the kept game frame is drawn for each eye at the headset's rate
 	// (2-4 headset frames per game picture): its vertices and indices go to the GPU once per
@@ -1420,8 +1437,8 @@ bool OpenGLRenderer::renderFrame(int width, int height)
 		else
 			ShaderUniforms.base_clipping.enabled = false;
 	}
-	if (vrEye)
-		// the game's screen clip rectangle means nothing in a headset view
+	if (vrEye || ownView)
+		// the game's screen clip rectangle means nothing in a headset view (nor in an own view)
 		ShaderUniforms.base_clipping.enabled = false;
 	if (ShaderUniforms.base_clipping.enabled) {
 		glcache.Scissor(ShaderUniforms.base_clipping.x, ShaderUniforms.base_clipping.y,
@@ -1651,6 +1668,10 @@ void OpenGLRenderer::RenderVrEye(int width, int height)
 
 bool OpenGLRenderer::Render()
 {
+	// tcvr: split screen: another player's view is not shown here (vr/mp_ownview.h); the last
+	// picture of the local player's stays on show
+	if (!vr::ownViewKeep(*gl.rendContext))
+		return false;
 	if (vr::xr::enabled() && !gl.rendContext->isRTT && !config::EmulateFramebuffer)
 	{
 		// shown from the next Present on (gles_vr_present)

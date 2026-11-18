@@ -39,6 +39,10 @@ struct ReprojectParams
 	// Comfort zone in the headset (see comfortScale): metres per game unit, distance the
 	// pull-back starts at, closest distance (metres). All 0 when off.
 	glm::vec3 comfort { 0.f };
+	// tcvr: split screen, own view (vr/mp_ownview.h): the centre of the player's view in DC
+	// pixels (x, y; the screen's centre otherwise) and how much its 2D (HUD) is scaled up onto
+	// the whole 2D plane (z, w; 1 otherwise). The renderer turns the centre into its ndc.
+	glm::vec4 view { 320.f, 240.f, 1.f, 1.f };
 };
 
 // The game's own field of view is widened (its code patched, see vr_reproject.cpp): it
