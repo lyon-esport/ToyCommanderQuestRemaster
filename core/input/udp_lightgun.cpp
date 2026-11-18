@@ -14,6 +14,19 @@
 	D-pad (up, down, left, right), bit 7 its B button, bit 8: the shot hit the headset's 2D
 	plane (menus, text), where the game's own shot marker is in the right place.
 
+	tcvr test aid: scripted Dreamcast pads (tcvr/tools/netplay-test-tc.ps1, the netplay and
+	4-player tests on PC), one datagram per pad, replacing its whole state:
+
+		PAD <player 0-3> <buttons> <stick x> <stick y> <L> <R>
+
+	buttons: the Dreamcast bits of gamepad.h, set = pressed (B 2, A 4, Start 8, D-pad up 0x10,
+	down 0x20, left 0x40, right 0x80, Y 0x200, X 0x400); stick -128..127 (up and left
+	negative); L, R triggers 0..255. In netplay each copy sends its own pad as player 0.
+
+		SHOT <file>
+
+	saves the last game frame to that PNG file (works with the window hidden or the desktop locked).
+
 	Copyright 2026 mikermak. This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #include "udp_lightgun.h"
@@ -25,9 +38,12 @@
 #include "input/mouse.h"
 #include "log/Log.h"
 #include "rend/vr_reproject.h"
+#include "ui/gui.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <cstdio>
 #include <thread>
 
@@ -70,8 +86,28 @@ void handle(const char *msg)
 {
 	int player, x, y;
 	unsigned buttons;
+	int l, r;
+	if (strncmp(msg, "SHOT ", 5) == 0)
+	{
+		gui_saveScreenshotTo(msg + 5);
+		return;
+	}
 	if (sscanf(msg, "LG %d %d %d %u", &player, &x, &y, &buttons) == 4)
 		lightgunSet(player, x, y, buttons);
+	else if (sscanf(msg, "PAD %d %u %d %d %d %d", &player, &buttons, &x, &y, &l, &r) == 6
+			&& player >= 0 && player <= 3)
+	{
+		lastPacketMs[player] = nowMs();
+		const u32 mask = 0xffff;	// the pad's buttons (kcode is active low)
+		const u32 changed = (~kcode[player] ^ buttons) & mask;
+		kcode[player] = (kcode[player] & ~mask) | (~buttons & mask);
+		joyx[player] = (s16)(std::clamp(x, -128, 127) * 256);
+		joyy[player] = (s16)(std::clamp(y, -128, 127) * 256);
+		lt[player] = (u16)(std::clamp(l, 0, 255) * 257);
+		rt[player] = (u16)(std::clamp(r, 0, 255) * 257);
+		if (changed != 0)
+			INFO_LOG(INPUT, "Scripted pad P%d: buttons %x stick %d,%d L %d R %d", player + 1, buttons, x, y, l, r);
+	}
 }
 
 }
@@ -139,7 +175,7 @@ void listen(int port)
 		return;
 	}
 	NOTICE_LOG(INPUT, "UDP lightgun listening on 127.0.0.1:%d", port);
-	char buf[128];
+	char buf[512];
 	while (running)
 	{
 		int n = (int)recv(sock, buf, sizeof(buf) - 1, 0);
