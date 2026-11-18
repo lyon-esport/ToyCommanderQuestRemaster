@@ -54,6 +54,7 @@ void gui_cycleSaveStateSlot(int step);
 void gui_togglePause();
 std::string gui_getCurGameBoxartUrl();
 void gui_takeScreenshot();
+void gui_saveScreenshotTo(const std::string& path);	// tcvr test aid (UDP "SHOT")
 void gui_runOnUiThread(std::function<void()> function);
 
 enum class GuiState {
