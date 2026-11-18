@@ -12,6 +12,12 @@
 #ifdef TEST_AUTOMATION
 #include "input/gamepad_device.h"
 #endif
+#ifdef USE_OPENXR
+#include "hw/sh4/sh4_mem.h"
+#include "cfg/option.h"
+#include "emulator.h"
+#include "log/Log.h"
+#endif
 
 //SPG emulation; Scanline/Raster beam registers & interrupts
 
@@ -36,6 +42,49 @@ static std::array<u64, 4> cpu_cycles;
 static u32 cpu_time_idx;
 bool SH4FastEnough;
 u32 fskip;
+
+#ifdef USE_OPENXR
+// tcvr: Toy Commander at 60 pictures/s in missions (option vr.Game60).
+// The game paces its pictures with Kamui's "wait vsync count": a mission load and leaving the
+// pause menu set 2 vblanks per picture (30/s), menus and pause set 1 (60/s). Kamui keeps
+// vblanks - 1 at 0x8C10FC80 (the flip delay its scene end copies into each picture); nothing
+// else in the game writes it. The game's clock, physics, particles, fades and mission timer
+// follow real time, not pictures, so a mission runs at the same speed with 1 vblank per
+// picture, only smoother. Exception: the attract demos replay one recorded frame per picture,
+// so they keep 2 (demo mode at 0x8C0A72FC = 2).
+// Checked once per vblank: when the game has set 2 (value 1), it becomes 1 (value 0). Turning
+// the option off stops forcing; the game's own 2 comes back at the next mission or pause.
+static void tcvrGamePictureRate()
+{
+	constexpr u32 FlipDelay = 0x8C10FC80;	// Kamui context 0x8C10F52C + 0x754
+	constexpr u32 DemoMode = 0x8C0A72FC;	// 2: an attract demo plays
+	static bool forced;
+	static bool logged;
+
+	if (settings.content.gameId != TCVR_SUPPORTED_GAME_ID)
+		return;
+	const u32 delay = ReadMem32_nommu(FlipDelay);
+	const bool demo = ReadMem32_nommu(DemoMode) == 2;
+	if (delay == 1)
+	{
+		forced = false;
+		if (config::VrGame60 && !demo)
+		{
+			WriteMem32_nommu(FlipDelay, 0);
+			forced = true;
+			if (!logged)
+				NOTICE_LOG(PVR, "tcvr: mission at 60 pictures/s (the game asked for 30)");
+			logged = true;
+		}
+	}
+	else if (delay == 0 && forced && demo)
+	{
+		// a demo started after we forced the mission rate: give it back its 30
+		WriteMem32_nommu(FlipDelay, 1);
+		forced = false;
+	}
+}
+#endif
 
 static u32 lightgun_line = 0xffff;
 static u32 lightgun_hpos;
@@ -188,6 +237,7 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 #endif
 
 #ifdef USE_OPENXR
+			tcvrGamePictureRate();
 			// tcvr: the video mode and rates, every 10 s, in release builds too (logcat, tag
 			// flycast): is the game at 60 Hz (NTSC/VGA) or 50 Hz (PAL), and how many frames it draws
 			{

@@ -60,10 +60,7 @@ Items 1 and 2 can be switched off to compare or to rule them out of a bug: `vr.U
 
 ## Still to do (plan items)
 
-- Game pictures: missions draw 30 pictures/s because the game asks for 2 vblanks per picture
-  (menus ask for 1 and draw 60). The game's clock and physics follow real time, so drawing 60 in
-  missions looks feasible with a small patch; to test on the decompile branch (speed against a
-  stopwatch, physics feel, attract demos kept at 30).
+- Game pictures: done 2026-11-18, see "Game pictures in missions: 60/s" below (headset test pending).
 - Measured 2026-11-17 (worn): at 100% the GPU is 65–84% busy in 3D levels with 0–6 stale
   frames/s at 120 Hz; at 130% it is saturated in the heaviest views (see Defaults.md).
 
@@ -72,3 +69,21 @@ Items 1 and 2 can be switched off to compare or to rule them out of a bug: `vr.U
   measure 120 Hz without the shell sharing the GPU; then choose the shipped defaults (e.g. 90 Hz,
   AF 16x, sharper High, MSAA 2x only with foveation High) and a 30-minute thermal run.
 - Why MSAA 2x costs 2x here (a GPU capture with AGI/RenderDoc: look for a mid-pass resolve).
+
+## Game pictures in missions: 60/s (option `vr.Game60`, default on)
+
+Stock Toy Commander draws 60 pictures/s in menus and 30 in missions: a mission load and leaving
+the pause menu call Kamui's "wait vsync count" with 2, menus and pause with 1. Kamui keeps
+vblanks - 1 at 0x8C10FC80 and copies it into every picture's flip. The game's clock, physics
+(8 ms substeps), particles, fades and mission timer follow real time, so a mission keeps its
+speed with 1 vblank per picture and only gets smoother (less judder in the reprojected view).
+
+`core/hw/pvr/spg.cpp` checks that value once per vblank and turns 1 into 0 (no change to the
+game's code). The attract demos replay one recorded frame per picture, so they keep 30 (demo mode
+0x8C0A72FC = 2). VR menu > Performance > "Game pictures in missions": "30/s (original)" or "60/s";
+turning it off takes effect at the next mission or pause. Logcat line when it applies:
+`tcvr: mission at 60 pictures/s`; the existing `tcvr: video ... game frames/s` line shows the rate.
+
+Risks to watch: the emulated SH-4 must finish a mission frame in 16.7 ms (if not, the rate mixes
+60 and 30 rather than slowing down; `Sh4Clock` overclock is the lever), physics at smaller steps,
+and twice as many pictures to upload on the render thread.

@@ -495,6 +495,7 @@ extern Option<float> VrTexLodBias;
 extern Option<int> VrFoveation;
 extern Option<bool> VrUploadOnce;
 extern Option<bool> VrDiscardDepth;
+extern Option<bool> VrGame60;
 extern Option<bool> VrShowFps;
 extern Option<float> VrComfortVignette;
 extern Option<bool> CustomTextures;
