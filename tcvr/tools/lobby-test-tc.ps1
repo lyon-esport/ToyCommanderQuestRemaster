@@ -242,12 +242,22 @@ try {
 		$log = Log-Text $peer
 		$done = [regex]::Match($log, 'MP SETUP done[^\r\n]*')
 		Check $done.Success ("{0}: automatic setup: {1}" -f $peer.Name, $(if ($done.Success) { $done.Value } else { ([regex]::Match($log, 'MP SETUP failed[^\r\n]*')).Value + ' (no "MP SETUP done")' }))
-		$page = Peek $peer 0x8C0A5A6C 4
+		# the menu word, read up to 10 times: a guest waiting for inputs is stopped in the middle of a
+		# frame, where the game has the word in a passing state (0x2 seen); any read with the page is enough
+		$reads = @(); $page = $null
+		for ($k = 0; $k -lt 10; $k++) {
+			$pg = Peek $peer 0x8C0A5A6C 4
+			if ($pg) {
+				$v = [BitConverter]::ToUInt32($pg, 0); $reads += '{0:X8}' -f $v; $page = $pg
+				if (($v -band 0x4000) -ne 0 -and ($v -band 0x10000) -eq 0) { break }
+			} else { $reads += 'none' }
+			Start-Sleep -Milliseconds 100
+		}
 		$slots = Peek $peer 0x8C0A6048 0xA0
 		$opt = Peek $peer 0x8C0A5AC8 12		# active environment, mode, room
 		if ($null -eq $page -or $null -eq $slots -or $null -eq $opt) { Check $false "$($peer.Name): PEEK answered"; continue }
 		$bits = [BitConverter]::ToUInt32($page, 0)
-		Check (($bits -band 0x4000) -ne 0 -and ($bits -band 0x10000) -eq 0) ("{0}: on the team and vehicle page (menu bits {1:X8})" -f $peer.Name, $bits)
+		Check (($bits -band 0x4000) -ne 0 -and ($bits -band 0x10000) -eq 0) ("{0}: on the team and vehicle page (menu bits {1})" -f $peer.Name, ($reads -join ' '))
 		$states = @(for ($i = 0; $i -lt 4; $i++) { [BitConverter]::ToUInt32($slots, $i * 0x28 + 8) })
 		$joined = @($states | Select-Object -First $Players | Where-Object { $_ -ge 2 }).Count
 		Check ($joined -eq $Players) ("{0}: {1} of {2} players on the page (slot states {3})" -f $peer.Name, $joined, $Players, ($states -join ' '))
