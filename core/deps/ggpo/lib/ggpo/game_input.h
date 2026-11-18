@@ -14,8 +14,10 @@
 // GAMEINPUT_MAX_BYTES * GAMEINPUT_MAX_PLAYERS * 8 must be less than
 // 2^BITVECTOR_NIBBLE_SIZE (see bitvector.h)
 
-#define GAMEINPUT_MAX_BYTES      9
-#define GAMEINPUT_MAX_PLAYERS    2
+// (tcvr: 4 players, and up to 12 bytes each: a Dreamcast pad with both triggers and room for
+// the head's direction)
+#define GAMEINPUT_MAX_BYTES      12
+#define GAMEINPUT_MAX_PLAYERS    4
 
 struct GameInput {
    enum Constants {

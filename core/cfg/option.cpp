@@ -244,6 +244,10 @@ Option<bool> EmulateBBA("EmulateBBA", false, "network");
 Option<bool> EnableUPnP("EnableUPnP", true, "network");
 Option<bool> GGPOEnable("GGPO", false, "network");
 Option<int> GGPODelay("GGPODelay", 0, "network");
+// tcvr: 2 to 4 players: one IPv4 address:port per player, in player order, comma-separated
+// (empty: the classic two players, ActAsServer + server), and which one this copy is (0 = P1)
+OptionString GGPOPeers("GGPOPeers", "", "network");
+Option<int> GGPOPlayer("GGPOPlayer", 0, "network");
 // hotd2-vr test aid: a Quest and a PC may connect although they round differently (the
 // games drift apart: only to measure netplay's cost on the headset). Both sides need it.
 Option<bool> NetplayTestAnyCpu("hotd2vr.TestAnyCpu", false, "network");

@@ -1727,17 +1727,20 @@ static const std::string& debugDir();
 // (-1..1, up positive), buttons joined by + (A B X Y START UP DOWN LEFT RIGHT LT RT, or -),
 // held that long. Example: echo "0 0 START 150" > files/pad.request. Taken when read
 // (deleted), checked ten times a second; a new request replaces the one being held.
+// A line may start with P1..P4 for another player's pad (multiplayer tests: "P2 0 0 START 150");
+// one file may hold a line per player. Players 2-4 go straight to their Dreamcast pad.
 struct InjectedPad
 {
 	glm::vec2 stick { 0.f };
 	u32 buttons = 0;
 	bool lt = false, rt = false;
 	std::chrono::steady_clock::time_point until;
+	bool applied = false;	// (players 2-4: written to their pad, released once when done)
 };
 
 bool injectedPad(InjectedPad& out)
 {
-	static InjectedPad held;
+	static InjectedPad held[4];
 	static std::chrono::steady_clock::time_point nextCheck;
 	const auto now = std::chrono::steady_clock::now();
 	if (now >= nextCheck)
@@ -1746,14 +1749,29 @@ bool injectedPad(InjectedPad& out)
 		const std::string path = debugDir() + "/pad.request";
 		if (FILE *f = fopen(path.c_str(), "r"))
 		{
-			float x = 0.f, y = 0.f;
-			char names[128] {};
-			int ms = 0;
-			const int n = fscanf(f, "%f %f %127s %d", &x, &y, names, &ms);
-			fclose(f);
-			nowide::remove(path.c_str());
-			if (n == 4 && ms > 0)
+			char line[256];
+			while (fgets(line, sizeof(line), f) != nullptr)
 			{
+				const char *p = line;
+				while (*p == ' ' || *p == '\t')
+					p++;
+				if (*p == '\0' || *p == '\n' || *p == '\r')
+					continue;
+				int player = 0;
+				if ((p[0] == 'P' || p[0] == 'p') && p[1] >= '1' && p[1] <= '4')
+				{
+					player = p[1] - '1';
+					p += 2;
+				}
+				float x = 0.f, y = 0.f;
+				char names[128] {};
+				int ms = 0;
+				const int n = sscanf(p, "%f %f %127s %d", &x, &y, names, &ms);
+				if (n != 4 || ms <= 0)
+				{
+					WARN_LOG(INPUT, "XR: pad.request not understood (want: [P1-P4] x y buttons ms)");
+					continue;
+				}
 				InjectedPad pad;
 				pad.stick = glm::clamp(glm::vec2(x, y), glm::vec2(-1.f), glm::vec2(1.f));
 				static const struct { const char *name; u32 bit; } bits[] {
@@ -1777,16 +1795,32 @@ bool injectedPad(InjectedPad& out)
 					start = end + 1;
 				}
 				pad.until = now + std::chrono::milliseconds(ms);
-				held = pad;
-				NOTICE_LOG(INPUT, "XR: scripted pad input: stick %.2f %.2f, buttons %s, %d ms", x, y, names, ms);
+				held[player] = pad;
+				NOTICE_LOG(INPUT, "XR: scripted pad input P%d: stick %.2f %.2f, buttons %s, %d ms", player + 1, x, y, names, ms);
 			}
-			else
-				WARN_LOG(INPUT, "XR: pad.request not understood (want: x y buttons ms)");
+			fclose(f);
+			nowide::remove(path.c_str());
 		}
 	}
-	if (now >= held.until)
+	// players 2-4: their own Dreamcast pad (kcode is active low; up is negative on the Dreamcast)
+	for (int player = 1; player < 4; player++)
+	{
+		InjectedPad& pad = held[player];
+		const bool active = now < pad.until;
+		if (!active && !pad.applied)
+			continue;
+		const u32 mask = 0xffff;
+		const u32 buttons = active ? pad.buttons : 0;
+		kcode[player] = (kcode[player] & ~mask) | (~buttons & mask);
+		joyx[player] = active ? (s16)(pad.stick.x * 32767.f) : 0;
+		joyy[player] = active ? (s16)(-pad.stick.y * 32767.f) : 0;
+		lt[player] = active && pad.lt ? 0xffff : 0;
+		rt[player] = active && pad.rt ? 0xffff : 0;
+		pad.applied = active;
+	}
+	if (now >= held[0].until)
 		return false;
-	out = held;
+	out = held[0];
 	return true;
 }
 

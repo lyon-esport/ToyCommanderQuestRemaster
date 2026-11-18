@@ -588,6 +588,8 @@ extern Option<bool> EmulateBBA;
 extern Option<bool> EnableUPnP;
 extern Option<bool> GGPOEnable;
 extern Option<int> GGPODelay;
+extern OptionString GGPOPeers;
+extern Option<int> GGPOPlayer;
 extern Option<bool> NetplayTestAnyCpu;
 extern Option<bool> NetworkStats;
 extern Option<int> GGPOAnalogAxes;

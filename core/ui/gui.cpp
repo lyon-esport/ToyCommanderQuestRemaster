@@ -1669,6 +1669,27 @@ void gui_runOnUiThread(std::function<void()> function) {
 	uiThreadRunner.runOnThread(function);
 }
 
+// tcvr test aid: the last game frame to a PNG file (the UDP "SHOT" message), so that scripted PC
+// tests get pictures with the window hidden or the desktop locked.
+void gui_saveScreenshotTo(const std::string& path)
+{
+	if (!game_started)
+		return;
+	gui_runOnUiThread([path]() {
+		std::vector<u8> data;
+		getScreenshot(data);
+		if (data.empty())
+			WARN_LOG(COMMON, "SHOT: no frame available");
+		else if (FILE *f = nowide::fopen(path.c_str(), "wb"))
+		{
+			fwrite(data.data(), 1, data.size(), f);
+			fclose(f);
+		}
+		else
+			WARN_LOG(COMMON, "SHOT: cannot write %s", path.c_str());
+	});
+}
+
 void gui_takeScreenshot()
 {
 	if (!game_started)

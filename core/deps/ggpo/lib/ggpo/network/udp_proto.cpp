@@ -140,6 +140,12 @@ UdpProtocol::SendPendingOutput()
       ASSERT(last.frame == -1 || last.frame + 1 == (int)msg->u.input.start_frame);
       for (j = 0; j < _pending_output.size(); j++) {
          GameInput &current = _pending_output.item(j);
+         // (tcvr: a frame takes at most 1 + (2 + nibble) bits per input bit. When the frames
+         // waiting for an ack don't all fit (a stall, packet loss), the rest goes in the next
+         // packet rather than past the end of the buffer. The first frame always fits.)
+         if (j > 0 && offset + current.size * 8 * (2 + BITVECTOR_NIBBLE_SIZE) + 1 >= MAX_COMPRESSED_BITS) {
+            break;
+         }
          if (memcmp(current.bits, last.bits, current.size) != 0) {
             ASSERT((GAMEINPUT_MAX_BYTES * GAMEINPUT_MAX_PLAYERS * 8) < (1 << BITVECTOR_NIBBLE_SIZE));
             for (i = 0; i < current.size * 8; i++) {
