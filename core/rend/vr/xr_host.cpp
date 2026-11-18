@@ -883,10 +883,15 @@ glm::quat yawOnly(const glm::quat& q)
 // must not move: checks the camera turn and the view's turn back match). "target" picks which
 // "set camera" calls the head camera turns (xr_headcam.cpp: 0 the drawing cameras of a gameplay
 // frame, the default; 3 every call). "off" ends it. Taken when read, checked five times a second.
+//
+// "sweep <amplitude degrees> <period seconds> <view|cam>" swings the made-up yaw back and forth
+// (amplitude * sin), every headset frame: a head turning at up to 2 pi amplitude / period per s.
 struct HeadSim
 {
 	float yaw = 0.f, pitch = 0.f;
 	bool view = false;
+	float sweepAmp = 0.f, sweepPeriod = 0.f;
+	std::chrono::steady_clock::time_point sweepStart;
 };
 HeadSim headSim;
 std::atomic<float> simCamYaw, simCamPitch;
@@ -901,6 +906,13 @@ void readHeadRequest()
 {
 	static std::chrono::steady_clock::time_point nextCheck;
 	const auto now = std::chrono::steady_clock::now();
+	if (headSim.sweepPeriod > 0.f)
+	{
+		const float t = std::chrono::duration<float>(now - headSim.sweepStart).count();
+		headSim.yaw = headSim.sweepAmp * std::sin(6.2831853f * t / headSim.sweepPeriod);
+		if (!headSim.view)
+			simCamYaw = headSim.yaw;
+	}
 	if (now < nextCheck)
 		return;
 	nextCheck = now + std::chrono::milliseconds(200);
@@ -917,6 +929,21 @@ void readHeadRequest()
 	char mode[16] {};
 	int target = 0;
 	float ySense = 1.f, pSense = 1.f;
+	float amp = 0.f, period = 0.f;
+	if (sscanf(line, "sweep %f %f %15s", &amp, &period, mode) == 3 && period > 0.f
+			&& (strcmp(mode, "view") == 0 || strcmp(mode, "cam") == 0))
+	{
+		const float rad = 3.14159265f / 180.f;
+		headSim = HeadSim();
+		headSim.view = strcmp(mode, "view") == 0;
+		headSim.sweepAmp = amp * rad;
+		headSim.sweepPeriod = period;
+		headSim.sweepStart = now;
+		simCamYaw = simCamPitch = 0.f;
+		simCamTarget = 0;
+		NOTICE_LOG(RENDERER, "XR: made-up head sweep: %.1f degrees each way every %.2f s, %s", amp, period, mode);
+		return;
+	}
 	const int n = sscanf(line, "%f %f %15s %d %f %f", &yaw, &pitch, mode, &target, &ySense, &pSense);
 	if (n >= 6)
 	{
@@ -982,15 +1009,46 @@ glm::mat4 gameToWorld(bool turned = true)
 	return glm::scale(m, glm::vec3(s, -s, s));
 }
 
-// tcvr: the head's yaw and pitch relative to the origin (see headYawPitch), at the last frame
+// tcvr: the head's yaw and pitch relative to the origin (see headYawPitch), at the last frame,
+// and how fast they turn (radians per second, smoothed)
 std::atomic<float> headYawNow, headPitchNow;
+std::atomic<float> headYawRate, headPitchRate;
+// headset frames so far (the head camera's lag is measured in them) and their length (s)
+std::atomic<u32> headsetFrames { 1 };
+std::atomic<float> headsetFrameTime { 1.f / 72.f };
+// The head camera's lag: headset frames from reading the head for a game picture to that picture
+// on show, and between two new pictures (smoothed). How far ahead the camera aims comes from them.
+std::atomic<float> camLagFrames { 3.f }, camPictureFrames { 4.f };
 
 void noteHeadDirection()
 {
+	using clock = std::chrono::steady_clock;
+	static clock::time_point last;
+	static float lastYaw, lastPitch;
+	const clock::time_point now = clock::now();
 	const glm::quat q = relativeRotation(views[0].pose.orientation);
 	const glm::vec3 forward = q * glm::vec3(0.f, 0.f, -1.f);
-	headYawNow = std::atan2(-forward.x, -forward.z);
-	headPitchNow = std::asin(std::clamp(forward.y, -1.f, 1.f));
+	const float yaw = std::atan2(-forward.x, -forward.z);
+	const float pitch = std::asin(std::clamp(forward.y, -1.f, 1.f));
+	const float dt = std::chrono::duration<float>(now - last).count();
+	if (dt > 0.002f && dt < 0.1f)
+	{
+		float dy = yaw - lastYaw;
+		if (dy > 3.14159265f) dy -= 6.2831853f;
+		if (dy < -3.14159265f) dy += 6.2831853f;
+		// (a little smoothing: tracking noise, uneven frame times)
+		headYawRate = headYawRate * 0.5f + dy / dt * 0.5f;
+		headPitchRate = headPitchRate * 0.5f + (pitch - lastPitch) / dt * 0.5f;
+		headsetFrameTime = headsetFrameTime * 0.95f + dt * 0.05f;
+	}
+	else
+		headYawRate = headPitchRate = 0.f;
+	last = now;
+	lastYaw = yaw;
+	lastPitch = pitch;
+	headYawNow = yaw;
+	headPitchNow = pitch;
+	headsetFrames++;
 }
 
 void updateOrigin(bool tracked)
@@ -2514,9 +2572,62 @@ glm::mat4 gameTurn(glm::vec2 turn)
 	return glm::inverse(scale) * r * scale;
 }
 
+float headCameraLead()
+{
+	const int ms = config::VrHeadCameraLead;
+	if (ms >= 0)
+		return std::min(ms, 200) / 1000.f;
+	// To the middle of the time the picture is on show: from the head read to its first
+	// showing, plus half the time until the next picture replaces it.
+	const float frames = camLagFrames.load() + camPictureFrames.load() * 0.5f;
+	return std::clamp(frames * headsetFrameTime.load(), 0.f, 0.15f);
+}
+
 glm::vec2 headYawPitch()
 {
-	return glm::vec2(headYawNow.load() + simCamYaw.load(), headPitchNow.load() + simCamPitch.load());
+	// Aimed ahead at where the head will be when the picture is shown: the picture turns back
+	// by exactly the turn it got, so a wrong guess only moves the edges of the drawn view
+	// (never the world), and the guess keeps those edges out of sight while turning.
+	const float lead = headCameraLead();
+	const float maxAhead = 0.6f;	// (radians; a sudden flick isn't followed further)
+	const float yawAhead = std::clamp(headYawRate.load() * lead, -maxAhead, maxAhead);
+	const float pitchAhead = std::clamp(headPitchRate.load() * lead, -maxAhead, maxAhead);
+	return glm::vec2(headYawNow.load() + yawAhead + simCamYaw.load(),
+			headPitchNow.load() + pitchAhead + simCamPitch.load());
+}
+
+u32 headFrame()
+{
+	return headsetFrames.load();
+}
+
+void noteHeadCameraShown(u32 sample)
+{
+	using clock = std::chrono::steady_clock;
+	static u32 lastShown;
+	static float lagSum, lagMax;
+	static int count;
+	static clock::time_point since = clock::now();
+	const u32 now = headsetFrames.load();
+	if (lastShown != 0 && now > lastShown && now - lastShown < 30)
+		camPictureFrames = camPictureFrames * 0.9f + (float)(now - lastShown) * 0.1f;
+	lastShown = now;
+	if (sample == 0 || now < sample || now - sample > 60)
+		return;
+	const float lag = (float)(now - sample);
+	camLagFrames = camLagFrames * 0.9f + lag * 0.1f;
+	lagSum += lag;
+	lagMax = std::max(lagMax, lag);
+	count++;
+	if (clock::now() - since >= std::chrono::seconds(10))
+	{
+		INFO_LOG(RENDERER, "VR head camera: lag %.1f headset frames (max %.0f), new picture every %.1f, frame %.1f ms, "
+				"aiming %.0f ms ahead, head turning %.0f deg/s", lagSum / count, lagMax, camPictureFrames.load(),
+				headsetFrameTime.load() * 1000.f, headCameraLead() * 1000.f, headYawRate.load() * 57.29578f);
+		lagSum = lagMax = 0.f;
+		count = 0;
+		since = clock::now();
+	}
 }
 
 int headCameraTarget()

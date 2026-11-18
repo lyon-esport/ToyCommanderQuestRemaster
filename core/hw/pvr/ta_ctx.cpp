@@ -23,17 +23,20 @@ static TA_context *tactx_Find(u32 addr, bool allocnew = false);
 // takes it: whether the game sends its polygons while it draws or after the frame (DMA), the
 // picture gets the turn its own frame's cameras had.
 static float frameCamYaw, frameCamPitch;
+static u32 frameCamSample;
 
-void tcvrSetFrameCamTurn(float yaw, float pitch)
+void tcvrSetFrameCamTurn(float yaw, float pitch, u32 sample)
 {
 	frameCamYaw = yaw;
 	frameCamPitch = pitch;
+	frameCamSample = sample;
 }
 
 void tcvrTakeFrameCamTurn(rend_context& rend)
 {
 	rend.tcvrCamYaw = rend.isRTT ? 0.f : frameCamYaw;
 	rend.tcvrCamPitch = rend.isRTT ? 0.f : frameCamPitch;
+	rend.tcvrCamSample = rend.isRTT ? 0 : frameCamSample;
 }
 
 void SetCurrentTARC(u32 addr)

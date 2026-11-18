@@ -1511,6 +1511,8 @@ void gles_vr_present()
 		std::swap(vrFrame, vrPending);
 		gles_vr_frame_changed();
 		vrFrameValid = true;
+		if (vrFrame.tcvrCamSample != 0)
+			vr::xr::noteHeadCameraShown(vrFrame.tcvrCamSample);
 		vrShowFramebuffer = false;
 		break;
 	case VrPending::Framebuffer:

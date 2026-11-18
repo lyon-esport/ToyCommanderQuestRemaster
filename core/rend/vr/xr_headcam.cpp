@@ -104,6 +104,7 @@ bool installed;
 u32 vblanks, simVblank = ~0u;
 glm::vec2 frameHead;		// the head for every call of a game frame, taken at its first
 glm::vec2 frameTurn;		// the turn the cameras of the frame being drawn got (0: none turned)
+u32 frameSample;		// the headset frame frameHead was read at
 
 float readFloat(u32 addr)
 {
@@ -173,6 +174,7 @@ void setCameraTrap(Sh4Context *ctx)
 		// a new game frame: one head direction for all its cameras
 		simVblank = vblanks;
 		frameHead = headYawPitch();
+		frameSample = headFrame();
 		frameTurn = glm::vec2(0.f);
 	}
 	const int mode = config::VrHeadCamera;
@@ -219,7 +221,7 @@ void frameEndTrap(Sh4Context *ctx, u32 pc)
 	ctx->pc = pc + 2;
 	// The scene is complete: its picture (rendered from kmRender on) gets this frame's turn.
 	const glm::vec2 turn = gameplayFrame() ? frameTurn : glm::vec2(0.f);
-	tcvrSetFrameCamTurn(turn.x, turn.y);
+	tcvrSetFrameCamTurn(turn.x, turn.y, gameplayFrame() && turn != glm::vec2(0.f) ? frameSample : 0);
 }
 
 bool trap(Sh4Context *ctx, u32 pc)

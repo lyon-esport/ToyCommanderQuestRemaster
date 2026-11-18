@@ -40,6 +40,10 @@ void term();
 // yaw (radians, positive to the left) and pitch (radians, positive up), at the last headset
 // frame. Any thread. For the head-driven game camera (backlog P0-8).
 glm::vec2 headYawPitch();
+// tcvr: the head camera's lag: the headset frame now (when the head is read for a game picture),
+// and a picture read at that frame going on show (gles_vr_present).
+u32 headFrame();
+void noteHeadCameraShown(u32 sample);
 // tcvr: test aid (files/head.request): which "set camera" calls the head camera turns
 // (0 the drawing cameras, the default; 3 every call; see xr_headcam.cpp).
 int headCameraTarget();
@@ -52,6 +56,8 @@ inline bool frame() { return false; }
 inline const Eye *currentEye() { return nullptr; }
 inline void term() {}
 inline glm::vec2 headYawPitch() { return glm::vec2(0.f); }
+inline u32 headFrame() { return 0; }
+inline void noteHeadCameraShown(u32) {}
 inline int headCameraTarget() { return 0; }
 inline glm::mat4 gameTurn(glm::vec2) { return glm::mat4(1.f); }
 #endif

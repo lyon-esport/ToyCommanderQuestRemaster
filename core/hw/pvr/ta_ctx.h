@@ -281,6 +281,8 @@ struct rend_context
 	// tcvr: how far the game camera was turned (by the head, see xr_headcam.cpp) for this
 	// picture, radians: the VR view turns the picture back by as much. Set at render start.
 	float tcvrCamYaw = 0.f, tcvrCamPitch = 0.f;
+	// (and the headset frame its head direction was read at, 0: none; to measure the lag)
+	u32 tcvrCamSample = 0;
 
 	void Clear()
 	{
@@ -398,7 +400,7 @@ TA_context *tactx_Alloc();
 void SetCurrentTARC(u32 addr);
 // tcvr: the head-driven camera: the turn the game's cameras got for the frame the game just
 // ended (emulator thread, from the hook), and the render start that takes it for its picture.
-void tcvrSetFrameCamTurn(float yaw, float pitch);
+void tcvrSetFrameCamTurn(float yaw, float pitch, u32 sample = 0);
 void tcvrTakeFrameCamTurn(rend_context& rend);
 bool QueueRender(TA_context* ctx);
 TA_context* DequeueRender();
