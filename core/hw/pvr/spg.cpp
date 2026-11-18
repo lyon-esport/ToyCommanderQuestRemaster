@@ -73,7 +73,7 @@ static void tcvrGamePictureRate()
 			WriteMem32_nommu(FlipDelay, 0);
 			forced = true;
 			if (!logged)
-				NOTICE_LOG(PVR, "tcvr: mission at 60 pictures/s (the game asked for 30)");
+				NOTICE_LOG(PVR, "tcvr: 60 game pictures/s (the game asked for 30)");
 			logged = true;
 		}
 	}

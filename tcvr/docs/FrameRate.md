@@ -84,6 +84,19 @@ game's code). The attract demos replay one recorded frame per picture, so they k
 turning it off takes effect at the next mission or pause. Logcat line when it applies:
 `tcvr: mission at 60 pictures/s`; the existing `tcvr: video ... game frames/s` line shows the rate.
 
-Risks to watch: the emulated SH-4 must finish a mission frame in 16.7 ms (if not, the rate mixes
-60 and 30 rather than slowing down; `Sh4Clock` overclock is the lever), physics at smaller steps,
-and twice as many pictures to upload on the render thread.
+The emulated SH-4 must finish a mission picture in 16.7 ms. At the stock 200 MHz it doesn't, and
+the rate settles at an uneven 37.5/s (a 60/30 mix). With the option on, `core/emulator.cpp`
+(`tcvrApplyGameRate`) raises `Sh4Clock` to 360 MHz for this game (not saved; the player's value
+comes back when the option is turned off; never online). Headset test 2026-11-18, Kitchen
+Training, 130% + MSAA 2x, head camera on:
+
+| Setting | Game pictures/s | Emulator thread (one core) | Head camera lag | Mission clock / wall |
+|---|---|---|---|---|
+| option off, 200 MHz | 30.0 | 45% | 14.4 headset frames | - |
+| on, 200 MHz | 37.5 (60/30 mix) | 49% | 5.7 | 60.06 / 60 s |
+| on, 250 MHz | 47.4 | 56% | 5.0 | - |
+| on, 300 MHz | 56-58 | 63% | 4.5 | 59.73 / 59.7 s |
+| on, 360 MHz | 59.95, also flying | 61% | 7.4 | 59.60 / 59.58 s |
+
+Headset frame rate is unchanged by the option (it depends on resolution and MSAA). Still to
+watch: physics feel at smaller steps, audio and cut-scenes at 360 MHz, the other rooms.

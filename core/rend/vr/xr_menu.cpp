@@ -99,7 +99,7 @@ const std::vector<Choice>& choices()
 			[] { return (float)config::VrXrRefreshRate; }, [](float v) { saveOption(config::VrXrRefreshRate, v); } },
 		// tcvr: the game's own picture rate in missions (spg.cpp): 60/s instead of the stock 30/s
 		{ Section::Performance, "Game pictures in missions", { 0.f, 1.f }, { "30/s (original)", "60/s" },
-			[] { return config::VrGame60 ? 1.f : 0.f; }, [](float v) { config::VrGame60.set(v > 0.5f); config::VrGame60.save(); } },
+			[] { return config::VrGame60 ? 1.f : 0.f; }, [](float v) { config::VrGame60.set(v > 0.5f); config::VrGame60.save(); tcvrApplyGameRate(true); } },
 		// the frame-rate counter at the bottom right of the view
 		{ Section::Performance, "Show frame rate", { 0.f, 1.f }, { "Off", "On" },
 			[] { return config::VrShowFps ? 1.f : 0.f; }, [](float v) { config::VrShowFps.set(v > 0.5f); config::VrShowFps.save(); } },

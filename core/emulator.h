@@ -37,6 +37,8 @@ void loadGameSpecificSettings();
 constexpr const char *TCVR_SUPPORTED_GAME_ID = "MK-5102050";
 // Told when another disc is refused (the platform shows the player why), before the load fails.
 extern void (*vrUnsupportedGameHook)(const std::string& gameId);
+// tcvr: raise or restore the emulated SH-4 clock for vr.Game60 (running: the game already runs)
+void tcvrApplyGameRate(bool running);
 #endif
 void SaveSettings();
 
