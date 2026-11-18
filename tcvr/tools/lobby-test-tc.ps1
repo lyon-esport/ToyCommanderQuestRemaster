@@ -19,6 +19,11 @@
   .\tcvr\tools\lobby-test-tc.ps1                       2 copies
   .\tcvr\tools\lobby-test-tc.ps1 -Players 4            4 copies
   .\tcvr\tools\lobby-test-tc.ps1 -NetDelay 80 -Loss 2  the match with simulated delay and loss
+  .\tcvr\tools\lobby-test-tc.ps1 -InputDelay 0         the host starts with GGPO input delay 0 (MP START 0; default 2,
+                                                       what the VR menu uses)
+
+  Windows Firewall asks once for each new flycast.exe path (one per copy folder); a prompt left unanswered
+  makes a Block rule, and the copies then never connect. -WorkDir can point to folders already allowed.
 
   Paths, build and output as netplay-test-tc.ps1 (needs build-win\flycast.exe, or -BuildDir /
   $env:TCVR_BUILD_WIN; the game image from -GamePath or $env:TCVR_PRIVATE_ROOT\Source). Pad ports
@@ -31,6 +36,7 @@ param(
 	[int]$Seconds = 70,			# the match, from its first frame
 	[int]$NetDelay = 0,			# GGPO's simulated network delay (ms each way)
 	[int]$Loss = 0,				# % packets lost
+	[int]$InputDelay = 2,			# GGPO input delay (frames) the host starts the match with (MP START <delay>)
 	[string]$BuildDir = '',
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
@@ -104,7 +110,7 @@ function Stop-Copy($peer) {
 
 # "MP <command>" to a copy's pad port, the answer text ("" when none within the time)
 $cmdUdp = New-Object System.Net.Sockets.UdpClient 0
-function Mp($peer, [string]$cmd, [int]$timeoutMs = 8000) {
+function Send-Mp($peer, [string]$cmd, [int]$timeoutMs = 8000) {
 	$cmdUdp.Client.ReceiveTimeout = $timeoutMs
 	$m = [Text.Encoding]::ASCII.GetBytes("MP $cmd")
 	[void]$cmdUdp.Send($m, $m.Length, '127.0.0.1', $peer.Port)
@@ -115,19 +121,27 @@ function Wait-Mp($peer, [string]$cmd, [scriptblock]$ok, [int]$seconds) {
 	$end = (Get-Date).AddSeconds($seconds)
 	$r = ''
 	while ((Get-Date) -lt $end) {
-		$r = Mp $peer $cmd 1500
+		$r = Send-Mp $peer $cmd 1500
 		if ($r -and (& $ok $r)) { return $r }
 		Start-Sleep -Milliseconds 300
 	}
 	return $r
 }
+# a file a running copy still has open for writing (its log, sync.txt): File.ReadAllText cannot open those
+function Read-Shared([string]$path) {
+	try {
+		$s = New-Object IO.FileStream($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+		try { return (New-Object IO.StreamReader($s)).ReadToEnd() } finally { $s.Dispose() }
+	} catch { return '' }
+}
 function Cfg-Text($peer) {
-	$f = Get-ChildItem (Join-Path $peer.Dir 'data') -Filter emu.cfg -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-	if ($f) { return [IO.File]::ReadAllText($f.FullName) } else { return '' }
+	# (on the PC emu.cfg is in the copy's own folder, beside flycast.exe)
+	$f = Get-ChildItem $peer.Dir -Filter emu.cfg -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+	if ($f) { return Read-Shared $f.FullName } else { return '' }
 }
 function Log-Text($peer) {
 	$f = Get-ChildItem $peer.Dir -Filter *.log -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
-	if ($f) { try { return [IO.File]::ReadAllText($f.FullName) } catch { return '' } } else { return '' }
+	if ($f) { return Read-Shared $f.FullName } else { return '' }
 }
 
 try {
@@ -142,12 +156,12 @@ try {
 	}
 
 	# ---- 2. host, find, join, ready
-	$r = Mp $peers[0] 'HOST P1 1 2 20'
+	$r = Send-Mp $peers[0] 'HOST P1 1 2 20'
 	Check ($r -like 'MPR lobby players=1 slot=0*') "p1 creates a game: $r"
 	$findTimes = @()
 	for ($i = 1; $i -lt $Players; $i++) {
 		$sw = [Diagnostics.Stopwatch]::StartNew()
-		$r = Mp $peers[$i] ("JOIN P{0}" -f ($i + 1)) 12000
+		$r = Send-Mp $peers[$i] ("JOIN P{0}" -f ($i + 1)) 12000
 		$sw.Stop()
 		Check ($r -like "MPR lobby*slot=$i *") ("{0} finds the game and joins it as slot {1}, in {2:0.0} s: {3}" -f $peers[$i].Name, $i, $sw.Elapsed.TotalSeconds, $r)
 		$findTimes += $sw.Elapsed.TotalSeconds
@@ -156,16 +170,16 @@ try {
 	$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like "MPR lobby players=$Players *" } 10
 	Check ($r -like "MPR lobby players=$Players *") "the host sees all $Players players: $r"
 	Check ($r -like '*mode=1 room=2 points=20*') 'the host settings (mode 1, room 2, 20 points) are in the lobby'
-	$r = Mp $peers[1] 'STATE'
+	$r = Send-Mp $peers[1] 'STATE'
 	Check ($r -like '*mode=1 room=2 points=20*') "a joiner sees the host's settings: $r"
-	$r = Mp $peers[0] 'START 2'
+	$r = Send-Mp $peers[0] "START $InputDelay"
 	Check ($r -like 'MPR error*') "Start is refused while the joiners are not ready: $r"
-	for ($i = 1; $i -lt $Players; $i++) { [void](Mp $peers[$i] 'READY 1') }
+	for ($i = 1; $i -lt $Players; $i++) { [void](Send-Mp $peers[$i] 'READY 1') }
 	$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like 'MPR lobby*ready=1111*' -or ($Players -eq 3 -and $x -like 'MPR lobby*ready=111-*') -or ($Players -eq 2 -and $x -like 'MPR lobby*ready=11--*') } 10
 	Check ($r -like '*ready=11*') "the ready marks reach the host: $r"
 
 	# ---- 3. start: options written, restart asked
-	$r = Mp $peers[0] 'START 2'
+	$r = Send-Mp $peers[0] "START $InputDelay"
 	Check ($r -like 'MPR started*index=0*') "the host starts the match: $r"
 	foreach ($peer in $peers) {
 		$r = Wait-Mp $peer 'STATE' { param($x) $x -like 'MPR started*' } 10
@@ -213,7 +227,9 @@ try {
 	$udp.Close()
 
 	# the screens: the last picture of each copy
-	$shotDir = Join-Path $WorkDir 'shots'
+	# (its own folder: -WorkDir may be shared with netplay-test-tc.ps1, whose pictures are in shots\)
+	$shotDir = Join-Path $WorkDir 'lobby-shots'
+	if (Test-Path $shotDir) { Remove-Item $shotDir -Recurse -Force }
 	New-Item -ItemType Directory -Force $shotDir | Out-Null
 	foreach ($peer in $peers) {
 		$m = [Text.Encoding]::ASCII.GetBytes(("SHOT {0}" -f (Join-Path $shotDir ("match_{0}.png" -f $peer.Name))))
@@ -227,7 +243,7 @@ try {
 		$hash = @{}
 		$file = Join-Path $peer.Dir 'sync.txt'
 		if (Test-Path $file) {
-			foreach ($line in [IO.File]::ReadLines($file)) {
+			foreach ($line in ((Read-Shared $file) -split "`r?`n")) {
 				$f = $line.Split(' ')
 				if ($f.Count -lt 5) { continue }
 				$hash[[int]$f[0]] = @($f[2], $f[4])		# main RAM, video+sound RAM
@@ -251,13 +267,13 @@ try {
 
 	# ---- 6. leave the match
 	foreach ($peer in $peers) {
-		$r = Mp $peer 'LEAVEMATCH' 5000
+		$r = Send-Mp $peer 'LEAVEMATCH' 5000
 		Check ($r -like 'MPR left*') "$($peer.Name) leaves the match"
 	}
 	Start-Sleep -Seconds 1
 	foreach ($peer in $peers) {
 		$cfg = Cfg-Text $peer
-		Check ($cfg -notmatch 'GGPOPeers\s*=\s*\S') "$($peer.Name): netplay options cleared in emu.cfg"
+		Check ($cfg -notmatch 'GGPOPeers[ \t]*=[ \t]*\S') "$($peer.Name): netplay options cleared in emu.cfg"
 		Check ((Log-Text $peer) -match 'MP RESTART') "$($peer.Name): asked for a restart"
 	}
 	foreach ($peer in $peers) { Stop-Copy $peer }
@@ -266,9 +282,9 @@ try {
 	foreach ($peer in $peers) {
 		$r = Wait-Mp $peer 'STATE' { param($x) $x -like 'MPR idle*' } 120
 		Check ($r -like 'MPR idle*match=0*') "$($peer.Name): the game is single player again: $r"
-		$r = Mp $peer 'RETURN'
+		$r = Send-Mp $peer 'RETURN'
 		Check ($r -like '*return=1*') "$($peer.Name): the menu would open on the Multiplayer page (match over mark): $r"
-		$r = Mp $peer 'RETURN'
+		$r = Send-Mp $peer 'RETURN'
 		Check ($r -like '*return=0*') "$($peer.Name): the mark is given once"
 	}
 } catch {
@@ -282,6 +298,6 @@ try {
 		$f = Get-ChildItem $peer.Dir -Filter *.log -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
 		if ($f) { Copy-Item $f.FullName (Join-Path $OutDir "$($peer.Name).log") -ErrorAction SilentlyContinue }
 	}
-	if (Test-Path (Join-Path $WorkDir 'shots')) { Copy-Item (Join-Path $WorkDir 'shots\*') $OutDir -ErrorAction SilentlyContinue }
+	if (Test-Path (Join-Path $WorkDir 'lobby-shots')) { Copy-Item (Join-Path $WorkDir 'lobby-shots\*') $OutDir -ErrorAction SilentlyContinue }
 }
 exit $(if ($script:failures -eq 0) { 0 } else { 1 })
