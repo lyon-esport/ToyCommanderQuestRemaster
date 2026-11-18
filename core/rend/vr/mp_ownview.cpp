@@ -139,7 +139,7 @@ struct Stats
 		const float secs = std::chrono::duration<float>(now - since).count();
 		if (secs < 10.f)
 			return;
-		INFO_LOG(RENDERER, "VR own view: player %d of %d, %.1f pictures/s shown, %.1f/s of other players dropped, %.1f/s unmatched (shown as they are)",
+		NOTICE_LOG(RENDERER, "VR own view: player %d of %d, %.1f pictures/s shown, %.1f/s of other players dropped, %.1f/s unmatched (shown as they are)",
 				player + 1, count, kept / secs, dropped / secs, unmatched / secs);
 		kept = dropped = unmatched = 0;
 		since = now;
