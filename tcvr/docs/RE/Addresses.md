@@ -89,3 +89,22 @@ Save layout and "Unlock all levels": see `../Saves.md`. Mission end `0x8C022E04`
 callback when byte `0x8C0A4130` is set) writes the best time and raises the status to 3 when the time beats
 the mission table's target (+0x4C), else to 2, then runs the unlock rules `0x8C02A02C`. Cheat matcher
 `0x8C0144DA` (17 six-button codes at `0x8C0A3F08`); code 5 (`0x8C02259A`) opens every mission.
+
+## Multiplayer menus, scores and split-screen sound (2026-11-18, static; addresses only)
+
+| Address | Meaning |
+|---|---|
+| `0x8C0A5A6C` | menu request bits: 0x4000 team/vehicle setup `0x8C02CB48`, 0x10000 multiplayer options `0x8C02D368`, 0x40000 cat message `0x8C02E340`, 0x80000000 end-of-match results `0x8C02FAD8`; input for all of them in `0x8C031DE0` |
+| `0x8C0A6048` | player slots, 4 x 0x28: +0 team 0..3, +4 vehicle 0..26 (models `0x8C0CD418`, 0x4C each), +8 state (0 no pad, 1 pad present, 2 choosing, 3 ready) |
+| `0x8C0A72D4` | menu player record (the "MASTER" quarter) |
+| `0x8C0A5AD0` | options: room, index into the unlocked arenas (table `0x8C0CBE48`, 0x14 each, rooms mask `0x8C0A5A5C`) |
+| `0x8C0A5ACC` | options: mode (0 Deathmatch, 1 cat game with time limit, 2 third mode) |
+| `0x8C0A5AC8` | options: "Active Environment" On / Off |
+| `0x8C0A60E8` / `0x8C0A60EC` | options: limit index 0..21 / limit value (points, or seconds in mode 1), set when the page is confirmed |
+| `0x8C0A5AD4` | cat game: team holding the cat (8 = none) |
+| `0x8C0C7DD4` | team scores, 4 x u32 by team (cleared when the options page is confirmed) |
+| `0x8C0CDC68` | kill table, 4 rows x 0x14 (killer x victim, column 4 team points) |
+| `0x8C0253F8` / `0x8C0248E0` | menu script system commands (slot reset 0x0D, leave multiplayer 0x42, "team n reached the limit" 0x47..0x4A) |
+| `0x8C024080` | script statement 151: writes team scores, cat team and kill table |
+| `0x8C04BE04` | split-screen sound update: listeners `0x8C0D58F4` (player +0x184 matrices), count `0x8C0A72DC`; sources 128 x 0x9C at `0x8C0DA3B4` keep per-listener distance (+0x14 + 4i) and position (+0x3C + 0x0Ci) |
+| `0x8C04AED2` | sound random pitch uses the game rand `0x8C068220`: per-headset sound changes inside the game would desync netplay |
