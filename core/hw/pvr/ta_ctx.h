@@ -322,6 +322,11 @@ struct TA_context
 	rend_context rend;
 
 	TA_context *nextContext = nullptr;
+	// tcvr: the head-driven camera's turn of the polygons this list received (see
+	// tcvrNoteTaDma), when the list got them from a vertex buffer whose turn is known
+	bool tcvrTagged = false;
+	float tcvrCamYaw = 0.f, tcvrCamPitch = 0.f;
+	u32 tcvrCamSample = 0;
 	/*
 		Dreamcast games use up to 20k vtx, 30k idx, 1k (in total) parameters.
 		at 30 fps, thats 600kvtx (900 stripped)
@@ -399,9 +404,12 @@ TA_context *tactx_Alloc();
 
 void SetCurrentTARC(u32 addr);
 // tcvr: the head-driven camera: the turn the game's cameras got for the frame the game just
-// ended (emulator thread, from the hook), and the render start that takes it for its picture.
+// ended (emulator thread, from the hook), the display list's start and the polygon DMA that
+// carry it to the list drawn from that frame's vertices, and the render start that takes it.
 void tcvrSetFrameCamTurn(float yaw, float pitch, u32 sample = 0);
-void tcvrTakeFrameCamTurn(rend_context& rend);
+void tcvrNoteListInit();
+void tcvrNoteTaDma(u32 src);
+void tcvrTakeFrameCamTurn(TA_context& ctx);
 bool QueueRender(TA_context* ctx);
 TA_context* DequeueRender();
 void FinishRender(TA_context* ctx);

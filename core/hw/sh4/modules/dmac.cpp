@@ -10,6 +10,7 @@
 #include "hw/sh4/sh4_mem.h"
 #include "hw/pvr/pvr_mem.h"
 #include "dmac.h"
+#include "hw/pvr/ta_ctx.h"
 #include "hw/sh4/sh4_interrupts.h"
 #include "hw/holly/holly_intc.h"
 
@@ -38,6 +39,8 @@ void DMAC_Ch2St()
 	}
 
 	DEBUG_LOG(SH4, ">> DMAC: Ch2 DMA SRC=%X DST=%X LEN=%X", src, SB_C2DSTAT, SB_C2DLEN);
+	if ((dst & 0x01000000) == 0)
+		tcvrNoteTaDma(src);	// tcvr: polygons to the TA: their head camera turn (ta_ctx.cpp)
 
 	// Direct DList DMA (Ch2)
 

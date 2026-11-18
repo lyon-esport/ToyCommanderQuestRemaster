@@ -29,9 +29,9 @@
 	logic; the weapons aim with the vehicle, not the head.
 
 	Each picture is turned back by the turn of its own frame: the hook at the scene's end
-	(0x8C057A86 / 0x8C057A5C, before kmRender) latches it and the render start takes it
-	(tcvrTakeFrameCamTurn). (The first version noted it at the display list's start: a list
-	could take the previous frame's head while its cameras had the new one, another jitter.)
+	(0x8C057A86 / 0x8C057A5C, before kmRender) latches it, and it follows that frame's vertex buffer to the display list that receives it
+	and the render that shows it (ta_ctx.cpp: the vertices reach the screen 3 pictures after
+	their scene's end).
 
 	The crosshair and weapon sights are world points (the weapons' aim, from the vehicle)
 	projected with the turned camera and drawn at their own depth, so the picture's turn back puts

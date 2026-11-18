@@ -18,25 +18,93 @@ tad_context ta_tad;
 static void tactx_Recycle(TA_context* ctx);
 static TA_context *tactx_Find(u32 addr, bool allocnew = false);
 
-// tcvr: the head-driven camera's turn, per picture. The camera hook latches the turn of a game
-// frame when the game ends its scene (rnd_FrameEnd, before kmRender), and the next render start
-// takes it: whether the game sends its polygons while it draws or after the frame (DMA), the
-// picture gets the turn its own frame's cameras had.
-static float frameCamYaw, frameCamPitch;
-static u32 frameCamSample;
+// tcvr: the head-driven camera's turn, per picture, carried with the polygons themselves.
+// The camera hook latches the turn of a game frame when the game ends its scene (rnd_FrameEnd,
+// kmRender). Toy Commander draws a frame into a vertex buffer in RAM (Kamui 2, two banks used
+// in turn) and that buffer reaches the TA later: each display list starts (TA_LIST_INIT) and at
+// once gets a bank by channel 2 DMA, then the game draws its new frame into that same bank, and
+// the PVR renders a list at the next render start. So the vertices of frame N are sent at frame
+// N+2 and shown from frame N+3: a picture given the latest latched turn was 3 pictures early
+// (headset test 2026-11-18: a 30 degree step of the camera alone showed the world 30 degrees off
+// for 3 pictures; during a head turn, the world swam by the turn of the last 100 ms).
+// So the turn follows the data: at the scene's end, the bank last sent (the one the frame was
+// just drawn into) gets the frame's turn; a list that receives a bank by DMA takes that bank's
+// turn; the render start gives the picture its list's turn. A list that got no known bank
+// (polygons sent another way) falls back to the latest latched turn.
+struct TcvrTurn
+{
+	float yaw = 0.f, pitch = 0.f;
+	u32 sample = 0;
+};
+static TcvrTurn latchedTurn;
+static u32 listBank;		// the first DMA source of the current display list (0: none yet)
+static bool listHasBank;
+struct TcvrBankTurn
+{
+	u32 bank = 0;
+	TcvrTurn turn;
+};
+static TcvrBankTurn bankTurns[4];
+static unsigned bankNext;
+static u32 tcvrTaggedPictures, tcvrLatchedPictures;
 
 void tcvrSetFrameCamTurn(float yaw, float pitch, u32 sample)
 {
-	frameCamYaw = yaw;
-	frameCamPitch = pitch;
-	frameCamSample = sample;
+	latchedTurn = { yaw, pitch, sample };
+	if (listBank == 0)
+		return;
+	for (TcvrBankTurn& b : bankTurns)
+		if (b.bank == listBank)
+		{
+			b.turn = latchedTurn;
+			return;
+		}
+	bankTurns[bankNext++ % std::size(bankTurns)] = { listBank, latchedTurn };
 }
 
-void tcvrTakeFrameCamTurn(rend_context& rend)
+void tcvrNoteListInit()
 {
-	rend.tcvrCamYaw = rend.isRTT ? 0.f : frameCamYaw;
-	rend.tcvrCamPitch = rend.isRTT ? 0.f : frameCamPitch;
-	rend.tcvrCamSample = rend.isRTT ? 0 : frameCamSample;
+	listHasBank = false;
+	if (ta_ctx != nullptr)
+		ta_ctx->tcvrTagged = false;
+}
+
+void tcvrNoteTaDma(u32 src)
+{
+	if (ta_ctx == nullptr || listHasBank)
+		return;
+	listHasBank = true;
+	listBank = src;
+	for (const TcvrBankTurn& b : bankTurns)
+		if (b.bank == src)
+		{
+			ta_ctx->tcvrTagged = true;
+			ta_ctx->tcvrCamYaw = b.turn.yaw;
+			ta_ctx->tcvrCamPitch = b.turn.pitch;
+			ta_ctx->tcvrCamSample = b.turn.sample;
+			return;
+		}
+}
+
+void tcvrTakeFrameCamTurn(TA_context& ctx)
+{
+	rend_context& rend = ctx.rend;
+	TcvrTurn t = latchedTurn;
+	if (ctx.tcvrTagged)
+		t = { ctx.tcvrCamYaw, ctx.tcvrCamPitch, ctx.tcvrCamSample };
+	if (!rend.isRTT && (latchedTurn.yaw != 0.f || t.yaw != 0.f))
+	{
+		(ctx.tcvrTagged ? tcvrTaggedPictures : tcvrLatchedPictures)++;
+		if (tcvrTaggedPictures + tcvrLatchedPictures >= 600)
+		{
+			NOTICE_LOG(PVR, "VR head camera: of the last 600 turned pictures, %u took their vertex buffer's turn, %u the latest one",
+					tcvrTaggedPictures, tcvrLatchedPictures);
+			tcvrTaggedPictures = tcvrLatchedPictures = 0;
+		}
+	}
+	rend.tcvrCamYaw = rend.isRTT ? 0.f : t.yaw;
+	rend.tcvrCamPitch = rend.isRTT ? 0.f : t.pitch;
+	rend.tcvrCamSample = rend.isRTT ? 0 : t.sample;
 }
 
 void SetCurrentTARC(u32 addr)

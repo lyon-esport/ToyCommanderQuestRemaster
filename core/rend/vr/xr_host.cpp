@@ -2580,7 +2580,7 @@ float headCameraLead()
 	// To the middle of the time the picture is on show: from the head read to its first
 	// showing, plus half the time until the next picture replaces it.
 	const float frames = camLagFrames.load() + camPictureFrames.load() * 0.5f;
-	return std::clamp(frames * headsetFrameTime.load(), 0.f, 0.15f);
+	return std::clamp(frames * headsetFrameTime.load(), 0.f, 0.2f);
 }
 
 glm::vec2 headYawPitch()
