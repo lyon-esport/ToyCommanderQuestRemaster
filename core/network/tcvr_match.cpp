@@ -61,10 +61,13 @@ void clearNetplay()
 
 std::string restart()
 {
+	WARN_LOG(NETWORK, "MP RESTART");		// (a warning: always in the log; the PC test script restarts the copy)
 	if (restartHook != nullptr)
-		return restartHook();
-	// PC (the test script restarts the copy when it sees this line)
-	WARN_LOG(NETWORK, "MP RESTART");		// (a warning: always in the log)
+	{
+		const std::string line = restartHook();
+		if (!line.empty())
+			return line;
+	}
 	return "Restart needed";
 }
 

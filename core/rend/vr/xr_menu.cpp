@@ -478,7 +478,8 @@ struct MpHooks
 {
 	MpHooks()
 	{
-		tcvr::match::restartHook = [] () -> std::string { return request(MenuRequest::Restart); };
+		// (no platform hook, as on the PC: the match code logs "MP RESTART" for the test script)
+		tcvr::match::restartHook = [] () -> std::string { return menuRequestHook == nullptr ? std::string() : request(MenuRequest::Restart); };
 		tcvr::match::saveNameHook = [] () -> std::string { return menuRequestHook == nullptr ? std::string() : request(MenuRequest::SaveName); };
 	}
 } mpHooks;
@@ -745,8 +746,8 @@ MenuAction accept(const Entry& e)
 	case Action::MpStartMatch:
 	{
 		std::string error;
-		// (a little input delay: the Wi-Fi's jitter is absorbed by the rollback netplay, the delay costs responsiveness)
-		if (!match::theLobby().start((uint8_t)std::max(2, (int)config::GGPODelay), error))
+		// (the saved GGPO delay, 0 by default: a delay of 2 hits an old GGPO assertion, input_queue.cpp, see the PR)
+		if (!match::theLobby().start((uint8_t)std::max(0, (int)config::GGPODelay), error))
 			setStatus(error);
 		else
 			setStatus("Starting the match...");
