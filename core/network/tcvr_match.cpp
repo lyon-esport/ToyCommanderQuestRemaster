@@ -248,9 +248,12 @@ namespace
 constexpr u32 MenuRequest = 0x8C0A5A6C;		// menu page request bits
 constexpr u32 SetupPageBit = 0x4000;		// team and vehicle page
 constexpr u32 OptionsPageBit = 0x10000;		// multiplayer options page
+constexpr u32 OneTeamBit = 0x10000000;		// "Only one team has been selected... continue?" (A yes, B no)
 constexpr u32 Slots = 0x8C0A6048;			// 4 x 0x28: +0 team, +4 vehicle, +8 state (0 none, 1 pad, 2 choosing, 3 ready)
 constexpr u32 OptRoom = 0x8C0A5AD0;
 constexpr u32 OptMode = 0x8C0A5ACC;
+constexpr u32 OptLimit = 0x8C0A60E8;		// the limit line's index 0..21, live while the page is open
+constexpr u32 OptLine = 0x8C0A5A78;			// the options page's cursor: 0 Room, 1 Mode, 2 Active Environment, 3 limit
 constexpr u32 RoomsMask = 0x8C0A5A5C;		// rooms unlocked (bit r-1 = room r, bit 7 extras)
 constexpr int Fps = 60;
 constexpr int Hold = 9;						// frames a button is held
@@ -272,7 +275,7 @@ const Timed bootRoute[] = {
 	{ 29 * Fps + 30, DC_DPAD_RIGHT }, { 31 * Fps, DC_BTN_A }, { 38 * Fps, DC_DPAD_DOWN }, { 40 * Fps, DC_BTN_A },
 };
 
-enum class Step { Off, Boot, WaitSetup, Ready, WaitOptions, Room, ToMode, Mode, ToPoints, Points, Back, WaitBack,
+enum class Step { Off, Boot, WaitSetup, Ready, WaitOptions, Options, Back, WaitBack,
 	GuestWait, GuestJoin, Done, Failed };
 
 struct Setup
@@ -290,7 +293,7 @@ struct Setup
 	bool optionsSeen = false;
 	bool optionsLeft = false;
 	int mode = 0, room = 0, points = 10;
-	int pointsPresses = 0;
+	int limitIndex = lobby::DefaultLimitIndex;
 } su;
 
 void go(Step s)
@@ -317,10 +320,6 @@ int since() { return su.frame - su.stepFrame; }
 
 }	// namespace
 
-// The game's points-to-win steps (the options page's limit line, modes 0 and 2)
-const int PointSteps[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100 };
-constexpr int DefaultPointsIndex = 9;	// 10 points
-
 uint32_t setupButtons()
 {
 	if (!inMatch())
@@ -334,6 +333,7 @@ uint32_t setupButtons()
 		s.mode = (int)std::min(m, 2u);
 		s.room = (int)std::min(r, 7u);
 		s.points = (int)p;
+		s.limitIndex = lobby::limitIndex(s.mode, s.points);
 		go(ggpo::localPlayerIndex() == 0 ? Step::Boot : Step::GuestWait);
 		NOTICE_LOG(NETWORK, "MP SETUP: player %d, mode %d room %d points %d", ggpo::localPlayerIndex() + 1, s.mode, s.room, s.points);
 	}
@@ -374,10 +374,19 @@ uint32_t setupButtons()
 		}
 		break;
 	case Step::WaitOptions:
-		if (onPage(OptionsPageBit))
+		if (onPage(OneTeamBit) && !onPage(OptionsPageBit))
 		{
-			NOTICE_LOG(NETWORK, "MP SETUP: options page (room %d mode %d)", read32(OptRoom), read32(OptMode));
-			go(Step::Room);
+			// player 1 alone: the game asks whether to go on with one team; yes
+			if (since() > Fps / 3)
+			{
+				tap(DC_BTN_A);
+				s.stepFrame = s.frame;
+			}
+		}
+		else if (onPage(OptionsPageBit))
+		{
+			NOTICE_LOG(NETWORK, "MP SETUP: options page (room %d mode %d limit index %d)", read32(OptRoom), read32(OptMode), read32(OptLimit));
+			go(Step::Options);
 		}
 		else if (since() > 2 * Fps)
 		{
@@ -390,55 +399,37 @@ uint32_t setupButtons()
 			}
 		}
 		break;
-	case Step::Room:
-		// the cursor starts on the Room line
-		if ((int)read32(OptRoom) == s.room)
-			go(Step::ToMode);
-		else if (s.tries++ > 10)
-			fail("the room did not change");
-		else
-			tap(DC_DPAD_RIGHT);
-		break;
-	case Step::ToMode:
-		tap(DC_DPAD_DOWN);
-		go(Step::Mode);
-		break;
-	case Step::Mode:
-		if ((int)read32(OptMode) == s.mode)
-			go(Step::ToPoints);
-		else if (s.tries++ > 4)
-			fail("the mode did not change");
-		else
-			tap(DC_DPAD_RIGHT);
-		break;
-	case Step::ToPoints:
-		// Mode, Active Environment, then the limit line
-		if (s.tries++ < 2)
-			tap(DC_DPAD_DOWN);
-		else
+	case Step::Options:
+	{
+		// one line at a time, top to bottom, each checked in memory: Room, Mode, then the limit
+		const int line = (int)read32(OptLine);
+		const int room = (int)read32(OptRoom), mode = (int)read32(OptMode), limit = (int)read32(OptLimit);
+		int want = -1;			// the line to change, -1 all done
+		if (room != s.room)
+			want = 0;
+		else if (mode != s.mode)
+			want = 1;
+		else if (limit != s.limitIndex)
+			want = 3;
+		if (want < 0)
 		{
-			int best = 0;
-			for (int i = 0; i < (int)(sizeof(PointSteps) / sizeof(PointSteps[0])); i++)
-				if (std::abs(PointSteps[i] - s.points) < std::abs(PointSteps[best] - s.points))
-					best = i;
-			s.pointsPresses = s.mode == 1 ? 0 : best - DefaultPointsIndex;
-			go(Step::Points);
-		}
-		break;
-	case Step::Points:
-		if (s.pointsPresses > 0)
-		{
-			tap(DC_DPAD_RIGHT);
-			s.pointsPresses--;
-		}
-		else if (s.pointsPresses < 0)
-		{
-			tap(DC_DPAD_LEFT);
-			s.pointsPresses++;
-		}
-		else
+			NOTICE_LOG(NETWORK, "MP SETUP: options entered: room %d mode %d limit index %d", room, mode, limit);
 			go(Step::Back);
+		}
+		else if (++s.tries > 60)
+			fail("the options did not take the match's settings");
+		else if (line != want)
+			tap(line < want ? DC_DPAD_DOWN : DC_DPAD_UP);
+		else if (want == 3)
+		{
+			// the shorter way round (the index wraps both ways)
+			const int ahead = (s.limitIndex - limit + lobby::LimitCount) % lobby::LimitCount;
+			tap(ahead <= lobby::LimitCount / 2 ? DC_DPAD_RIGHT : DC_DPAD_LEFT);
+		}
+		else
+			tap(DC_DPAD_RIGHT);
 		break;
+	}
 	case Step::Back:
 		tap(DC_BTN_B);
 		go(Step::WaitBack);
@@ -446,7 +437,7 @@ uint32_t setupButtons()
 	case Step::WaitBack:
 		if (onPage(SetupPageBit) && !onPage(OptionsPageBit))
 		{
-			NOTICE_LOG(NETWORK, "MP SETUP done: team and vehicle page, room %d mode %d (frame %d)", read32(OptRoom), read32(OptMode), s.frame);
+			NOTICE_LOG(NETWORK, "MP SETUP done: team and vehicle page, room %d mode %d limit index %d (frame %d)", read32(OptRoom), read32(OptMode), read32(OptLimit), s.frame);
 			go(Step::Done);
 		}
 		else if (since() > 2 * Fps)

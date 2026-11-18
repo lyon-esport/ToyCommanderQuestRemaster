@@ -253,6 +253,12 @@ try {
 		Check ($joined -eq $Players) ("{0}: {1} of {2} players on the page (slot states {3})" -f $peer.Name, $joined, $Players, ($states -join ' '))
 		$m = [BitConverter]::ToUInt32($opt, 4); $rm = [BitConverter]::ToUInt32($opt, 8)
 		Check ($m -eq $Mode -and $rm -eq $Room) ("{0}: options mode {1} room {2} (wanted {3} {4})" -f $peer.Name, $m, $rm, $Mode, $Room)
+		# the limit line's index (0x8C0A60E8): 0 none, then 1..10, 15, 20, 25, 30, 40 .. 100 points (seconds in mode 1: 30 .. 1140)
+		$steps = if ($Mode -eq 1) { @(0, 30, 60, 90, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960, 1020, 1080, 1140) } else { @(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100) }
+		$wantIdx = 0; for ($i = 1; $i -lt $steps.Count; $i++) { if ([math]::Abs($steps[$i] - $Points) -lt [math]::Abs($steps[$wantIdx] - $Points)) { $wantIdx = $i } }
+		$lim = Peek $peer 0x8C0A60E8 4
+		$li = if ($lim) { [BitConverter]::ToUInt32($lim, 0) } else { -1 }
+		Check ($li -eq $wantIdx) ("{0}: limit index {1} (wanted {2} = {3})" -f $peer.Name, $li, $wantIdx, $steps[$wantIdx])
 	}
 
 	# the screens: the last picture of each copy

@@ -38,12 +38,24 @@ constexpr uint16_t DiscoveryPort = 19790;	// UDP; not the GGPO port (19713)
 constexpr uint8_t ProtocolVersion = 1;
 constexpr size_t NameMax = 8;				// the menu offers 3 letters; a longer name from elsewhere is cut
 
-// What the host chose for the match. Only shown to joiners for now (task 3.4 enters it in the game).
+// The game's multiplayer options page, as the game shows it (measured on PC, 2026-11-18).
+constexpr int RoomCount = 8;
+extern const char *const RoomNames[RoomCount];
+extern const char *const ModeNames[3];
+// The limit line ("Number of Points to Win"): one index 0..21 for every mode; 0 is no limit ("---"), then
+// points in Deathmatch and Capture the Flag, seconds in Cat and Mice. The game's default is index 10.
+constexpr int LimitCount = 22;
+constexpr int DefaultLimitIndex = 10;
+int limitValue(int mode, int index);		// 0 for no limit
+int limitIndex(int mode, int value);		// the nearest step
+std::string limitText(int mode, int value);	// "15 points to win", "8 min time limit", "no limit"
+
+// What the host chose for the match; the automatic setup (tcvr_match.cpp) enters it in the game.
 struct Settings
 {
 	uint8_t mode = 0;		// 0 Deathmatch, 1 Cat and Mice, 2 Capture the Flag
-	uint8_t room = 0;		// 0..7, the eight arenas
-	uint16_t points = 10;	// points to win
+	uint8_t room = 0;		// 0..7, the eight arenas (RoomNames)
+	uint16_t points = 10;	// the limit: points to win, seconds in Cat and Mice, 0 none (limitValue)
 	bool operator==(const Settings& o) const { return mode == o.mode && room == o.room && points == o.points; }
 	bool operator!=(const Settings& o) const { return !(*this == o); }
 };

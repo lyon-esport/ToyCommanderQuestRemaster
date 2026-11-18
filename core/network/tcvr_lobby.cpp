@@ -4,6 +4,7 @@
 	This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #include "tcvr_lobby.h"
+#include <cstdlib>
 
 #ifndef ASIO_STANDALONE
 #define ASIO_STANDALONE
@@ -23,6 +24,45 @@
 
 namespace tcvr::lobby
 {
+
+const char *const RoomNames[RoomCount] = { "Kitchen and dining room", "Two children's bedrooms", "Hallway and its mezzanine",
+	"Parent's bedroom", "Garage and tool room", "Attic", "Living room and winter garden", "Cellar" };
+const char *const ModeNames[3] = { "Deathmatch", "Cat and Mice", "Capture the Flag" };
+
+namespace
+{
+const int PointSteps[LimitCount] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100 };
+const int CatSeconds[LimitCount] = { 0, 30, 60, 90, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900,
+	960, 1020, 1080, 1140 };
+}
+
+int limitValue(int mode, int index)
+{
+	index = std::clamp(index, 0, LimitCount - 1);
+	return mode == 1 ? CatSeconds[index] : PointSteps[index];
+}
+
+int limitIndex(int mode, int value)
+{
+	int best = 0;
+	for (int i = 1; i < LimitCount; i++)
+		if (std::abs(limitValue(mode, i) - value) < std::abs(limitValue(mode, best) - value))
+			best = i;
+	return best;
+}
+
+std::string limitText(int mode, int value)
+{
+	const int v = limitValue(mode, limitIndex(mode, value));
+	if (v == 0)
+		return "no limit";
+	if (mode != 1)
+		return std::to_string(v) + (v == 1 ? " point to win" : " points to win");
+	if (v % 60 == 0)
+		return std::to_string(v / 60) + " min time limit";
+	return std::to_string(v / 60) + " min " + std::to_string(v % 60) + " s time limit";
+}
+
 
 // ---- codec ----------------------------------------------------------------------------------
 
