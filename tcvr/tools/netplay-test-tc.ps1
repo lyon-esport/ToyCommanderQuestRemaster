@@ -175,7 +175,7 @@ function Hunt-State([int]$p, [double]$t) {
 			$climb = [math]::Atan2($dz, $run) * 180 / [math]::PI
 			$hunt.Still[$p] = $t
 		} elseif ($null -eq $hunt.Still[$p]) { $hunt.Still[$p] = $t }
-		$still = ($t - $hunt.Still[$p]) -gt 2
+		$still = ($t - $hunt.Still[$p]) -gt $(if ($TargetStill) { 3 } else { 2 })
 	}
 	$pulseA = (($u % 2) -lt 0.2)
 	# the target: full throttle, stick centred: it takes off, climbs into the ceiling and dies, then
@@ -200,7 +200,7 @@ function Hunt-State([int]$p, [double]$t) {
 	$deg = $err * 180 / [math]::PI
 	# passes: turn in and attack; after passing within 900, fly on straight until 2200 away
 	if ($Ram) { $hunt.Extend = $false }
-	elseif ($dist -lt $(if ($TargetStill) { 500 } else { 900 }) -and [math]::Abs($deg) -gt 30 -and -not $hunt.Extend) { $hunt.Extend = $true; $hunt.ExtendAt = $t }
+	elseif ($dist -lt $(if ($TargetStill) { 500 } else { 900 }) -and [math]::Abs($deg) -gt $(if ($TargetStill) { 60 } else { 30 }) -and -not $hunt.Extend) { $hunt.Extend = $true; $hunt.ExtendAt = $t }
 	if ($dist -gt $(if ($TargetStill) { 1600 } else { 1800 }) -or ($hunt.Extend -and $t - $hunt.ExtendAt -gt 4)) { $hunt.Extend = $false }
 	$x = if ($hunt.Extend) { 0 } else { [int][math]::Max(-127, [math]::Min(127, -2.5 * $deg)) }
 	# pitch toward the slope that points at the target (y + = climb), limited to +-35 degrees and
@@ -226,6 +226,8 @@ function Hunt-State([int]$p, [double]$t) {
 		$dclimb = if ($null -ne $hunt.LastClimb) { $climb - $hunt.LastClimb } else { 0 }
 		$hunt.LastClimb = $climb
 		$y = [int][math]::Max(-60, [math]::Min(60, 1.5 * ($want - $climb) - 0.5 * $dclimb))
+		# but push down hard when climbing well past the wanted slope or too high (at speed +-60 could not stop a 50 degree climb)
+		if ($climb -gt $want + 20 -or $high -gt 300) { $y = -100 }
 	}
 	$b = 0
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 2600 -and (($u * 1000) % 300) -lt 150) { $b = $BTN.A }
@@ -241,8 +243,7 @@ function Hunt-State([int]$p, [double]$t) {
 	$l = 0
 	if ($TargetStill -and -not $hunt.Extend -and [math]::Abs($deg) -gt 40) {
 		# slow down to turn tighter (at full speed the hunter only circled the target 1400 away), brake when it is behind
-		$r = 60
-		if ([math]::Abs($deg) -gt 100) { $r = 0; $l = 255 }
+		$r = 60		# no braking: stopped near the ground, it took off again in a steep climb
 	}
 	if ($u -ge $hunt.NextLog) {
 		$hunt.NextLog = $u + 0.5
