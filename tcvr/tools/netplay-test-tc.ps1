@@ -158,7 +158,7 @@ function Vehicle-Pos([int]$p) {
 	return ,@([BitConverter]::ToSingle($b, 0), [BitConverter]::ToSingle($b, 4), [BitConverter]::ToSingle($b, 8))
 }
 $hunt = @{ Hist = @{ 0 = [System.Collections.Generic.List[object]]::new(); 1 = [System.Collections.Generic.List[object]]::new() }
-	Vehicle = @{}; Respawns = @{ 0 = 0; 1 = 0 }; Still = @{}; Extend = $false; ExtendAt = 0.0; NextLog = 0.0; Log = [System.Collections.Generic.List[string]]::new() }
+	Vehicle = @{}; Respawns = @{ 0 = 0; 1 = 0 }; Still = @{}; Extend = $false; ExtendAt = 0.0; NextLog = 0.0; LastClimb = $null; Log = [System.Collections.Generic.List[string]]::new() }
 function Hunt-State([int]$p, [double]$t) {
 	$u = $t - $playFrom
 	$me = Vehicle-Pos $p
@@ -216,12 +216,24 @@ function Hunt-State([int]$p, [double]$t) {
 		$want = [math]::Max(-30, [math]::Min(30, $want))
 	} elseif (-not $Ram -and $me[2] -lt $it[2] + 120 -and $climb -lt 0) { $want = 15 }	# near the ground: pull up
 	$y = [int][math]::Max(-100, [math]::Min(100, 4 * ($want - $climb)))
+	if ($TargetStill) {
+		# one thing at a time: high above the target, wings level (x small) and only come down; turn in
+		# fully once low. Gentler, damped pitch (4x gain clamped at 100 swung from steep climbs to steep
+		# dives, and pitch in a steep bank only turned the plane)
+		$high = $me[2] - $it[2]
+		if ($high -gt 120) { $x = [int][math]::Max(-40, [math]::Min(40, $x)) }
+		if ($dist -lt 1500) { $want = [math]::Max(-15, [math]::Min(10, $want)) }
+		$dclimb = if ($null -ne $hunt.LastClimb) { $climb - $hunt.LastClimb } else { 0 }
+		$hunt.LastClimb = $climb
+		$y = [int][math]::Max(-60, [math]::Min(60, 1.5 * ($want - $climb) - 0.5 * $dclimb))
+	}
 	$b = 0
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 2600 -and (($u * 1000) % 300) -lt 150) { $b = $BTN.A }
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 3000 -and ($u % 2) -gt 1.7) { $b = $b -bor $BTN.B }
 	if ($TargetStill) {
 		# a still target: fire whenever it is roughly ahead and near (the gun sprays, the missile may home in)
 		if ([math]::Abs($deg) -lt 25 -and $dist -lt 1500 -and [math]::Abs($me[2] - $it[2]) -lt 150) { $b = $b -bor $BTN.A }
+		if ([math]::Abs($deg) -lt 20 -and $dist -lt 1500 -and [math]::Abs($me[2] - $it[2]) -lt 300) { $b = $b -bor $BTN.A }
 		if ([math]::Abs($deg) -lt 60 -and $dist -lt 2500 -and ($u % 1.5) -gt 1.2) { $b = $b -bor $BTN.B }
 	}
 	if ($still -and $pulseA) { $b = $b -bor $BTN.A }
