@@ -201,6 +201,7 @@ struct FoundGame
 	uint32_t hostId = 0;
 	std::string address;		// where its beacon came from
 	Beacon beacon;
+	bool isPrivate = false;		// internet play: a PIN is needed to join
 };
 
 enum class Role { None, Host, Joiner };

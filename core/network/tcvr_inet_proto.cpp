@@ -391,6 +391,7 @@ std::vector<uint8_t> encode(const WelcomeMsg& m)
 	w.key(m.udpKey);
 	w.u16(m.udpPort);
 	put(w, m.seenAs);
+	w.u8((uint8_t)m.policy);
 	return w.b;
 }
 
@@ -400,7 +401,8 @@ bool decode(Reader& r, WelcomeMsg& m)
 	m.udpKey = r.key();
 	m.udpPort = r.u16();
 	m.seenAs = getEndpoint(r);
-	return r.done();
+	m.policy = (GamePolicy)r.u8();
+	return r.done() && (uint8_t)m.policy <= 2;
 }
 
 std::vector<uint8_t> encodeGames(const std::vector<GameEntry>& games)
@@ -412,6 +414,7 @@ std::vector<uint8_t> encodeGames(const std::vector<GameEntry>& games)
 	for (size_t i = 0; i < n; i++)
 	{
 		w.u32(games[i].ownerId);
+		w.u8(games[i].isPrivate ? 1 : 0);
 		w.blob(games[i].beacon);
 	}
 	return w.b;
@@ -425,16 +428,45 @@ bool decodeGames(Reader& r, std::vector<GameEntry>& games)
 	{
 		GameEntry g;
 		g.ownerId = r.u32();
+		g.isPrivate = (r.u8() & 1) != 0;
 		g.beacon = r.blob(512);
 		games.push_back(std::move(g));
 	}
 	return r.done();
 }
 
-std::vector<uint8_t> encodeAnnounce(const std::vector<uint8_t>& beacon)
+bool validPin(const std::string& pin)
+{
+	if (pin.empty())
+		return true;
+	if (pin.size() != PinLength)
+		return false;
+	for (char c : pin)
+		if (c < '0' || c > '9')
+			return false;
+	return true;
+}
+
+const char *policyText(GamePolicy p)
+{
+	switch (p)
+	{
+	case GamePolicy::PublicOnly: return "public games only";
+	case GamePolicy::PrivateOnly: return "private games only";
+	default: return "public and private games";
+	}
+}
+
+bool policyAllows(GamePolicy p, bool isPrivate)
+{
+	return p == GamePolicy::All || (p == GamePolicy::PrivateOnly) == isPrivate;
+}
+
+std::vector<uint8_t> encodeAnnounce(const std::vector<uint8_t>& beacon, bool isPrivate)
 {
 	Writer w;
 	w.u8((uint8_t)Ctl::Announce);
+	w.u8(isPrivate ? 1 : 0);
 	w.blob(beacon);
 	return w.b;
 }
@@ -514,7 +546,7 @@ bool decode(Reader& r, StreamMsg& m)
 	m.streamId = r.u32();
 	m.kind = (StreamKind)r.u8();
 	m.data = r.blob(MaxFrame - 32);
-	return r.done() && (m.kind == StreamKind::Open || m.kind == StreamKind::Data || m.kind == StreamKind::Close);
+	return r.done() && m.kind >= StreamKind::Open && m.kind <= StreamKind::Refused;
 }
 
 std::vector<uint8_t> encodeError(const std::string& text)

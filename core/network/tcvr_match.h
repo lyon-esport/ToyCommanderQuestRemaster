@@ -41,6 +41,12 @@ bool internetMode();
 std::string internetLine();
 // The match's paths to the other players (internet play): "BBB direct 45 ms", "CCC via server 80 ms".
 std::vector<std::string> internetPaths();
+// Private games (internet play): the PIN for the game this copy hosts or joins next ("" = a public game).
+void setGamePin(const std::string& pin);
+// Why the last join was turned away ("Wrong PIN", ...), "" if it wasn't.
+std::string internetRefusal();
+// Whether the server lets players host this kind of game; false with a line for the menu.
+bool internetAllows(bool isPrivate, std::string& why);
 // True once the lobby has been made (it is made on first use: the Multiplayer pages).
 bool lobbyStarted();
 lobby::Identity identity();

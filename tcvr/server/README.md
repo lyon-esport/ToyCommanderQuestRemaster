@@ -39,6 +39,14 @@ With ufw: `ufw allow 19800/tcp && ufw allow 19800/udp`.
 Linux needs g++ and cmake; Windows needs Visual Studio (C++) or MinGW. It uses only this repository
 (`core/network/tcvr_inet_proto.*`, Monocypher, asio). `tcvr-inet-peer` is a test player (see below).
 
+## Public and private games
+
+A player who creates a game chooses Public or Private. A private game is listed with a lock and needs its
+4-digit PIN to join. The PIN is checked by the host's headset, never by the server; the server only limits
+how often one address may try to join private games (10 a minute), so PINs can't be guessed quickly.
+`--games public` or `--games private` makes the server accept only that kind; the log says which kind
+each new game is.
+
 ## The router
 
 Players connect to the server's **public** address (an IP address or a DNS name, a dynamic DNS name
@@ -60,6 +68,7 @@ server's account can read.
     --key FILE        the key file (default tcvr-server.key in the current folder)
     --max-clients N   at most this many connected headsets (default 200)
     --relay-kbps N    relay budget per headset, KB/s (default 256; a 4-player match needs about 20)
+    --games KIND      which games players may host: all (default), public or private
     --verbose         more log lines
     --fingerprint     print the key's fingerprint and exit
 
@@ -67,5 +76,5 @@ server's account can read.
 
 `tcvr/tools/inet-nat-test.sh` (Linux, root) builds a fake internet with network namespaces: the server,
 players behind home routers (NAT), a "symmetric" router that forces the relay, two players behind the
-same router, 80 ms and 2% loss, the host leaving the lobby, a wrong game password. `tcvr-inet-peer` is
+same router, 80 ms and 2% loss, the host of a private game leaving the lobby, a wrong PIN. `tcvr-inet-peer` is
 the test player it runs (the real lobby and internet code, a fake match instead of the emulator).

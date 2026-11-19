@@ -250,6 +250,72 @@ TEST(TcvrInetTest, lobbyAndMatchThroughServer)
 	lb.leave();
 }
 
+TEST(TcvrInetTest, pinsAndPolicy)
+{
+	EXPECT_TRUE(inet::validPin(""));
+	EXPECT_TRUE(inet::validPin("0042"));
+	EXPECT_FALSE(inet::validPin("123"));
+	EXPECT_FALSE(inet::validPin("12a4"));
+	EXPECT_TRUE(inet::policyAllows(inet::GamePolicy::All, true));
+	EXPECT_FALSE(inet::policyAllows(inet::GamePolicy::PublicOnly, true));
+	EXPECT_TRUE(inet::policyAllows(inet::GamePolicy::PrivateOnly, true));
+	EXPECT_FALSE(inet::policyAllows(inet::GamePolicy::PrivateOnly, false));
+	std::vector<inet::GameEntry> in { { 5, true, { 1, 2 } }, { 6, false, {} } }, out;
+	const auto msg = inet::encodeGames(in);
+	inet::Reader r(msg.data() + 1, msg.size() - 1);
+	ASSERT_TRUE(inet::decodeGames(r, out));
+	ASSERT_EQ(2u, out.size());
+	EXPECT_TRUE(out[0].isPrivate);
+	EXPECT_FALSE(out[1].isPrivate);
+}
+
+// A private game: the wrong PIN is turned away by the host's copy ("Wrong PIN"), the right one gets in.
+TEST(TcvrInetTest, privateGamePin)
+{
+	TestServer srv(19873);
+	ASSERT_TRUE(srv.started);
+	auto makeClient = [](const char *name) {
+		auto c = std::make_shared<inet::InternetClient>();
+		inet::ClientConfig cfg;
+		cfg.server = "127.0.0.1:19873";
+		cfg.name = name;
+		cfg.appVersion = "test";
+		c->configure(cfg);
+		return c;
+	};
+	auto ca = makeClient("AAA"), cb = makeClient("BBB"), cc = makeClient("CCC");
+	ASSERT_TRUE(waitUntil([&] { return ca->status() == inet::Status::Online && cb->status() == inet::Status::Online
+			&& cc->status() == inet::Status::Online; }));
+	lobby::Lobby la, lb, lc;
+	la.setRouter(ca);
+	lb.setRouter(cb);
+	lc.setRouter(cc);
+	lobby::Identity id;
+	id.appVersion = "test";
+	std::string error;
+	ca->setGamePin("2580");
+	id.name = "AAA";
+	ASSERT_TRUE(la.host(id, {}, error)) << error;
+	lb.startSearch();
+	ASSERT_TRUE(waitUntil([&] { return !lb.games().empty(); }));
+	const lobby::FoundGame g = lb.games().front();
+	EXPECT_TRUE(g.isPrivate);
+	cb->setGamePin("1111");
+	id.name = "BBB";
+	lb.join(id, g.address, g.beacon.lobbyPort);
+	ASSERT_TRUE(waitUntil([&] { return lb.view().phase == lobby::Phase::Failed; }));
+	EXPECT_EQ("Wrong PIN", cb->lastRefusal());
+	cc->setGamePin("2580");
+	id.name = "CCC";
+	lc.join(id, g.address, g.beacon.lobbyPort);
+	ASSERT_TRUE(waitUntil([&] { return lc.view().phase == lobby::Phase::InLobby && la.view().state.count() == 2; }));
+	// BBB again at once: still waiting after its wrong PIN
+	cb->setGamePin("2580");
+	lb.join(id, g.address, g.beacon.lobbyPort);
+	ASSERT_TRUE(waitUntil([&] { return lb.view().phase == lobby::Phase::Failed; }));
+	EXPECT_EQ("Too many wrong PINs: wait a minute", cb->lastRefusal());
+}
+
 // A changed server key stops the client (a man in the middle, or a server that lost its key).
 TEST(TcvrInetTest, pinnedKeyMismatch)
 {

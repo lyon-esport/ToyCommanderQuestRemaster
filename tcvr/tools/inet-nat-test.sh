@@ -10,15 +10,16 @@
 #   strict2     2 players, one behind a "symmetric" router (new port per destination): relay through the server
 #   mixed4      4 players: two usual routers, one symmetric, and two players behind the same router;
 #               80 ms round trip and 2% loss between players (TCVR_INET_NETEM, in the client)
-#   handover3   3 players: the host leaves the lobby when all are in, the next one hosts and starts the match
-#   password2   2 players with different game passwords: the joiner must not get in
+#   handover3   a private game (PIN) of 3 players: the host leaves the lobby when all are in, the next one
+#               hosts the same private game and starts the match
+#   pin2        a private game: a joiner with the wrong PIN is refused ("Wrong PIN"), one with the right PIN plays
 #
 # The addresses are documentation ranges (198.51.100.0/24 "internet", 192.168.N.0/24 homes); nothing leaves
 # this computer. Everything made here is removed at the end.
 set -u
 BUILD=${1:?build dir with tcvr-server and tcvr-inet-peer}
 shift
-SCEN=${*:-cone2 strict2 mixed4 handover3 password2}
+SCEN=${*:-cone2 strict2 mixed4 handover3 pin2}
 SERVER=$BUILD/tcvr-server
 PEER=$BUILD/tcvr-inet-peer
 LOG=${TCVR_TEST_LOG:-/tmp/tcvr-inet-test}
@@ -157,19 +158,25 @@ for sc in $SCEN; do
 		make_home 1 cone; make_home 2 cone; make_home 3 cone
 		make_player 1 a 1; make_player 2 b 1; make_player 3 c 1
 		start_server $sc
-		run_players $sc "tpa:AAA:--host --players 3 --leave-at-full --seconds 15" "tpb:BBB:--join --players 2 --seconds 15" \
-			"tpc:CCC:--join --players 2 --seconds 15"
+		run_players $sc "tpa:AAA:--host --players 3 --leave-at-full --seconds 15 --pin 4321" \
+			"tpb:BBB:--join --players 2 --seconds 15 --pin 4321" "tpc:CCC:--join --players 2 --seconds 15 --pin 4321"
 		rc=$?
 		grep -q "role=host ok=1" "$LOG/$sc-BBB.log" || rc=1
 		result $sc $rc ;;
-	password2)
-		make_home 1 cone; make_home 2 cone
-		make_player 1 a 1; make_player 2 b 1
+	pin2)
+		make_home 1 cone; make_home 2 cone; make_home 3 cone
+		make_player 1 a 1; make_player 2 b 1; make_player 3 c 1
 		start_server $sc
-		run_players $sc "tpa:AAA:--host --players 2 --seconds 5 --timeout 25 --password red" \
-			"tpb:BBB:--join --players 2 --seconds 5 --timeout 25 --password blue"
-		# must fail: nobody plays
-		if grep -q "ok=1" "$LOG/$sc-BBB.log"; then rc=1; else rc=0; fi
+		# BBB tries 1111 and is refused; CCC comes with the right PIN and plays
+		run_players $sc "tpa:AAA:--host --players 2 --seconds 8 --timeout 40 --pin 2580" \
+			"tpb:BBB:--join --players 2 --seconds 8 --timeout 20 --pin 1111" \
+			"tpc:CCC:--join --players 2 --seconds 8 --timeout 40 --pin 2580"
+		rc=0
+		grep -q "refused:Wrong PIN" "$LOG/$sc-BBB.log" || rc=1
+		grep -q "ok=1" "$LOG/$sc-BBB.log" && rc=1
+		grep -q "role=joiner ok=1" "$LOG/$sc-CCC.log" || rc=1
+		grep -q "role=host ok=1" "$LOG/$sc-AAA.log" || rc=1
+		grep -q "private" "$LOG/$sc-server.log" || rc=1
 		result $sc $rc ;;
 	*) echo "unknown scenario $sc"; FAIL=$((FAIL + 1)) ;;
 	esac

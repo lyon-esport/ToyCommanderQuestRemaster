@@ -96,6 +96,8 @@ struct InternetClient::Impl
 	std::map<uint16_t, uint32_t> portOwner;		// local port of a connection we opened into the lobby -> player
 	std::vector<PeerPath> pathList;
 	std::function<void(const std::string&, const std::string&)> newKeyHook;
+	GamePolicy serverPolicy = GamePolicy::All;
+	std::string refusal;
 
 	// ---- the io thread only
 	ClientConfig cfg;
@@ -154,7 +156,13 @@ struct InternetClient::Impl
 	};
 	std::map<uint32_t, std::unique_ptr<Peer>> peers;
 	uint16_t localGgpoPort = 0;
-
+	std::string pin;					// the game's PIN ("" public)
+	struct PinTries
+	{
+		int wrong = 0;
+		Clock::time_point until;		// no try before
+	};
+	std::map<uint32_t, PinTries> pinTries;	// by player
 	struct Stream
 	{
 		explicit Stream(asio::io_context& io) : sock(io) {}
@@ -218,7 +226,7 @@ struct InternetClient::Impl
 	void configure(const ClientConfig& c)
 	{
 		const bool same = configured && c.server == cfg.server && c.name == cfg.name && c.appVersion == cfg.appVersion
-				&& c.password == cfg.password && c.udpPort == cfg.udpPort && c.forceRelay == cfg.forceRelay
+				&& c.udpPort == cfg.udpPort && c.forceRelay == cfg.forceRelay
 				&& c.noLan == cfg.noLan && (c.pinnedKey == cfg.pinnedKey || c.pinnedKey.empty());
 		if (same)
 		{
@@ -509,6 +517,10 @@ struct InternetClient::Impl
 				return;
 			}
 			udpKey = w.udpKey;
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				serverPolicy = w.policy;
+			}
 			serverUdp = udp::endpoint(serverIp, w.udpPort);
 			online = true;
 			{
@@ -521,7 +533,7 @@ struct InternetClient::Impl
 			setStatus(Status::Online, "Online: " + host + "   key " + keyPrintCopy());
 			registerUdp();
 			if (!beacon.empty())
-				send(encodeAnnounce(beacon));
+				send(encodeAnnounce(beacon, !pin.empty()));
 			if (searching)
 				send(encodeSimple(Ctl::List));
 			break;
@@ -543,6 +555,7 @@ struct InternetClient::Impl
 				fg.hostId = b.hostId;
 				fg.address = virtualAddress(g.ownerId);
 				fg.beacon = b;
+				fg.isPrivate = g.isPrivate;
 				found.push_back({ now, fg });
 			}
 			break;
@@ -558,7 +571,12 @@ struct InternetClient::Impl
 		{
 			const uint32_t target = r.u32();
 			const bool ok = r.u8() != 0;
-			r.str();
+			const std::string why = r.str();
+			if (!ok && !why.empty())
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				refusal = why;
+			}
 			auto it = waitingConnect.find(target);
 			if (it == waitingConnect.end())
 				break;
@@ -624,7 +642,7 @@ struct InternetClient::Impl
 					closePeer(*slot);
 				}
 				slot = std::make_unique<Peer>();
-				slot->pk = derivePairKey(memberKp, m.memberKey, cfg.password);
+				slot->pk = derivePairKey(memberKp, m.memberKey, "");
 			}
 			Peer& p = *slot;
 			p.info = m;
@@ -789,6 +807,7 @@ struct InternetClient::Impl
 			return;
 		Writer w;
 		w.u16(s->remotePort);
+		w.str(pin);
 		sendStream(*s, StreamKind::Open, w.b);
 		s->open = true;
 		readLocal(s);
@@ -849,6 +868,8 @@ struct InternetClient::Impl
 			}
 			return;
 		}
+		if (m.kind == StreamKind::Refused && (!s || !mine))
+			return;
 		std::vector<uint8_t> plain;
 		uint64_t counter;
 		if (pit == peers.end() || !openPeer(pit->second->pk, 1, m.data.data(), m.data.size(), counter, plain)
@@ -858,10 +879,53 @@ struct InternetClient::Impl
 			return;
 		}
 		pit->second->streamRecv = counter;
+		if (m.kind == StreamKind::Refused)
+		{
+			// the host's copy turned us away
+			const RefuseWhy why = plain.size() == 1 ? (RefuseWhy)plain[0] : RefuseWhy::WrongPin;
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				refusal = why == RefuseWhy::TooManyTries ? "Too many wrong PINs: wait a minute" : "Wrong PIN";
+			}
+			closeStream(s, false);
+			return;
+		}
 		if (m.kind == StreamKind::Open)
 		{
 			Reader r(plain);
 			const uint16_t port = r.u16();
+			const std::string theirPin = r.str(PinLength);
+			// a private game: the PIN first (and a growing wait after wrong ones, against guessing)
+			if (!mine && !s && r.ok && !pin.empty())
+			{
+				PinTries& t = pinTries[m.peer];
+				const auto now = Clock::now();
+				RefuseWhy why = RefuseWhy::WrongPin;
+				bool refuse = false;
+				if (now < t.until)
+				{
+					refuse = true;
+					why = RefuseWhy::TooManyTries;
+				}
+				else if (theirPin != pin)
+				{
+					refuse = true;
+					t.wrong++;
+					t.until = now + milliseconds(std::min(60000, 2000 << std::min(t.wrong - 1, 5)));
+				}
+				if (refuse)
+				{
+					Writer w;
+					w.u8((uint8_t)why);
+					StreamMsg back;
+					back.peer = m.peer;
+					back.streamId = m.streamId ^ 0x80000000u;
+					back.kind = StreamKind::Refused;
+					back.data = sealPeer(pit->second->pk, 1, me(), ++pit->second->streamSend, w.b);
+					send(encode(back));
+					return;
+				}
+			}
 			if (mine || s || !r.done() || !lobbyPorts.count(port))
 			{
 				StreamMsg back;
@@ -1264,7 +1328,7 @@ struct InternetClient::Impl
 		if (!beacon.empty() && now - lastAnnounce > milliseconds(AnnounceMs))
 		{
 			lastAnnounce = now;
-			send(encodeAnnounce(beacon));
+			send(encodeAnnounce(beacon, !pin.empty()));
 		}
 		// punching
 		bool changed = false;
@@ -1351,6 +1415,30 @@ std::string InternetClient::ggpoPeers(const lobby::StartInfo& info, const std::s
 	return impl->run([&] { return impl->ggpoPeers(info, hostAddress, myGgpoPort); });
 }
 
+void InternetClient::setGamePin(const std::string& pin)
+{
+	{
+		std::lock_guard<std::mutex> lock(impl->mutex);
+		impl->refusal.clear();
+	}
+	impl->run([&] {
+		if (validPin(pin))
+			impl->pin = pin;
+	});
+}
+
+GamePolicy InternetClient::policy()
+{
+	std::lock_guard<std::mutex> lock(impl->mutex);
+	return impl->serverPolicy;
+}
+
+std::string InternetClient::lastRefusal()
+{
+	std::lock_guard<std::mutex> lock(impl->mutex);
+	return impl->refusal;
+}
+
 void InternetClient::matchOver()
 {
 	impl->run([&] { impl->matchOver(); });
@@ -1413,7 +1501,7 @@ void InternetClient::announce(const lobby::Beacon *beacon)
 		if (!b.empty())
 		{
 			impl->lastAnnounce = Clock::now();
-			impl->send(encodeAnnounce(b));
+			impl->send(encodeAnnounce(b, !impl->pin.empty()));
 		}
 		else if (was)
 			impl->send(encodeSimple(Ctl::Unannounce));

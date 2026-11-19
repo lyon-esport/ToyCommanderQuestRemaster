@@ -22,6 +22,8 @@
 #include "log/Log.h"
 #include "network/tcvr_lobby.h"
 #include "network/tcvr_match.h"
+#include "network/tcvr_inet_proto.h"
+#include <random>
 #include "stdclass.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -68,6 +70,10 @@ tcvr::lobby::Settings mpSettings;	// the Create game page's choices
 std::string mpAddress;				// "Enter address" on the Join page
 bool mpReady;						// this copy's Ready in the lobby
 bool mpSearching;					// the Join page listens
+bool mpPrivate;						// internet play: Create game makes a private game (a PIN to join)
+std::string mpPin;					// its PIN, 4 digits
+uint32_t mpJoinTarget;				// Join page: the private game whose PIN is being entered
+std::string mpHostedPin;			// the PIN of the private game this copy hosts or joined (shown in the lobby)
 
 // A short text edited with the stick: up/down changes the letter, left/right moves, A keeps it, B drops it.
 struct TextEdit
@@ -159,7 +165,7 @@ const std::vector<Choice>& choices()
 enum class Action { Resume, Recenter, OpenSection, Back, Choice, WorldSize, Export, Import, UnlockAll, Quit,
 	// Multiplayer
 	MpCreate, MpJoin, MpName, MpMode, MpRoom, MpPoints, MpStartHosting, MpGame, MpRefresh, MpAddress,
-	MpReady, MpStartMatch, MpLeave, LeaveMatch, Info, MpNetwork, MpServer };
+	MpReady, MpStartMatch, MpLeave, LeaveMatch, Info, MpNetwork, MpServer, MpPrivate, MpPin, MpJoinPin };
 struct Entry
 {
 	Action action;
@@ -193,7 +199,7 @@ std::string gameLine(const tcvr::lobby::FoundGame& g)
 {
 	const tcvr::lobby::Beacon& b = g.beacon;
 	char buf[128];
-	snprintf(buf, sizeof(buf), "%s   %s   %s   %d/%d%s", b.hostName.c_str(), ModeNames[b.settings.mode % 3],
+	snprintf(buf, sizeof(buf), "%s%s   %s   %s   %d/%d%s", g.isPrivate ? "[private] " : "", b.hostName.c_str(), ModeNames[b.settings.mode % 3],
 			roomName(b.settings.room % RoomCount).c_str(), b.players, b.maxPlayers, b.started ? "  (started)" : "");
 	return buf;
 }
@@ -223,6 +229,13 @@ std::vector<Entry> mpEntries()
 		list.push_back({ Action::MpMode });
 		list.push_back({ Action::MpRoom });
 		list.push_back({ Action::MpPoints });
+		if (match::internetMode())
+		{
+			// private games: a 4-digit PIN to join (no PIN: public)
+			list.push_back({ Action::MpPrivate });
+			if (mpPrivate)
+				list.push_back({ Action::MpPin });
+		}
 		list.push_back({ Action::MpStartHosting });
 		break;
 	case MpPage::Join:
@@ -238,6 +251,8 @@ std::vector<Entry> mpEntries()
 		}
 		if (match::internetMode())
 		{
+			if (edit.active && edit.action == (int)Action::MpJoinPin)
+				list.push_back({ Action::MpJoinPin });
 			if (games.empty())
 				list.push_back(infoLine("No game on the server yet"));
 			list.push_back({ Action::MpRefresh });
@@ -285,6 +300,8 @@ std::vector<Entry> mpEntries()
 			// internet play: how the match's packets reach each player
 			for (const std::string& path : match::internetPaths())
 				list.push_back(infoLine("Link to " + path));
+			if (match::internetMode())
+				list.push_back(infoLine(mpHostedPin.empty() ? "Public game" : "Private game   PIN " + mpHostedPin));
 			if (v.role == lobby::Role::Host)
 			{
 				if (!match::internetMode())
@@ -305,7 +322,8 @@ std::vector<Entry> mpEntries()
 		else
 		{
 			// refused, host left, failed: say it, and Back
-			list.push_back(infoLine(v.message.empty() ? "The game is closed" : v.message));
+			const std::string refused = match::internetRefusal();		// (internet: "Wrong PIN"...)
+			list.push_back(infoLine(!refused.empty() ? refused : v.message.empty() ? "The game is closed" : v.message));
 			list.push_back({ Action::Back });
 		}
 		break;
@@ -564,6 +582,18 @@ void change(const Entry& e, int step)
 		mpChange(e.action, step, false);
 		return;
 	}
+	if (e.action == Action::MpPrivate)
+	{
+		mpPrivate = !mpPrivate;
+		if (mpPrivate && mpPin.size() != 4)
+		{
+			// a PIN to start from (the player can change it)
+			char buf[8];
+			snprintf(buf, sizeof(buf), "%04u", (unsigned)(std::random_device()() % 10000));
+			mpPin = buf;
+		}
+		return;
+	}
 	if (e.action == Action::MpReady)
 	{
 		const bool ready = step > 0;
@@ -596,6 +626,13 @@ void beginEdit(Action a)
 		edit.text = tcvr::match::playerName();
 		edit.charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
 		edit.maxLen = 3;
+		edit.cursor = 0;
+	}
+	else if (a == Action::MpPin || a == Action::MpJoinPin)
+	{
+		edit.text = a == Action::MpPin ? mpPin : std::string();
+		edit.charset = "0123456789 ";
+		edit.maxLen = 4;
 		edit.cursor = 0;
 	}
 	else if (a == Action::MpServer)
@@ -667,6 +704,33 @@ void commitEdit()
 			return;
 		tcvr::match::setPlayerName(t);
 		setStatus("Player name: " + tcvr::match::playerName());
+	}
+	else if (edit.action == (int)Action::MpPin)
+	{
+		if (tcvr::inet::validPin(t) && !t.empty())
+			mpPin = t;
+		else
+			setStatus("The PIN is 4 digits");
+	}
+	else if (edit.action == (int)Action::MpJoinPin)
+	{
+		if (t.size() != 4 || !tcvr::inet::validPin(t))
+		{
+			setStatus("The PIN is 4 digits");
+			return;
+		}
+		for (const auto& g : tcvr::match::theLobby().games())
+			if (g.hostId == mpJoinTarget)
+			{
+				mpStopSearch();
+				mpReady = false;
+				mpHostedPin = t;
+				tcvr::match::setGamePin(t);
+				tcvr::match::theLobby().join(tcvr::match::identity(), g.address, g.beacon.lobbyPort);
+				mpShow(MpPage::Lobby);
+				return;
+			}
+		setStatus("That game is gone");
 	}
 	else if (edit.action == (int)Action::MpServer)
 	{
@@ -752,7 +816,13 @@ MenuAction accept(const Entry& e)
 	case Action::MpName:
 	case Action::MpAddress:
 	case Action::MpServer:
+	case Action::MpPin:
 		beginEdit(e.action);
+		return MenuAction::None;
+	case Action::MpPrivate:
+		change(e, 1);
+		return MenuAction::None;
+	case Action::MpJoinPin:
 		return MenuAction::None;
 	case Action::MpNetwork:
 	{
@@ -775,6 +845,19 @@ MenuAction accept(const Entry& e)
 	case Action::MpStartHosting:
 	{
 		std::string error;
+		const bool priv = match::internetMode() && mpPrivate;
+		if (!match::internetAllows(priv, error))
+		{
+			setStatus(error);
+			return MenuAction::None;
+		}
+		if (priv && mpPin.size() != 4)
+		{
+			setStatus("Enter a 4-digit PIN first");
+			return MenuAction::None;
+		}
+		mpHostedPin = priv ? mpPin : std::string();
+		match::setGamePin(mpHostedPin);
 		if (match::theLobby().host(match::identity(), mpSettings, error))
 		{
 			mpReady = false;
@@ -789,6 +872,16 @@ MenuAction accept(const Entry& e)
 		for (const auto& g : match::theLobby().games())
 			if (g.hostId == e.id)
 			{
+				if (g.isPrivate)
+				{
+					// its PIN first (the host's copy checks it)
+					mpJoinTarget = g.hostId;
+					beginEdit(Action::MpJoinPin);
+					setStatus("Private game: enter its PIN. Stick: up/down digit, left/right move, A joins, B drops it");
+					return MenuAction::None;
+				}
+				mpHostedPin.clear();
+				match::setGamePin(std::string());
 				mpStopSearch();
 				mpReady = false;
 				match::theLobby().join(match::identity(), g.address, g.beacon.lobbyPort);
@@ -836,7 +929,8 @@ bool hasValue(const Entry& e)
 	if (isMatchLocked(e))
 		return false;
 	return e.action == Action::Choice || e.action == Action::WorldSize || e.action == Action::MpMode
-			|| e.action == Action::MpRoom || e.action == Action::MpPoints || e.action == Action::MpReady;
+			|| e.action == Action::MpRoom || e.action == Action::MpPoints || e.action == Action::MpReady
+			|| e.action == Action::MpPrivate;
 }
 
 std::string lineText(const Entry& e)
@@ -885,6 +979,10 @@ std::string lineText(const Entry& e)
 	}
 	case Action::MpLeave: return "Leave game";
 	case Action::Info: return e.text;
+	case Action::MpPrivate: return mpPrivate ? "Game:  Private (PIN to join)" : "Game:  Public";
+	case Action::MpPin:
+		return "PIN:  " + (edit.active && edit.action == (int)Action::MpPin ? editDisplay() : mpPin);
+	case Action::MpJoinPin: return "PIN:  " + editDisplay();
 	case Action::MpNetwork: return config::VrMpInternet ? "Play over:  Internet" : "Play over:  Local network (Wi-Fi)";
 	case Action::MpServer:
 		if (edit.active && edit.action == (int)Action::MpServer)

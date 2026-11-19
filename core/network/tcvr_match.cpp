@@ -270,6 +270,37 @@ std::string internetLine()
 	return line.empty() ? "Not connected" : line;
 }
 
+static std::shared_ptr<inet::InternetClient> clientNow()
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	return theClient;
+}
+
+void setGamePin(const std::string& pin)
+{
+	if (auto c = clientNow())
+		c->setGamePin(pin);
+}
+
+std::string internetRefusal()
+{
+	auto c = clientNow();
+	return c && config::VrMpInternet ? c->lastRefusal() : std::string();
+}
+
+bool internetAllows(bool isPrivate, std::string& why)
+{
+	auto c = clientNow();
+	if (!c || !config::VrMpInternet)
+		return true;
+	if (!inet::policyAllows(c->policy(), isPrivate))
+	{
+		why = std::string("This server allows ") + inet::policyText(c->policy());
+		return false;
+	}
+	return true;
+}
+
 std::vector<std::string> internetPaths()
 {
 	std::vector<std::string> list;

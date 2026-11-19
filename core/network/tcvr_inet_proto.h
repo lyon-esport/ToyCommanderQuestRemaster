@@ -29,7 +29,7 @@ namespace tcvr::inet
 {
 
 constexpr uint16_t DefaultServerPort = 19800;	// TCP (control) and UDP (registration, relay), same number
-constexpr uint8_t ProtocolVersion = 1;
+constexpr uint8_t ProtocolVersion = 2;	// 2: private games (PIN)
 constexpr size_t MaxFrame = 8192;				// control frame, plaintext
 constexpr size_t MaxDatagram = 1400;			// any UDP datagram we send or accept
 constexpr int MaxMembers = 8;					// a game's members on the server (4 players, and room for comings and goings)
@@ -137,8 +137,8 @@ enum class Ctl : uint8_t
 	Hello = 1,		// c->s  protocol, app version, name, member key, LAN endpoints of its UDP socket
 	Welcome,		// s->c  client id, UDP key, server UDP port, the address the server sees
 	List,			// c->s  the games, please
-	Games,			// s->c  [owner id, the lobby's beacon bytes]...
-	Announce,		// c->s  I host this game (the lobby's beacon bytes); creates the game or updates it
+	Games,			// s->c  [owner id, flags, the lobby's beacon bytes]...
+	Announce,		// c->s  flags, the lobby's beacon bytes: I host this game; creates the game or updates it
 	Unannounce,		// c->s  take my game off the list (it keeps its members)
 	Connect,		// c->s  target id: put me in the game the target is in
 	Connected,		// s->c  target id, ok (u8), reason text
@@ -173,16 +173,27 @@ struct HelloMsg
 	Key memberKey {};
 	std::vector<Endpoint> lanAddrs;
 };
+// Private games: joining needs the game's PIN (4 digits). The PIN only admits players: the host's copy
+// checks it (with a growing wait after wrong ones), the server never sees it, and the encryption keys
+// stay the players' own (a 4-digit number would be far too easy to guess as a key).
+constexpr size_t PinLength = 4;
+bool validPin(const std::string& pin);		// "" (a public game) or exactly 4 digits
+enum class GamePolicy : uint8_t { All = 0, PublicOnly = 1, PrivateOnly = 2 };
+const char *policyText(GamePolicy p);		// "public and private games", ...
+bool policyAllows(GamePolicy p, bool isPrivate);
+
 struct WelcomeMsg
 {
 	uint32_t clientId = 0;
 	Key udpKey {};
 	uint16_t udpPort = 0;
 	Endpoint seenAs;		// the TCP source address as the server saw it (port: TCP's)
+	GamePolicy policy = GamePolicy::All;	// which games this server lets players host
 };
 struct GameEntry
 {
 	uint32_t ownerId = 0;
+	bool isPrivate = false;		// a PIN is needed to join (the host's copy checks it, never the server)
 	std::vector<uint8_t> beacon;
 };
 struct MemberInfo
@@ -194,7 +205,9 @@ struct MemberInfo
 	std::vector<Endpoint> lanAddrs;
 	bool owner = false;
 };
-enum class StreamKind : uint8_t { Open = 1, Data = 2, Close = 3 };
+// Open: sealed u16 port + PIN text. Refused: sealed u8 RefuseWhy (then the stream is gone).
+enum class StreamKind : uint8_t { Open = 1, Data = 2, Close = 3, Refused = 4 };
+enum class RefuseWhy : uint8_t { WrongPin = 1, TooManyTries = 2 };
 struct StreamMsg
 {
 	uint32_t peer = 0;
@@ -209,7 +222,7 @@ std::vector<uint8_t> encode(const WelcomeMsg& m);
 bool decode(Reader& r, WelcomeMsg& m);
 std::vector<uint8_t> encodeGames(const std::vector<GameEntry>& games);
 bool decodeGames(Reader& r, std::vector<GameEntry>& games);
-std::vector<uint8_t> encodeAnnounce(const std::vector<uint8_t>& beacon);
+std::vector<uint8_t> encodeAnnounce(const std::vector<uint8_t>& beacon, bool isPrivate);
 std::vector<uint8_t> encodeConnect(uint32_t target);
 std::vector<uint8_t> encodeConnected(uint32_t target, bool ok, const std::string& why);
 std::vector<uint8_t> encodeMembers(const std::vector<MemberInfo>& members);

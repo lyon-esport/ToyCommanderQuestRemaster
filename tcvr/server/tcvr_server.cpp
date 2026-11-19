@@ -46,7 +46,7 @@ using asio::ip::udp;
 using Clock = std::chrono::steady_clock;
 
 #ifndef TCVR_SERVER_VERSION
-#define TCVR_SERVER_VERSION "1.0"
+#define TCVR_SERVER_VERSION "1.1"
 #endif
 
 namespace
@@ -75,6 +75,8 @@ struct Options
 	size_t maxClients = 200;
 	size_t relayBytesPerSecond = 256 * 1024;	// per client; a 4-player match needs about 20 KB/s
 	int idleSeconds = 30;						// no frame for this long (clients ping every 5 s): dropped
+	GamePolicy policy = GamePolicy::All;		// which games players may host here
+	int privateJoinsPerMinute = 10;				// per address: tries to join private games (slows PIN guessing)
 };
 
 // The server's long-term key: made on the first run, kept in a file (64 hex digits).
@@ -158,6 +160,7 @@ struct Game
 	std::set<uint32_t> members;
 	std::vector<uint8_t> beacon;
 	bool listed = false;
+	bool isPrivate = false;
 };
 
 class Server
@@ -268,6 +271,7 @@ private:
 	std::map<uint32_t, ClientPtr> clients;		// by id, only once ready
 	std::set<ClientPtr> pending;				// handshaking
 	std::map<uint32_t, Game> games;
+	std::map<uint32_t, std::deque<Clock::time_point>> privateJoins;	// by IPv4 address
 	uint32_t nextClient = 1;
 	uint32_t nextGame = 1;
 	udp::endpoint udpFrom;
@@ -440,6 +444,7 @@ private:
 			w.udpKey = c->udpKey;
 			w.udpPort = opt.port;
 			w.seenAs = c->tcpFrom;
+			w.policy = opt.policy;
 			write(c, encode(w));
 			logLine("%s connected, app %s (%zu connected)", c->label().c_str(), h.appVersion.c_str(), clients.size());
 			return;
@@ -451,15 +456,22 @@ private:
 			std::vector<GameEntry> list;
 			for (auto& [id, g] : games)
 				if (g.listed && g.owner != 0)
-					list.push_back({ g.owner, g.beacon });
+					list.push_back({ g.owner, g.isPrivate, g.beacon });
 			write(c, encodeGames(list));
 			break;
 		}
 		case Ctl::Announce:
 		{
+			const bool isPrivate = (r.u8() & 1) != 0;
 			std::vector<uint8_t> beacon = r.blob(512);
 			if (!r.done())
 				return close(c, "bad announce");
+			if (!policyAllows(opt.policy, isPrivate))
+			{
+				// (the game checks the policy from Welcome first; this one doesn't play by it)
+				verboseLog("%s: a %s game refused (%s)", c->label().c_str(), isPrivate ? "private" : "public", policyText(opt.policy));
+				break;
+			}
 			Game *g = c->game ? findGame(c->game) : nullptr;
 			if (g == nullptr)
 			{
@@ -469,7 +481,7 @@ private:
 				games[ng.id] = ng;
 				c->game = ng.id;
 				g = &games[ng.id];
-				logLine("%s hosts game %u", c->label().c_str(), g->id);
+				logLine("%s hosts game %u (%s)", c->label().c_str(), g->id, isPrivate ? "private" : "public");
 			}
 			const bool newOwner = g->owner != c->id;
 			if (newOwner && g->owner != 0)
@@ -478,6 +490,7 @@ private:
 				verboseLog("game %u: %s takes over from #%u", g->id, c->label().c_str(), g->owner);
 			}
 			g->owner = c->id;
+			g->isPrivate = isPrivate;
 			g->beacon = std::move(beacon);
 			g->listed = true;
 			if (newOwner)
@@ -503,6 +516,11 @@ private:
 			}
 			if (c->game != g->id)
 			{
+				if (g->isPrivate && !allowPrivateJoin(c->tcpFrom.ip))
+				{
+					write(c, encodeConnected(target, false, "Too many tries: wait a minute"));
+					break;
+				}
 				if (g->members.size() >= (size_t)MaxMembers)
 				{
 					write(c, encodeConnected(target, false, "The game is full"));
@@ -565,6 +583,21 @@ private:
 	{
 		if (verbose)
 			logLine(fmt, args...);
+	}
+
+	// Joining a private game: at most privateJoinsPerMinute per address (each try costs a PIN guess)
+	bool allowPrivateJoin(uint32_t ip)
+	{
+		auto& q = privateJoins[ip];
+		const auto now = Clock::now();
+		while (!q.empty() && now - q.front() > std::chrono::minutes(1))
+			q.pop_front();
+		if ((int)q.size() >= opt.privateJoinsPerMinute)
+			return false;
+		q.push_back(now);
+		if (privateJoins.size() > 4096)
+			privateJoins.erase(privateJoins.begin());
+		return true;
 	}
 
 	Game *findGame(uint32_t id)
@@ -758,6 +791,7 @@ void usage()
 		"  --key FILE        the server's key file (default tcvr-server.key, made on the first run)\n"
 		"  --max-clients N   at most this many connected players (default 200)\n"
 		"  --relay-kbps N    relay budget per player in KB/s (default 256)\n"
+		"  --games KIND      which games players may host: all (default), public or private\n"
 		"  --verbose         more log lines\n"
 		"  --fingerprint     print the key's fingerprint and exit\n",
 		TCVR_SERVER_VERSION, DefaultServerPort);
@@ -791,6 +825,14 @@ int main(int argc, char **argv)
 			opt.relayBytesPerSecond = (size_t)std::max(1, std::atoi(value().c_str())) * 1024;
 		else if (a == "--verbose")
 			verbose = true;
+		else if (a == "--games")
+		{
+			const std::string v = value();
+			if (v == "all") opt.policy = GamePolicy::All;
+			else if (v == "public") opt.policy = GamePolicy::PublicOnly;
+			else if (v == "private") opt.policy = GamePolicy::PrivateOnly;
+			else { usage(); return 2; }
+		}
 		else if (a == "--fingerprint")
 			printFingerprint = true;
 		else if (a == "--help" || a == "-h" || a == "/?")
@@ -831,8 +873,8 @@ int main(int argc, char **argv)
 	Server server(io, opt, key);
 	if (!server.start())
 		return 1;
-	logLine("tcvr-server %s on port %u (TCP and UDP). Key fingerprint: %s", TCVR_SERVER_VERSION, opt.port,
-			fingerprint(key.pub).c_str());
+	logLine("tcvr-server %s on port %u (TCP and UDP), %s. Key fingerprint: %s", TCVR_SERVER_VERSION, opt.port,
+			policyText(opt.policy), fingerprint(key.pub).c_str());
 	logLine("Players enter this computer's public IP address or DNS name in the VR menu (Multiplayer > Server).");
 	asio::signal_set signals(io, SIGINT, SIGTERM);
 	signals.async_wait([&](const asio::error_code&, int) {

@@ -35,7 +35,6 @@ struct ClientConfig
 	std::string name;			// the player's name
 	std::string appVersion;
 	std::string pinnedKey;		// hex of the server's key as first met ("" = not met yet: trust and report it)
-	std::string password;		// the game password ("" none); every player of a game must use the same
 	uint16_t udpPort = 0;		// this copy's UDP port (0: any)
 	bool forceRelay = false;	// tests: never use a direct path
 	bool noLan = false;			// tests: don't offer this computer's LAN addresses
@@ -79,6 +78,14 @@ public:
 	std::string serverFingerprint();
 	// Called (on the client's thread) when a server is met for the first time: save the pin.
 	void onNewServerKey(std::function<void(const std::string& server, const std::string& keyHex)> f);
+
+	// Private games: the PIN of the game this copy hosts or joins next ("" public). Its host's copy checks it.
+	// Set before Lobby::host() / join(); the copy keeps it (a host handover gives the game to a player who knew it).
+	void setGamePin(const std::string& pin);
+	// Which games the server lets players host (known once online).
+	GamePolicy policy();
+	// Why the last join failed at the host's copy ("Wrong PIN", ...), "" if it didn't; cleared by setGamePin.
+	std::string lastRefusal();
 
 	// The match: network:GGPOPeers for this copy, every other player behind a local UDP port.
 	// hostAddress fills the host's entry (StartInfo::peerList). Empty: a player is not known (any more).

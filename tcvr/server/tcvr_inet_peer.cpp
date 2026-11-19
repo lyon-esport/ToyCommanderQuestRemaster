@@ -5,7 +5,7 @@
 	each answered, so it can tell how many arrived and the round trip. Used by tcvr/tools/inet-nat-test.sh.
 
 	  tcvr-inet-peer --server HOST[:PORT] --name AAA (--host | --join) [--players N] [--seconds S]
-	                 [--password P] [--force-relay] [--no-lan] [--leave-at-full] [--timeout S]
+	                 [--pin NNNN] [--force-relay] [--no-lan] [--leave-at-full] [--timeout S]
 
 	--host           create the game; start it when N players (with this one) are there and ready
 	--join           join the first game the server lists; become host and start it if the host leaves
@@ -73,6 +73,7 @@ int main(int argc, char **argv)
 {
 	inet::ClientConfig cfg;
 	cfg.appVersion = "inet-test";
+	std::string pin;
 	bool hostMode = false, joinMode = false, leaveAtFull = false;
 	int players = 2;
 	int seconds = 20;
@@ -83,7 +84,7 @@ int main(int argc, char **argv)
 		auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
 		if (a == "--server") cfg.server = next();
 		else if (a == "--name") cfg.name = next();
-		else if (a == "--password") cfg.password = next();
+		else if (a == "--pin") pin = next();
 		else if (a == "--host") hostMode = true;
 		else if (a == "--join") joinMode = true;
 		else if (a == "--players") players = std::atoi(next().c_str());
@@ -106,6 +107,7 @@ int main(int argc, char **argv)
 	const std::string me = cfg.name;
 	auto client = std::make_shared<inet::InternetClient>();
 	client->configure(cfg);
+	client->setGamePin(pin);
 	lobby::Lobby lob;
 	lob.setRouter(client);
 
@@ -165,7 +167,7 @@ int main(int argc, char **argv)
 		}
 		const auto g = lob.games().front();
 		lob.stopSearch();
-		say(me, "joining %s's game at %s", g.beacon.hostName.c_str(), g.address.c_str());
+		say(me, "joining %s's %s game at %s", g.beacon.hostName.c_str(), g.isPrivate ? "private" : "public", g.address.c_str());
 		lob.join(id, g.address, g.beacon.lobbyPort);
 	}
 
@@ -189,7 +191,9 @@ int main(int argc, char **argv)
 			break;
 		if (v.phase == lobby::Phase::Refused || v.phase == lobby::Phase::HostLeft || v.phase == lobby::Phase::Failed)
 		{
-			std::printf("RESULT name=%s ok=0 why=lobby:%s\n", me.c_str(), v.message.c_str());
+			const std::string refused = client->lastRefusal();
+			std::printf("RESULT name=%s ok=0 why=lobby:%s%s\n", me.c_str(), v.message.c_str(),
+					refused.empty() ? "" : (" refused:" + refused).c_str());
 			return 1;
 		}
 		if (v.phase == lobby::Phase::InLobby && v.role == lobby::Role::Joiner && !readySent)
