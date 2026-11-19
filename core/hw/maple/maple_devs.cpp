@@ -448,7 +448,7 @@ struct maple_sega_vmu: maple_base
 			file = nullptr;
 			initializeVmu();		// (its fullSave does nothing without a file)
 			fullSaveNeeded = false;
-			INFO_LOG(MAPLE, "VMU %s: online, a blank card in memory", logical_port);
+			NOTICE_LOG(MAPLE, "VMU %s: online, a blank card in memory", logical_port);
 			return;
 		}
 
@@ -501,7 +501,25 @@ struct maple_sega_vmu: maple_base
 		updateMapleLinkScreen();
 	}
 
+	// tcvr: online (a match, its card only in memory), every VMU command but the status ones and the clock
+	// reads is logged ("VMU A1 online: cmd ..."): the headsets showed "VM ACCESS ERROR" in a match (wave 3),
+	// never seen on the PC. Offline too with TCVR_VMULOG set.
 	u32 dma(u32 cmd) override
+	{
+		static const bool diag = getenv("TCVR_VMULOG") != nullptr;
+		if ((!diag && !config::GGPOEnable) || cmd == MDC_DeviceRequest || cmd == MDC_AllStatusReq)
+			return dmaVmu(cmd);
+		const u32 n = dma_count_in;
+		const u32 w0 = n >= 4 ? *(const u32 *)dma_buffer_in : 0;
+		const u32 w1 = n >= 8 ? *(const u32 *)(dma_buffer_in + 4) : 0;
+		const u32 rv = dmaVmu(cmd);
+		if (!(cmd == MDCF_BlockRead && w0 == MFID_3_Clock))
+			NOTICE_LOG(MAPLE, "VMU %s %s: cmd %d fn %08x arg %08x len %d -> %d (file %d)", logical_port, config::GGPOEnable ? "online" : "offline", cmd, w0, w1, n,
+					rv, file != nullptr);
+		return rv;
+	}
+
+	u32 dmaVmu(u32 cmd)
 	{
 		//printf("maple_sega_vmu::dma Called for port %d:%d, Command %d\n", bus_id, bus_port, cmd);
 		switch (cmd)

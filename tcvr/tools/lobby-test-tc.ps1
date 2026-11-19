@@ -53,6 +53,7 @@ param(
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
 	[string]$Name = '',
+	[int]$LogVerbosity = 0,		# the log level of the copies (4 INFO, 5 DEBUG); 0 their own
 	[switch]$KillLast,			# the last copy is killed 20 s into the first match: the others must come back to the lobby
 	[int]$PortOffset = 0		# added to the pad (27241+), GGPO (19913+) and discovery (19790) ports: two tests on one PC at once
 )
@@ -97,6 +98,7 @@ foreach ($peer in $peers) {
 $base = 'config:pvr.rend=0,config:rend.NativeDepthInterpolation=yes,config:aica.Volume=0,log:LogToFile=yes' +
 	',config:vr.Reproject=yes,config:vr.HeadCamera=0,config:vr.Game60=no'
 for ($i = 1; $i -le 4; $i++) { $base += ",input:device$i=" + $(if ($i -le $Players) { 0 } else { 10 }) }
+if ($LogVerbosity) { $base += ",log:Verbosity=$LogVerbosity" }	# 4: INFO lines too (the VMU reads and writes: MAPLE)
 
 function Start-Copy($peer, [bool]$sync) {
 	$env:TCVR_MP_PORT = $peer.GgpoPort
