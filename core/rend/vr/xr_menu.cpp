@@ -54,6 +54,9 @@ using tcvr::lobby::RoomCount;
 bool open;
 bool pausedGame;			// the menu stopped the emulator (and starts it again)
 float placedYaw;			// where the head looked when it opened
+float lastHeadYaw;			// where the head looked at the last update
+float noticeYaw;			// tcvr: where the head looked when the match notice came ("BBB left the match")
+int noticeSeen = 0;
 int page = -1;				// -1: the top page, else a Section
 int selected;
 std::string status;			// the last action's result
@@ -249,7 +252,7 @@ std::vector<Entry> mpEntries()
 							+ " pt" + (r.lines[k].kills > 0 ? " (" + std::to_string(r.lines[k].kills) + " kills)" : std::string());
 				list.push_back(infoLine(line));
 			}
-			list.push_back(infoLine("Host " + s.players[0].name + "   " + ModeNames[s.settings.mode % 3]));
+			list.push_back(infoLine("Host " + s.players[s.hostSlot % lobby::MaxPlayers].name + "   " + ModeNames[s.settings.mode % 3]));
 			list.push_back(infoLine(roomName(s.settings.room % RoomCount) + "   " + tcvr::lobby::limitText(s.settings.mode, s.settings.points)));
 			for (int i = 0; i < lobby::MaxPlayers; i++)
 			{
@@ -259,9 +262,11 @@ std::vector<Entry> mpEntries()
 				std::string line = std::to_string(i + 1) + "   " + p.name;
 				if (i == v.mySlot)
 					line += "  (you)";
-				line += i == 0 ? "   host" : p.ready ? "   ready" : "   not ready";
+				line += i == s.hostSlot ? "   host" : p.ready ? "   ready" : "   not ready";
 				list.push_back(infoLine(line));
 			}
+			if (!v.message.empty())
+				list.push_back(infoLine(v.message));		// (a host handover)
 			if (v.role == lobby::Role::Host)
 			{
 				list.push_back(infoLine("To join by hand: address " + v.hostAddress));
@@ -273,7 +278,7 @@ std::vector<Entry> mpEntries()
 		}
 		else if (v.phase == lobby::Phase::Connecting)
 		{
-			list.push_back(infoLine("Connecting..."));
+			list.push_back(infoLine(v.message.empty() ? "Connecting..." : v.message));
 			list.push_back({ Action::MpLeave });
 		}
 		else if (v.phase == lobby::Phase::Started)
@@ -919,6 +924,7 @@ void keepSelection(const std::vector<Entry>& list)
 
 MenuAction updateMenu(const MenuInput& input, float headYaw)
 {
+	lastHeadYaw = headYaw;
 	// (also with the menu closed: START from the host arrives whenever it likes)
 	tcvr::match::poll();
 	// a match began (the game was loaded again with the netplay on): the menu that started it closes
@@ -1019,10 +1025,32 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 	return MenuAction::None;
 }
 
+// tcvr: with the menu closed, a match notice ("BBB left the match") for a few seconds: one line in front
+// of where the head looked when it came, a little below eye level so it hides little of the game
+static bool noticePanel(Panel& panel, float& yaw)
+{
+	int id;
+	const std::string text = tcvr::match::notice(id);
+	if (text.empty())
+		return false;
+	if (id != noticeSeen)
+	{
+		noticeSeen = id;
+		noticeYaw = lastHeadYaw;
+	}
+	panel = Panel();
+	panel.imageWidth = 1024;
+	panel.imageHeight = 160;
+	panel.widthMetres = 0.8f;
+	panel.lines.push_back({ text, 0.42f, glm::vec3(1.f, 0.85f, 0.3f) });
+	yaw = noticeYaw;
+	return true;
+}
+
 bool menuPanel(Panel& panel, float& yaw)
 {
 	if (!open)
-		return false;
+		return noticePanel(panel, yaw);
 	// tcvr: brighter than before (unpicked lines were 60% grey), for contrast
 	const glm::vec3 red(0.96f, 0.24f, 0.18f), white(1.f), grey(0.66f), yellow(1.f, 0.85f, 0.3f), soft(0.86f, 0.86f, 0.9f);
 	panel = Panel();

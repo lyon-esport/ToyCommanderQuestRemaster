@@ -7,6 +7,7 @@
 
 #include "ggpo_types.h"
 #include "udp.h"
+#include <cstdlib>
 
 SOCKET
 CreateSocket(uint16 bind_port, int retries)
@@ -30,7 +31,10 @@ CreateSocket(uint16 bind_port, int retries)
 #endif
 
    sin.sin_family = AF_INET;
-   sin.sin_addr.s_addr = htonl(INADDR_ANY);
+   // TCVR_NET_LOOPBACK=1 (PC test copies that all talk over 127.0.0.1): listen on loopback only, so the
+   // system firewall never asks about each new test copy
+   const char *loop = getenv("TCVR_NET_LOOPBACK");
+   sin.sin_addr.s_addr = htonl(loop != nullptr && loop[0] == '1' ? INADDR_LOOPBACK : INADDR_ANY);
    for (port = bind_port; port <= bind_port + retries; port++) {
       sin.sin_port = htons(port);
       if (bind(s, (sockaddr *)&sin, sizeof sin) == 0) {

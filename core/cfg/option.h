@@ -505,6 +505,8 @@ extern OptionString VrMpName;
 extern Option<int> VrMpMarker;
 extern Option<bool> VrMpReturn;
 extern OptionString VrMpSetup;
+extern OptionString VrMpNames;
+extern OptionString VrMpEndText;
 extern Option<bool> CustomTextures;
 extern Option<bool> PreloadCustomTextures;
 extern Option<bool> DumpTextures;

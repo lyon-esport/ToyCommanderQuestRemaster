@@ -138,6 +138,7 @@ static int msPerFrameAvg;
 static bool _endOfFrame;
 static MiniUPnP miniupnp;
 static int analogAxes;
+static int gonePlayers;		// tcvr: bit n: player n+1 left the session (on_event)
 static bool absPointerPos;
 static bool dcPad;		// tcvr: a console pad: buttons, stick, both triggers, head (Inputs::u.pad)
 static bool keyboardGame;
@@ -271,12 +272,32 @@ static bool on_event(GGPOEvent *info)
 		synchronized = true;
 		break;
 	case GGPO_EVENTCODE_DISCONNECTED_FROM_PEER:
-		INFO_LOG(NETWORK, "Disconnected from peer %d", info->u.disconnected.player);
-		// tcvr: in a VR match the error below is a 2D popup nobody sees: the match ends instead (the game
-		// starts again in single player, the VR menu says the match is over)
-		tcvr::match::peerLost();
+	{
+		// tcvr (multiplayer task 1.4): with 3 or 4 players the match goes on without the player who left.
+		// GGPO agrees with every other copy on the last frame it had from that player; from the next frame
+		// its input is all zero on every copy: no button, stick and triggers at rest (getInput). Its vehicle
+		// stays where it is. The event can come again for the same player when that frame moves back.
+		const int who = info->u.disconnected.player - 1;
+		const bool known = who >= 0 && who < MAX_PLAYERS && (gonePlayers & (1 << who)) != 0;
+		if (who >= 0 && who < MAX_PLAYERS)
+			gonePlayers |= 1 << who;
+		int others = 0;
+		for (int i = 0; i < numPlayers; i++)
+			others += i != localPlayerNum && (gonePlayers & (1 << i)) == 0;
+		NOTICE_LOG(NETWORK, "GGPO: player %d left (last saved frame %d), %d other player(s) still here%s", who + 1, lastSavedFrame,
+				others, known ? " (its last frame moved back)" : "");
+		if (known)
+			break;
+		tcvr::match::playerLeft(who, others == 0);
+		if (others > 0 && numPlayers > 2 && !config::GGPOPeers.get().empty())
+		{
+			os_notify(T("A player left"), 3000);
+			break;
+		}
+		// in a VR match the error below is a 2D popup nobody sees: the match ends instead (the game starts
+		// again in single player, the VR menu says why)
 		throw FlycastException(Ts("Disconnected from peer"));
-		break;
+	}
 	case GGPO_EVENTCODE_TIMESYNC:
 		INFO_LOG(NETWORK, "Timesync: %d frames ahead", info->u.timesync.frames_ahead);
 		timesyncOccurred += 5;
@@ -758,6 +779,7 @@ void startSession(int localPort, int localPlayerNum)
 	if (const char *path = getenv("HOTD2VR_SYNCLOG"); path != nullptr && syncLog == nullptr)
 		syncLog = fopen(path, "w");
 	heldAim = {};
+	gonePlayers = 0;
 	for (auto& handle : playerHandles)
 		handle = {};
 

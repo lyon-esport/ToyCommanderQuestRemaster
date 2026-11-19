@@ -46,12 +46,18 @@ void setPlayerName(const std::string& name);
 void poll();
 // True while this run of the game is a match.
 bool inMatch();
-// A player left or the network dropped (GGPO gave up on a peer): the next poll() ends the match.
-void peerLost();
+// The netplay gave up on a player (it left, or its network dropped). With 3 or 4 players the match goes on
+// while another player is still there (the gone player's pad is neutral from then on, the same on every copy):
+// a notice says who left. Otherwise (2 players, or this copy is alone now) the next poll() ends the match:
+// back to the lobby in the running app, the VR menu says why. player: 0-based; allGone: no other player is left.
+void playerLeft(int player, bool allGone);
+// A short line to show in the headset now (a player left), "" for none; id changes with each new notice.
+std::string notice(int& id);
 // GGPO: a player's copy went silent (paused: headset off, the app in the background) or came back.
 void peerInterrupted(int player, bool interrupted);
-// The player left the match from the VR menu (or wants out): netplay off, the game loaded again.
-std::string leaveMatch();
+// The player left the match from the VR menu (or wants out): netplay off, the game loaded again in the
+// running app. why: the line the VR menu shows then ("" = "You left the match").
+std::string leaveMatch(const std::string& why = "");
 
 // Matches start and end inside the running app: the game is loaded again with the netplay options on
 // (or off). True once when the render thread should do that now (gui_start_game, mainui.cpp).
@@ -78,6 +84,8 @@ struct Results
 Results results();
 // Why the last match ended ("" if none yet this run).
 std::string lastEnd();
+// The same, "The match is over" when empty (the RETURN test command, the menu).
+std::string endText();
 
 // Called at each game load, before the netplay starts (emulator.cpp).
 void gate();
