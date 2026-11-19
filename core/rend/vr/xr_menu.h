@@ -30,6 +30,9 @@ struct MenuInput
 enum class MenuAction { None, Recenter };
 
 bool menuOpen();
+// Dreamcast buttons (DC_BTN_*) the menu presses on the game's first pad this headset frame, after
+// updateMenu: B to leave the game's own Multiplayer page, whose place the VR menu takes.
+uint32_t gameButtons();
 // Once per headset frame with the controllers' state (gamepad mode). headYaw: where the head
 // looks (radians, relative to the game camera's direction), for placing the menu when it opens.
 MenuAction updateMenu(const MenuInput& input, float headYaw);

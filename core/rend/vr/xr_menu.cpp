@@ -22,6 +22,7 @@
 #include "log/Log.h"
 #include "network/tcvr_lobby.h"
 #include "network/tcvr_match.h"
+#include "input/gamepad.h"
 #include "stdclass.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -929,6 +930,98 @@ void keepSelection(const std::vector<Entry>& list)
 	lastGames = games;
 }
 
+// The game's own Multiplayer (Manu, 2026-11-19): the Dreamcast's team and vehicle page waits for more pads
+// plugged in, but in VR the players are other headsets, met in the VR menu's Multiplayer section. When that
+// page opens in single player, the menu player leaves it with B (as on the Dreamcast: the "MASTER" quarter
+// aborts the page, the game goes back to its main menu) and the VR menu opens on its Multiplayer section.
+static struct GameMultiplayer
+{
+	enum class Step { Idle, Leaving, Left, Failed } step = Step::Idle;
+	int seen = 0;			// headset frames in a row with the page open (a word read mid-frame can flicker)
+	int tries = 0;
+	std::chrono::steady_clock::time_point pressUntil, nextPress, goneSince;
+	bool gone = false;
+} gm;
+static uint32_t gmButtons;
+
+uint32_t gameButtons()
+{
+	return gmButtons;
+}
+
+static void redirectGameMultiplayer(float headYaw)
+{
+	using namespace std::chrono;
+	gmButtons = 0;
+	if (!emu.running())
+		return;		// (paused, loading: the page is neither open nor gone)
+	const auto now = steady_clock::now();
+	const bool page = !open && !pausedGame && tcvr::match::gameSetupPageOpen();
+	switch (gm.step)
+	{
+	case GameMultiplayer::Step::Idle:
+		gm.seen = page ? gm.seen + 1 : 0;
+		if (gm.seen >= 3)
+		{
+			NOTICE_LOG(RENDERER, "XR menu: the game's Multiplayer page opened: leaving it for the VR menu's");
+			gm.step = GameMultiplayer::Step::Leaving;
+			gm.tries = 0;
+			gm.gone = false;
+			gm.nextPress = now + milliseconds(100);	// (the menu player's quarter is ready for B)
+		}
+		break;
+	case GameMultiplayer::Step::Leaving:
+		if (open)
+		{
+			gm.step = GameMultiplayer::Step::Failed;	// the player opened the menu meanwhile
+			break;
+		}
+		if (!page && !pausedGame)
+		{
+			if (!gm.gone)
+			{
+				gm.gone = true;
+				gm.goneSince = now;
+			}
+			// the main menu back on screen behind the VR menu
+			if (now - gm.goneSince >= milliseconds(300))
+			{
+				NOTICE_LOG(RENDERER, "XR menu: the game's Multiplayer page left (%d presses): VR menu, Multiplayer", gm.tries);
+				gm.step = GameMultiplayer::Step::Left;
+				openMenu(headYaw);
+				showPage((int)Section::Multiplayer);
+			}
+			break;
+		}
+		gm.gone = false;
+		if (now < gm.pressUntil)
+			gmButtons = DC_BTN_B;
+		else if (now >= gm.nextPress)
+		{
+			if (gm.tries >= 5)
+			{
+				WARN_LOG(RENDERER, "XR menu: the game's Multiplayer page did not close with B");
+				gm.step = GameMultiplayer::Step::Failed;
+				break;
+			}
+			gm.tries++;
+			gm.pressUntil = now + milliseconds(120);
+			gm.nextPress = now + milliseconds(500);
+			gmButtons = DC_BTN_B;
+		}
+		break;
+	case GameMultiplayer::Step::Left:
+	case GameMultiplayer::Step::Failed:
+		// once the page is gone (and the menu closed), a new choice of Multiplayer goes the same way
+		if (!page && !open)
+		{
+			gm.step = GameMultiplayer::Step::Idle;
+			gm.seen = 0;
+		}
+		break;
+	}
+}
+
 MenuAction updateMenu(const MenuInput& input, float headYaw)
 {
 	lastHeadYaw = headYaw;
@@ -953,6 +1046,7 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 		setStatus(why.empty() ? "The match is over" : why);
 		return MenuAction::None;
 	}
+	redirectGameMultiplayer(headYaw);
 	if (input.toggle)
 	{
 		if (open)

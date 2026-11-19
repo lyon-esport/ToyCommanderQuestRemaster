@@ -2080,6 +2080,8 @@ void updateGamepad(XrTime time)
 			else
 				swallow = false;
 		}
+		// the menu's own presses on the game's pad (B to leave the game's Multiplayer page)
+		buttons |= gameButtons();
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };

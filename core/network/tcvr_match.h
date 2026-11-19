@@ -100,6 +100,11 @@ bool takeReturn();
 // same game; the copies only read memory to know where the game is.
 uint32_t setupButtons();
 
+// Single player (not a match): the game's own team and vehicle page is open, the player chose Multiplayer
+// in the game's main menu. That page waits for more pads plugged into the Dreamcast; in VR, multiplayer is
+// the VR menu's, which leaves the page and opens its Multiplayer section instead (xr_menu.cpp).
+bool gameSetupPageOpen();
+
 // The options a START puts in emu.cfg, as text "key=value" lines, for the tests.
 std::vector<std::string> optionsFor(const lobby::StartInfo& info, const std::string& hostAddress);
 

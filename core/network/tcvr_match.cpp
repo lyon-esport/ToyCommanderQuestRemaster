@@ -948,6 +948,13 @@ uint32_t setupButtons()
 	return s.holdLeft > 0 ? (s.holdLeft--, s.holding) : 0;
 }
 
+bool gameSetupPageOpen()
+{
+	if (inMatch() || !emu.running() || settings.content.gameId != "MK-5102050")	// Toy Commander (Europe)
+		return false;
+	return onPage(SetupPageBit);
+}
+
 namespace
 {
 
