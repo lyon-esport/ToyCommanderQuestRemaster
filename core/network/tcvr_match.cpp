@@ -208,6 +208,9 @@ void setPlayerName(const std::string& name)
 
 static std::atomic<bool> lostPeer;
 static std::atomic<bool> resultsDone;		// the game's results page has been and gone (setupButtons)
+// From the match's game start until its arena is on screen, the headsets show "Starting the match..."
+// instead of the game: the start screens and menus the automatic setup goes through are not the players'.
+static std::atomic<bool> setupShowing;
 
 // Whether this copy was the one away when the others went silent: its own app stood still for seconds
 // (process frozen, headset asleep). Not the game's frames: while one copy is away the others' games
@@ -370,6 +373,7 @@ static std::string endMatch(const std::string& why)
 	active = false;
 	lostPeer = false;
 	resultsDone = false;
+	setupShowing = false;
 	selfAway = false;
 	lastOwnFrameMs = 0;
 	awaySinceMs = 0;
@@ -526,7 +530,13 @@ bool panelText(std::string& line, std::string& detail)
 		return false;
 	std::lock_guard<std::mutex> lock(pausedMutex);
 	if (pausedPlayers.empty())
-		return false;
+	{
+		if (!setupShowing)
+			return false;
+		line = "Starting the match...";
+		detail = "Loading the arena";
+		return true;
+	}
 	const auto& p = pausedPlayers.front();
 	// GGPO says "interrupted" after 2 s of silence and gives up after 10 s (ggpo.cpp)
 	const int left = std::max(0, 10 - 2 - (int)std::chrono::duration<float>(std::chrono::steady_clock::now() - p.second).count());
@@ -587,6 +597,7 @@ void gate()
 			saveInt(config::VrMpMarker, -1);		// running: any later load that finds this is a left-over
 			NOTICE_LOG(NETWORK, "MP match: this game start is a match");
 			resetWatch();			// (a second match in the same run of the app starts from scratch)
+			setupShowing = true;
 			resultsDone = false;
 			lostPeer = false;
 			clearPaused();
@@ -628,6 +639,7 @@ namespace
 constexpr u32 MenuRequest = 0x8C0A5A6C;		// menu page request bits
 constexpr u32 SetupPageBit = 0x4000;		// team and vehicle page
 constexpr u32 OptionsPageBit = 0x10000;		// multiplayer options page
+constexpr u32 CatMessageBit = 0x40000;		// cat game: "The cat is of team n"
 constexpr u32 OneTeamBit = 0x10000000;		// "Only one team has been selected... continue?" (A yes, B no)
 constexpr u32 Slots = 0x8C0A6048;			// 4 x 0x28: +0 team, +4 vehicle, +8 state (0 none, 1 pad, 2 choosing, 3 ready)
 constexpr u32 OptRoom = 0x8C0A5AD0;
@@ -658,8 +670,8 @@ const Timed bootRoute[] = {
 	{ 29 * Fps + 30, DC_DPAD_RIGHT }, { 31 * Fps, DC_BTN_A }, { 38 * Fps, DC_DPAD_DOWN }, { 40 * Fps, DC_BTN_A },
 };
 
-enum class Step { Off, Boot, WaitSetup, Ready, WaitOptions, Options, Back, WaitBack,
-	GuestWait, GuestJoin, Done, Failed };
+enum class Step { Off, Boot, WaitSetup, WaitGuests, Ready, WaitOptions, Options, Confirm, WaitStart,
+	GuestWait, GuestJoin, GuestReady, Done, Failed };
 
 struct Setup
 {
@@ -677,7 +689,11 @@ struct Setup
 	bool optionsLeft = false;
 	int mode = 0, room = 0, points = 10;
 	int limitIndex = lobby::DefaultLimitIndex;
+	int doneFrame = -1;		// when the setup was done (the arena loads)
+	int catSeen = -1;		// Cat and Mice: the cat message page seen since
 } su;
+
+constexpr u32 MultiplayerFlag = 0x8C0A5AC4;	// set while a multiplayer arena is loaded
 
 void go(Step s)
 {
@@ -697,6 +713,9 @@ void fail(const char *why)
 {
 	WARN_LOG(NETWORK, "MP SETUP failed: %s (frame %d)", why, su.frame);
 	go(Step::Failed);
+	// the players see the game's own pages and can go on by hand
+	if (setupShowing.exchange(false))
+		NOTICE_LOG(NETWORK, "MP SETUP: the game's pages are shown (setup failed)");
 }
 
 int since() { return su.frame - su.stepFrame; }
@@ -801,6 +820,11 @@ uint32_t setupButtons()
 	}
 	s.frame++;
 	watchResults(s.frame);
+	if (setupShowing && s.frame > 150 * Fps)
+	{
+		setupShowing = false;
+		WARN_LOG(NETWORK, "MP SETUP: still not in the arena after 150 s, the game is shown");
+	}
 	if (s.holdLeft > 0)
 	{
 		s.holdLeft--;
@@ -824,13 +848,29 @@ uint32_t setupButtons()
 		break;
 	case Step::WaitSetup:
 		if (onPage(SetupPageBit))
-			go(Step::Ready);
+			go(Step::WaitGuests);
 		else if (since() > 15 * Fps)
 			fail("the team and vehicle page did not open");
 		break;
+	case Step::WaitGuests:
+	{
+		// the other players join the page and get ready by themselves (GuestJoin, GuestReady); player 1 is
+		// ready last, so the page ends with everybody in (it ends once nobody is still choosing)
+		const int n = std::clamp(ggpo::playerCount(), 1, 4);
+		bool all = true;
+		for (int p = 1; p < n; p++)
+			all = all && slotState(p) >= 3;
+		if (all || since() > 30 * Fps)
+		{
+			if (!all)
+				WARN_LOG(NETWORK, "MP SETUP: not every player is ready after 30 s, player 1 goes on");
+			go(Step::Ready);
+		}
+		break;
+	}
 	case Step::Ready:
-		// player 1 alone ready (the others have not joined yet): the game goes to its options page
-		if (since() > Fps / 2)
+		// player 1 ready, the others already are: the game goes to its options page
+		if (since() > Fps / 4)
 		{
 			tap(DC_BTN_A);
 			go(Step::WaitOptions);
@@ -877,7 +917,7 @@ uint32_t setupButtons()
 		if (want < 0)
 		{
 			NOTICE_LOG(NETWORK, "MP SETUP: options entered: room %d mode %d limit index %d", room, mode, limit);
-			go(Step::Back);
+			go(Step::Confirm);
 		}
 		else if (++s.tries > 60)
 			fail("the options did not take the match's settings");
@@ -893,36 +933,36 @@ uint32_t setupButtons()
 			tap(DC_DPAD_RIGHT);
 		break;
 	}
-	case Step::Back:
-		tap(DC_BTN_B);
-		go(Step::WaitBack);
+	case Step::Confirm:
+		// A confirms the options page: the match starts
+		tap(DC_BTN_A);
+		go(Step::WaitStart);
 		break;
-	case Step::WaitBack:
-		if (onPage(SetupPageBit) && !onPage(OptionsPageBit))
+	case Step::WaitStart:
+		if (!onPage(OptionsPageBit) && !onPage(SetupPageBit))
 		{
-			NOTICE_LOG(NETWORK, "MP SETUP done: team and vehicle page, room %d mode %d limit index %d (frame %d)", read32(OptRoom), read32(OptMode), read32(OptLimit), s.frame);
+			NOTICE_LOG(NETWORK, "MP SETUP done: the match starts, room %d mode %d limit index %d (frame %d)", read32(OptRoom), read32(OptMode), read32(OptLimit), s.frame);
+			s.doneFrame = s.frame;
 			go(Step::Done);
 		}
 		else if (since() > 2 * Fps)
 		{
 			if (++s.tries > 3)
-				fail("no way back from the options page");
+				fail("the options page did not start the match");
 			else
 			{
-				tap(DC_BTN_B);
+				tap(DC_BTN_A);
 				s.stepFrame = s.frame;
 			}
 		}
 		break;
 	case Step::GuestWait:
-		// join the team page once player 1 has been to the options page and is back (or after a while)
-		if (onPage(OptionsPageBit))
-			s.optionsSeen = true;
+		// join the team page as soon as it is open (player 1 waits there until everybody is ready)
 		if (onPage(SetupPageBit))
 		{
 			if (s.setupSeen < 0)
 				s.setupSeen = s.frame;
-			if ((s.optionsSeen && !onPage(OptionsPageBit)) || s.frame - s.setupSeen > 20 * Fps)
+			if (s.frame - s.setupSeen > Fps / 2)
 				go(Step::GuestJoin);
 		}
 		else if (s.frame > 90 * Fps)
@@ -931,8 +971,8 @@ uint32_t setupButtons()
 	case Step::GuestJoin:
 		if (slotState(ggpo::localPlayerIndex()) >= 2)
 		{
-			NOTICE_LOG(NETWORK, "MP SETUP done: player %d on the team and vehicle page (frame %d)", ggpo::localPlayerIndex() + 1, s.frame);
-			go(Step::Done);
+			NOTICE_LOG(NETWORK, "MP SETUP: player %d on the team and vehicle page (frame %d)", ggpo::localPlayerIndex() + 1, s.frame);
+			go(Step::GuestReady);
 		}
 		else if (s.tries++ > 4)
 			fail("could not join the team and vehicle page");
@@ -940,6 +980,53 @@ uint32_t setupButtons()
 		{
 			tap(DC_BTN_START);
 			s.gapLeft = Fps / 2;
+		}
+		break;
+	case Step::GuestReady:
+		// the vehicle the page offers, and ready (the team is the player's own: every player is a team)
+		if (slotState(ggpo::localPlayerIndex()) >= 3)
+		{
+			NOTICE_LOG(NETWORK, "MP SETUP done: player %d ready (frame %d)", ggpo::localPlayerIndex() + 1, s.frame);
+			s.doneFrame = s.frame;
+			go(Step::Done);
+		}
+		else if (!onPage(SetupPageBit) && s.tries > 0)
+		{
+			// (the page already ended: player 1 went on)
+			s.doneFrame = s.frame;
+			go(Step::Done);
+		}
+		else if (s.tries++ > 4)
+			fail("could not get ready on the team and vehicle page");
+		else
+		{
+			tap(DC_BTN_A);
+			s.gapLeft = Fps / 2;
+		}
+		break;
+	case Step::Done:
+		// the arena on screen (no menu page, the multiplayer flag set) for half a second: the panel goes
+		if (setupShowing && s.doneFrame >= 0)
+		{
+			// Cat and Mice: "The cat is of team n" waits for a press; player 1 presses on
+			if (ggpo::localPlayerIndex() == 0 && onPage(CatMessageBit))
+			{
+				if (s.catSeen < 0)
+					s.catSeen = s.frame;
+				else if (s.frame - s.catSeen > 2 * Fps)
+				{
+					tap(DC_BTN_A);
+					s.catSeen = s.frame;
+				}
+			}
+			const bool arena = read32(MultiplayerFlag) != 0 && !onPage(SetupPageBit) && !onPage(OptionsPageBit) && !onPage(CatMessageBit);
+			if (!arena)
+				s.stepFrame = s.frame;
+			if ((arena && since() > Fps / 2) || s.frame - s.doneFrame > 60 * Fps)
+			{
+				setupShowing = false;
+				NOTICE_LOG(NETWORK, "MP SETUP: the arena is on screen (frame %d)%s", s.frame, arena ? "" : ", or so it seems: a minute went by");
+			}
 		}
 		break;
 	default:
