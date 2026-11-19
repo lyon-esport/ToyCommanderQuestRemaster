@@ -48,9 +48,8 @@ const char *const SectionNames[] = { "Display", "Image quality", "Performance", 
 // The Multiplayer section's own pages.
 enum class MpPage { Top, Create, Join, Lobby };
 const char *const MpPageNames[] = { "Multiplayer", "Create game", "Join game", "Lobby" };
-const char *const ModeNames[] = { "Deathmatch", "Cat and Mice", "Capture the Flag" };
-constexpr int RoomCount = 8;		// (names come with the game's own options page, task 3.4)
-const uint16_t PointSteps[] = { 5, 10, 15, 20, 30, 50 };
+using tcvr::lobby::ModeNames;
+using tcvr::lobby::RoomCount;
 
 bool open;
 bool pausedGame;			// the menu stopped the emulator (and starts it again)
@@ -185,7 +184,8 @@ Entry infoLine(const std::string& text)
 
 bool isInfo(const Entry& e) { return e.action == Action::Info; }
 
-std::string roomName(int room) { return "Arena " + std::to_string(room + 1); }
+constexpr uint8_t MatchInputDelay = 2;
+std::string roomName(int room) { return tcvr::lobby::RoomNames[room % RoomCount]; }
 
 std::string gameLine(const tcvr::lobby::FoundGame& g)
 {
@@ -240,7 +240,7 @@ std::vector<Entry> mpEntries()
 		{
 			const lobby::State& s = v.state;
 			list.push_back(infoLine("Host " + s.players[0].name + "   " + ModeNames[s.settings.mode % 3]));
-			list.push_back(infoLine(roomName(s.settings.room % RoomCount) + "   " + std::to_string(s.settings.points) + " points to win"));
+			list.push_back(infoLine(roomName(s.settings.room % RoomCount) + "   " + tcvr::lobby::limitText(s.settings.mode, s.settings.points)));
 			for (int i = 0; i < lobby::MaxPlayers; i++)
 			{
 				const lobby::PlayerInfo& p = s.players[i];
@@ -489,13 +489,10 @@ bool isMatchLocked(const Entry& e)
 	return e.action == Action::Choice && inMatch() && choices()[e.index].matchLocked;
 }
 
+// the limit line's step, as the game's options page counts it (one index for every mode)
 int pointsIndex()
 {
-	int best = 0;
-	for (int i = 1; i < (int)(sizeof(PointSteps) / sizeof(PointSteps[0])); i++)
-		if (std::abs((int)PointSteps[i] - (int)mpSettings.points) < std::abs((int)PointSteps[best] - (int)mpSettings.points))
-			best = i;
-	return best;
+	return tcvr::lobby::limitIndex(mpSettings.mode, mpSettings.points);
 }
 
 // Mode, Room and Points to win: step (stick) or go round (A).
@@ -508,11 +505,16 @@ void mpChange(Action a, int step, bool wrap)
 		return std::clamp(v, 0, count - 1);
 	};
 	if (a == Action::MpMode)
+	{
+		// the game keeps the limit's step when the mode changes (points <-> time)
+		const int index = pointsIndex();
 		mpSettings.mode = (uint8_t)move(mpSettings.mode, 3);
+		mpSettings.points = (uint16_t)tcvr::lobby::limitValue(mpSettings.mode, index);
+	}
 	else if (a == Action::MpRoom)
 		mpSettings.room = (uint8_t)move(mpSettings.room, RoomCount);
 	else if (a == Action::MpPoints)
-		mpSettings.points = PointSteps[move(pointsIndex(), (int)(sizeof(PointSteps) / sizeof(PointSteps[0])))];
+		mpSettings.points = (uint16_t)tcvr::lobby::limitValue(mpSettings.mode, move(pointsIndex(), tcvr::lobby::LimitCount));
 }
 
 void change(const Entry& e, int step)
@@ -746,8 +748,8 @@ MenuAction accept(const Entry& e)
 	case Action::MpStartMatch:
 	{
 		std::string error;
-		// (the saved GGPO delay, 0 by default: a delay of 2 hits an old GGPO assertion, input_queue.cpp, see the PR)
-		if (!match::theLobby().start((uint8_t)std::max(0, (int)config::GGPODelay), error))
+		// 2 frames of input delay (33 ms at 60 Hz): fewer rollbacks on Wi-Fi, which the headsets pay for
+		if (!match::theLobby().start(MatchInputDelay, error))
 			setStatus(error);
 		else
 			setStatus("Starting the match...");
@@ -799,7 +801,7 @@ std::string lineText(const Entry& e)
 		return "Player name:  " + (edit.active && edit.action == (int)Action::MpName ? editDisplay() : tcvr::match::playerName());
 	case Action::MpMode: return std::string("Mode:  ") + ModeNames[mpSettings.mode % 3];
 	case Action::MpRoom: return "Room:  " + roomName(mpSettings.room % RoomCount);
-	case Action::MpPoints: return "Points to win:  " + std::to_string(mpSettings.points);
+	case Action::MpPoints: return std::string(mpSettings.mode == 1 ? "Time limit:  " : "Points to win:  ") + tcvr::lobby::limitText(mpSettings.mode, mpSettings.points);
 	case Action::MpStartHosting: return "Start hosting";
 	case Action::MpGame: return e.text;
 	case Action::MpRefresh: return "Refresh";

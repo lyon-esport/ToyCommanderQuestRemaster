@@ -1077,12 +1077,14 @@ bool nextFrame()
 			throw FlycastException("GGPO error");
 	}
 
+	// tcvr: the automatic match setup's presses on this copy's pad (once per new frame)
+	const u32 setupPresses = dcPad ? tcvr::match::setupButtons() : 0;
 	// may call save_game_state
 	do {
 		if (!config::ThreadedRendering)
 			os_UpdateInputState();
 		Inputs inputs{};
-		inputs.kcode = ~kcode[0];
+		inputs.kcode = ~kcode[0] | setupPresses;
 		if (dcPad)
 		{
 			// (the triggers go as they are, not as the two buttons below)

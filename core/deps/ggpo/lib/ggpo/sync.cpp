@@ -49,8 +49,19 @@ Sync::SetLastConfirmedFrame(int frame)
 {   
    _last_confirmed_frame = frame;
    if (_last_confirmed_frame > 0) {
-      for (int i = 0; i < _config.num_players; i++) {
-         _input_queues[i].DiscardConfirmedFrames(frame - 1);
+      /*
+       * tcvr: with a frame delay, every player's inputs can be confirmed beyond the
+       * frame this copy runs next (they were sent ahead). Never discard a frame the
+       * game has not been given yet: when the game skips reading the pads for a while
+       * (a loading screen) nothing else holds the queue back, the tail went past the
+       * current frame and the next pad read failed (input_queue.cpp, "requested_frame
+       * >= _inputs[_tail].frame").
+       */
+      int discard = MIN(frame - 1, _framecount - 1);
+      if (discard >= 0) {
+         for (int i = 0; i < _config.num_players; i++) {
+            _input_queues[i].DiscardConfirmedFrames(discard);
+         }
       }
    }
 }

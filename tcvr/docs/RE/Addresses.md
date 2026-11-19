@@ -97,10 +97,12 @@ the mission table's target (+0x4C), else to 2, then runs the unlock rules `0x8C0
 | `0x8C0A5A6C` | menu request bits: 0x4000 team/vehicle setup `0x8C02CB48`, 0x10000 multiplayer options `0x8C02D368`, 0x40000 cat message `0x8C02E340`, 0x80000000 end-of-match results `0x8C02FAD8`; input for all of them in `0x8C031DE0` |
 | `0x8C0A6048` | player slots, 4 x 0x28: +0 team 0..3, +4 vehicle 0..26 (models `0x8C0CD418`, 0x4C each), +8 state (0 no pad, 1 pad present, 2 choosing, 3 ready) |
 | `0x8C0A72D4` | menu player record (the "MASTER" quarter) |
-| `0x8C0A5AD0` | options: room, index into the unlocked arenas (table `0x8C0CBE48`, 0x14 each, rooms mask `0x8C0A5A5C`) |
-| `0x8C0A5ACC` | options: mode (0 Deathmatch, 1 cat game with time limit, 2 third mode) |
+| `0x8C0A5AD0` | options: room, index into the unlocked arenas (table `0x8C0CBE48`, 0x14 each, rooms mask `0x8C0A5A5C`); with every room open 0..7 = Kitchen and dining room, Two children's bedrooms, Hallway and its mezzanine, Parent's bedroom, Garage and tool room, Attic, Living room and winter garden, Cellar |
+| `0x8C0A5ACC` | options: mode (0 Deathmatch, 1 Cat and Mice (time limit), 2 Capture the Flag) |
 | `0x8C0A5AC8` | options: "Active Environment" On / Off |
-| `0x8C0A60E8` / `0x8C0A60EC` | options: limit index 0..21 / limit value (points, or seconds in mode 1), set when the page is confirmed |
+| `0x8C0A60E8` / `0x8C0A60EC` | options: limit index 0..21, live while the page is open and kept when it is left with B (0 no limit, then 1..10, 15, 20, 25, 30, 40..100 points; in mode 1 30, 60, 90, 120, 180 .. 1140 s; default 10) / limit value, set when the page is confirmed |
+| `0x8C0A5A78` | options page cursor line: 0 Room, 1 Mode, 2 Active Environment, 3 limit (starts on 0 each time the page opens) |
+| `0x8C0A5A6C` bit `0x10000000` | "Only one team has been selected... continue?" (A yes, B no), before the options page when one team is ready. The word reads differently mid-frame (bits come and go): read it at the end of a frame |
 | `0x8C0A5AD4` | cat game: team holding the cat (8 = none) |
 | `0x8C0C7DD4` | team scores, 4 x u32 by team (cleared when the options page is confirmed) |
 | `0x8C0CDC68` | kill table, 4 rows x 0x14 (killer x victim, column 4 team points) |

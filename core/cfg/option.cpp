@@ -139,6 +139,7 @@ Option<int> VrMpLocalPlayer("vr.MpLocalPlayer", 0);	// tcvr: split screen shows 
 OptionString VrMpName("vr.MpName", "");
 Option<int> VrMpMarker("vr.MpMarker", 0);
 Option<bool> VrMpReturn("vr.MpReturn", false);
+OptionString VrMpSetup("vr.MpSetup", "");	// tcvr: the match's settings from the lobby, "mode,room,points" (the automatic setup enters them)
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");
 Option<bool> DumpTextures("rend.DumpTextures");
