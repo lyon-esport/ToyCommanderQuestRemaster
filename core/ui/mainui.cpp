@@ -29,6 +29,7 @@
 #include "imgui_driver.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
+#include "network/tcvr_match.h"
 
 #include <chrono>
 #include <thread>
@@ -44,6 +45,12 @@ bool mainui_rend_frame()
 	os_DoEvents();
 	os_UpdateInputState();
 
+	// tcvr: a multiplayer match starts or ends: the game is loaded again in the running app
+	if (tcvr::match::reloadNow())
+		gui_start_game(settings.content.path);
+	if (tcvr::match::startTimedOut())
+		gui_cancel_network();
+
 	if (gui_is_open())
 	{
 		try {
@@ -53,9 +60,16 @@ bool mainui_rend_frame()
 			forceReinit = true;
 			return false;
 		}
+		// tcvr: while the game loads again for a match (or back from one), the headset keeps its frames
+		// going with a panel (the session is already there); otherwise the Quest shows its own screens
+		if (vr::xr::enabled() && vr::xr::hasSession())
+			vr::xr::frame();
+		else
+		{
 #ifndef TARGET_IPHONE
-		std::this_thread::sleep_for(std::chrono::milliseconds(16));
+			std::this_thread::sleep_for(std::chrono::milliseconds(16));
 #endif
+		}
 	}
 	else
 	{

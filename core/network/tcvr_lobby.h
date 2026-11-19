@@ -278,6 +278,10 @@ public:
 	void setReady(bool ready);
 
 	// -- both
+	// The match that START began is over (ended normally or a player left): back to the lobby page with
+	// the same players, nobody ready, a host announces its game again. A joiner whose host went away
+	// during the match ends in HostLeft. Nothing happens outside phase Started.
+	void matchOver();
 	void leave();							// tells the others and goes back to Idle
 	View view();							// a copy of what the menu needs
 

@@ -53,6 +53,7 @@
 #include "stdclass.h"
 #include "emulator.h"
 #include "log/Log.h"
+#include "network/tcvr_match.h"	// tcvr: the match panel
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -2755,6 +2756,11 @@ void term()
 	initTried = false;
 }
 
+bool hasSession()
+{
+	return session != XR_NULL_HANDLE;
+}
+
 bool frame()
 {
 	if (!initTried && !init())
@@ -2893,6 +2899,25 @@ bool frame()
 			{ staff ? "Reload: point it away from the screen and pull the trigger."
 					: "Reload: grab the back of the pistol with your other hand and pull.", 0.047f, grey },
 		};
+	// tcvr: a multiplayer match starting or ending (the game loads again), or a player who paused it
+	{
+		std::string line, detail;
+		if (panel.lines.empty() && tcvr::match::panelText(line, detail))
+		{
+			panel.lines = {
+				{ "TOY COMMANDER VR", 0.085f, red },
+				{ "", 0.03f, white },
+				{ line, 0.064f, white },
+				{ detail, 0.047f, grey },
+			};
+			static std::string logged;
+			if (logged != line)
+			{
+				logged = line;
+				NOTICE_LOG(RENDERER, "XR: match panel: %s", line.c_str());
+			}
+		}
+	}
 	// tcvr: until the game's first picture, a loading panel instead of a black headset (backlog
 	// P1-8): what the app is doing, and a hint when it takes long
 	{

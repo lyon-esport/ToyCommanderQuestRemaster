@@ -240,6 +240,15 @@ static bool begin_game(const char *)
  * on_event - Notification that something has happened.  See the GGPOEventCode
  * structure for more information.
  */
+// tcvr: a GGPO player handle as the player's index (0 = player 1), -1 if unknown
+static int playerIndex(GGPOPlayerHandle handle)
+{
+	for (int i = 0; i < MAX_PLAYERS; i++)
+		if (playerHandles[i] == handle && handle != 0)
+			return i;
+	return -1;
+}
+
 static bool on_event(GGPOEvent *info)
 {
 	using namespace i18n;
@@ -274,12 +283,15 @@ static bool on_event(GGPOEvent *info)
 		std::this_thread::sleep_for(std::chrono::milliseconds(1000 / (msPerFrameAvg >= 25 ? 30 : 60)));
 		break;
 	case GGPO_EVENTCODE_CONNECTION_INTERRUPTED:
-		INFO_LOG(NETWORK, "Connection interrupted with player %d", info->u.connection_interrupted.player);
+		NOTICE_LOG(NETWORK, "Connection interrupted with player %d", info->u.connection_interrupted.player);
 		os_notify(T("Connection interrupted"), 2000);
+		// tcvr: that player's copy is paused (headset off, app in the background): the headset says so
+		tcvr::match::peerInterrupted(playerIndex(info->u.connection_interrupted.player), true);
 		break;
 	case GGPO_EVENTCODE_CONNECTION_RESUMED:
-		INFO_LOG(NETWORK, "Connection resumed with player %d", info->u.connection_resumed.player);
+		NOTICE_LOG(NETWORK, "Connection resumed with player %d", info->u.connection_resumed.player);
 		os_notify(T("Connection resumed"), 2000);
+		tcvr::match::peerInterrupted(playerIndex(info->u.connection_resumed.player), false);
 		break;
 	}
 	return true;

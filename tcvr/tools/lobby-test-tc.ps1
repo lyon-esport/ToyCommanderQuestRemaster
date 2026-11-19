@@ -8,13 +8,16 @@
     1. copy p1 creates a game (MP HOST), the others find it on the network (UDP broadcast, no server)
        and join it (MP JOIN: the time to find it is measured, it must be under 3 s), all press Ready;
     2. the host presses Start (MP START): every copy writes the netplay options (network:GGPOPeers,
-       GGPOPlayer, ...) into its emu.cfg and asks for a restart (the line "MP RESTART" in its log; on the
-       headset the app starts itself again). The script restarts the copies, like the app does;
-    3. the restarted copies are one netplay session (the safety gate of a fresh start marker): the automatic
+       GGPOPlayer, ...) into its emu.cfg and loads the game again in the running app (the line "MP RESTART"
+       in its log; the copies are not restarted, as on the headset since wave 4);
+    3. the reloaded copies are one netplay session (the safety gate of a fresh start marker): the automatic
        setup takes every copy to the team and vehicle page with the host's settings, and the per-frame memory hash of every copy is compared with p1's
        (main RAM and video/sound RAM, HOTD2VR_SYNCLOG), as in netplay-test-tc.ps1;
-    4. every copy leaves the match (MP LEAVEMATCH): netplay is off in emu.cfg again, the copy is restarted
-       and a game start finds no match (MP STATE match=0) and a "match over" mark for the menu (MP RETURN).
+    4. every copy leaves the match (MP LEAVEMATCH): netplay is off in emu.cfg again, the game is loaded again
+       in single player, every copy is back in the same lobby with the same players, nobody ready (MP STATE
+       lobby ... match=0), with a "match over" mark for the menu (MP RETURN);
+    5. with -Matches 2 (or more), the joiners press Ready again and the host starts the next match: steps 2
+       to 4 again, without anybody leaving the lobby.
 
   .\tcvr\tools\lobby-test-tc.ps1                       2 copies
   .\tcvr\tools\lobby-test-tc.ps1 -Players 4            4 copies
@@ -45,6 +48,7 @@ param(
 	[ValidateRange(0, 2)][int]$Mode = 0,	# the match settings the host creates the game with (MP HOST): 0 Deathmatch, 1 Cat and Mice, 2 Capture the Flag
 	[ValidateRange(0, 7)][int]$Room = 3,	# arena 0..7
 	[int]$Points = 15,
+	[ValidateRange(1, 5)][int]$Matches = 1,	# matches in a row from the same lobby
 	[string]$BuildDir = '',
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
@@ -192,7 +196,19 @@ try {
 	$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like 'MPR lobby*ready=1111*' -or ($Players -eq 3 -and $x -like 'MPR lobby*ready=111-*') -or ($Players -eq 2 -and $x -like 'MPR lobby*ready=11--*') } 10
 	Check ($r -like '*ready=11*') "the ready marks reach the host: $r"
 
-	# ---- 3. start: options written, restart asked
+	for ($matchNo = 1; $matchNo -le $Matches; $matchNo++) {
+	Say "---- match $matchNo of $Matches"
+	if ($matchNo -gt 1) {
+		# back in the lobby after the last match: ready again
+		for ($i = 1; $i -lt $Players; $i++) { [void](Send-Mp $peers[$i] 'READY 1') }
+		$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like 'MPR lobby*ready=1111*' -or ($Players -eq 3 -and $x -like 'MPR lobby*ready=111-*') -or ($Players -eq 2 -and $x -like 'MPR lobby*ready=11--*') } 10
+		Check ($r -like '*ready=11*') "match ${matchNo}: the ready marks reach the host again: $r"
+	}
+	foreach ($peer in $peers) { Remove-Item (Join-Path $peer.Dir 'sync.txt') -ErrorAction SilentlyContinue }
+	$logBefore = @{}
+	foreach ($peer in $peers) { $logBefore[$peer.Name] = ([regex]::Matches((Log-Text $peer), 'MP RESTART')).Count }
+
+	# ---- 3. start: options written, the game loaded again in the running app
 	$r = Send-Mp $peers[0] "START $InputDelay"
 	Check ($r -like 'MPR started*index=0*') "the host starts the match: $r"
 	foreach ($peer in $peers) {
@@ -203,16 +219,14 @@ try {
 	foreach ($peer in $peers) {
 		$cfg = Cfg-Text $peer
 		Check ($cfg -match 'GGPOPeers' -and $cfg -match 'GGPOPlayer\s*=\s*' + $peer.Index) "$($peer.Name): netplay options and player number in emu.cfg"
-		Check ((Log-Text $peer) -match 'MP RESTART') "$($peer.Name): asked for a restart"
+		Check (([regex]::Matches((Log-Text $peer), 'MP RESTART')).Count -gt $logBefore[$peer.Name]) "$($peer.Name): loads the game again for the match"
 	}
 
-	# ---- 4. restart the copies (what the app does), the match
-	foreach ($peer in $peers) { Stop-Copy $peer }
-	Start-Sleep -Seconds 2
-	foreach ($peer in $peers) { Start-Copy $peer $true; Start-Sleep -Seconds 1 }
+	# ---- 4. the match (the same process: no copy restarted)
 	foreach ($peer in $peers) {
 		$r = Wait-Mp $peer 'STATE' { param($x) $x -like '*match=1*' } 120
-		Check ($r -like '*match=1*') "$($peer.Name): the restarted game is a match: $r"
+		Check ($r -like '*match=1*') "$($peer.Name): the reloaded game is a match: $r"
+		Check (-not $peer.Proc.HasExited) "$($peer.Name): the same process"
 	}
 	$udp = New-Object System.Net.Sockets.UdpClient
 	$launch = Get-Date
@@ -274,10 +288,10 @@ try {
 	# the screens: the last picture of each copy
 	# (its own folder: -WorkDir may be shared with netplay-test-tc.ps1, whose pictures are in shots\)
 	$shotDir = Join-Path $WorkDir 'lobby-shots'
-	if (Test-Path $shotDir) { Remove-Item $shotDir -Recurse -Force }
+	if ($matchNo -eq 1 -and (Test-Path $shotDir)) { Remove-Item $shotDir -Recurse -Force }
 	New-Item -ItemType Directory -Force $shotDir | Out-Null
 	foreach ($peer in $peers) {
-		$m = [Text.Encoding]::ASCII.GetBytes(("SHOT {0}" -f (Join-Path $shotDir ("match_{0}.png" -f $peer.Name))))
+		$m = [Text.Encoding]::ASCII.GetBytes(("SHOT {0}" -f (Join-Path $shotDir ("match{0}_{1}.png" -f $matchNo, $peer.Name))))
 		[void]$cmdUdp.Send($m, $m.Length, '127.0.0.1', $peer.Port)
 	}
 	Start-Sleep -Seconds 1
@@ -310,7 +324,7 @@ try {
 	Check ($common.Count -gt 600) "the match ran: $($common.Count) confirmed frames compared"
 	Check ($null -eq $firstDiff) $(if ($null -eq $firstDiff) { "IDENTICAL on $Players copies for $($common.Count) confirmed frames (main RAM, video/sound RAM)" } else { "FIRST DIFFERENCE at $firstDiff" })
 
-	# ---- 6. leave the match
+	# ---- 6. leave the match: back to the same lobby, in the same process
 	foreach ($peer in $peers) {
 		$r = Send-Mp $peer 'LEAVEMATCH' 5000
 		Check ($r -like 'MPR left*') "$($peer.Name) leaves the match"
@@ -319,19 +333,18 @@ try {
 	foreach ($peer in $peers) {
 		$cfg = Cfg-Text $peer
 		Check ($cfg -notmatch 'GGPOPeers[ \t]*=[ \t]*\S') "$($peer.Name): netplay options cleared in emu.cfg"
-		Check ((Log-Text $peer) -match 'MP RESTART') "$($peer.Name): asked for a restart"
 	}
-	foreach ($peer in $peers) { Stop-Copy $peer }
-	Start-Sleep -Seconds 2
-	foreach ($peer in $peers) { Start-Copy $peer $false; Start-Sleep -Seconds 1 }
 	foreach ($peer in $peers) {
-		$r = Wait-Mp $peer 'STATE' { param($x) $x -like 'MPR idle*' } 120
-		Check ($r -like 'MPR idle*match=0*') "$($peer.Name): the game is single player again: $r"
+		$r = Wait-Mp $peer 'STATE' { param($x) $x -like 'MPR lobby*match=0*' } 120
+		Check ($r -like "MPR lobby players=$Players *match=0*") "$($peer.Name): single player again, back in the lobby with all $Players players: $r"
+		Check ($r -like '*ready=10*') "$($peer.Name): nobody ready after the match: $r"
+		Check (-not $peer.Proc.HasExited) "$($peer.Name): the same process"
 		$r = Send-Mp $peer 'RETURN'
-		Check ($r -like '*return=1*') "$($peer.Name): the menu would open on the Multiplayer page (match over mark): $r"
+		Check ($r -like '*return=1*') "$($peer.Name): the menu would open on the lobby page (match over mark): $r"
 		$r = Send-Mp $peer 'RETURN'
 		Check ($r -like '*return=0*') "$($peer.Name): the mark is given once"
 	}
+	}	# matches
 } catch {
 	Check $false ("the test stopped: " + $_.Exception.Message)
 } finally {

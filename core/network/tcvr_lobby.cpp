@@ -956,6 +956,9 @@ struct Lobby::Impl
 					view.phase = Phase::HostLeft;
 					view.message = "The host left";
 				}
+				else if (view.phase == Phase::Started)
+					// in a match: the match goes on as long as the netplay does; matchOver() says it
+					view.message = "The host left";
 			});
 		}
 	}
@@ -981,7 +984,8 @@ struct Lobby::Impl
 		bool active = false;
 		Phase phase = Phase::Idle;
 		withView([&](View& view) { phase = view.phase; });
-		if (hosting && !started)
+		// (during a match too: the lobby stays connected, so the players come back to it afterwards)
+		if (hosting)
 		{
 			active = true;
 			const bool ping = now - lastPing >= std::chrono::milliseconds(timing.pingMs);
@@ -996,7 +1000,8 @@ struct Lobby::Impl
 					send(c, MsgType::Ping);
 			}
 		}
-		else if (!hosting && hostConn && (phase == Phase::Connecting || phase == Phase::InLobby))
+		else if (!hosting && hostConn && !hostConn->closed
+				&& (phase == Phase::Connecting || phase == Phase::InLobby || phase == Phase::Started))
 		{
 			active = true;
 			if (phase == Phase::Connecting && now - connectStart > std::chrono::milliseconds(timing.connectMs))
@@ -1449,6 +1454,58 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 				impl->send(impl->slots[order[k]], MsgType::Start, encode(mine));
 		}
 		return true;
+	});
+}
+
+void Lobby::matchOver()
+{
+	impl->run([&] {
+		if (impl->hosting)
+		{
+			if (!impl->started)
+				return;
+			impl->started = false;
+			for (int i = 1; i < MaxPlayers; i++)
+				impl->slotReady[i] = false;
+			const auto now = Clock::now();
+			for (const Impl::ConnPtr& c : impl->conns)
+				c->lastRx = std::max(c->lastRx, now - std::chrono::milliseconds(impl->timing.pingMs));
+			impl->withView([&](View& view) {
+				view.phase = Phase::InLobby;
+				view.start = StartInfo();
+				view.message.clear();
+			});
+			impl->publishState();
+			if (!impl->beaconRunning)
+				impl->beaconTick();
+			impl->startTick();
+			return;
+		}
+		bool inMatch = false;
+		impl->withView([&](View& view) { inMatch = view.phase == Phase::Started; });
+		if (!inMatch)
+			return;
+		const bool hostThere = impl->hostConn && !impl->hostConn->closed;
+		impl->withView([&](View& view) {
+			view.start = StartInfo();
+			if (hostThere)
+			{
+				view.phase = Phase::InLobby;
+				view.message.clear();
+				// (not ready again until the player says so: the host clears every ready mark too)
+				view.state.players[std::max(0, std::min(view.mySlot, MaxPlayers - 1))].ready = false;
+			}
+			else
+			{
+				view.phase = Phase::HostLeft;
+				view.message = "The host left";
+			}
+		});
+		if (hostThere)
+		{
+			impl->lastPing = Clock::now();
+			impl->startTick();
+		}
 	});
 }
 

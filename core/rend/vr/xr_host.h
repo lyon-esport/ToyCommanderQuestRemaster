@@ -32,6 +32,8 @@ bool enabled();
 // One headset frame, called by the render thread in place of the usual wait-and-present.
 // Returns false when nothing was shown (session not running).
 bool frame();
+// tcvr: a headset session exists (frame() can be called while the game loads again)
+bool hasSession();
 // The eye being drawn right now, or nullptr outside an eye pass.
 const Eye *currentEye();
 // The render context is going away (app in the background, renderer restart): drop the
@@ -54,6 +56,7 @@ glm::mat4 gameTurn(glm::vec2 turn);
 #else
 inline bool enabled() { return false; }
 inline bool frame() { return false; }
+inline bool hasSession() { return false; }
 inline const Eye *currentEye() { return nullptr; }
 inline void term() {}
 inline glm::vec2 headYawPitch() { return glm::vec2(0.f); }

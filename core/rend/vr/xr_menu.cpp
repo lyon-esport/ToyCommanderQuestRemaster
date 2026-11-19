@@ -65,7 +65,6 @@ tcvr::lobby::Settings mpSettings;	// the Create game page's choices
 std::string mpAddress;				// "Enter address" on the Join page
 bool mpReady;						// this copy's Ready in the lobby
 bool mpSearching;					// the Join page listens
-bool checkedReturn;					// (a match just ended: the menu opens on Multiplayer, once)
 
 // A short text edited with the stick: up/down changes the letter, left/right moves, A keeps it, B drops it.
 struct TextEdit
@@ -239,6 +238,17 @@ std::vector<Entry> mpEntries()
 		if (v.phase == lobby::Phase::InLobby)
 		{
 			const lobby::State& s = v.state;
+			// the last match's ranking, from the game's results page (task 3.5)
+			const match::Results r = match::results();
+			if (r.valid)
+			{
+				std::string line = "Last match:";
+				static const char *const places[] { "1st", "2nd", "3rd", "4th" };
+				for (size_t k = 0; k < r.lines.size() && k < 4; k++)
+					line += std::string("   ") + places[k] + " " + r.lines[k].name + " " + std::to_string(r.lines[k].points)
+							+ " pt" + (r.lines[k].kills > 0 ? " (" + std::to_string(r.lines[k].kills) + " kills)" : std::string());
+				list.push_back(infoLine(line));
+			}
 			list.push_back(infoLine("Host " + s.players[0].name + "   " + ModeNames[s.settings.mode % 3]));
 			list.push_back(infoLine(roomName(s.settings.room % RoomCount) + "   " + tcvr::lobby::limitText(s.settings.mode, s.settings.points)));
 			for (int i = 0; i < lobby::MaxPlayers; i++)
@@ -677,7 +687,7 @@ MenuAction accept(const Entry& e)
 		{
 			confirming = (int)e.action;
 			setStatus(e.action == Action::Quit ? "Press A again to quit"
-					: e.action == Action::LeaveMatch ? "Press A again: leaves the match and restarts the game"
+					: e.action == Action::LeaveMatch ? "Press A again: you leave the match, back to the lobby"
 					: e.action == Action::Import ? "Press A again: replaces your saves and restarts the game"
 					: "Press A again: opens every mission of your saved games (backed up first) and restarts the game");
 			return MenuAction::None;
@@ -909,17 +919,24 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 {
 	// (also with the menu closed: START from the host arrives whenever it likes)
 	tcvr::match::poll();
-	if (!checkedReturn)
+	// a match began (the game was loaded again with the netplay on): the menu that started it closes
 	{
-		checkedReturn = true;
-		if (tcvr::match::takeReturn())
-		{
-			// a match ended (or didn't start): the game is back, on the Multiplayer pages
-			openMenu(headYaw);
-			showPage((int)Section::Multiplayer);
-			setStatus("The match is over");
-			return MenuAction::None;
-		}
+		static bool wasMatch;
+		const bool now = inMatch();
+		if (now && !wasMatch && open)
+			closeMenu();
+		wasMatch = now;
+	}
+	// a match ended (or didn't start): once the game runs again, the menu opens on the lobby page
+	if (emu.running() && tcvr::match::takeReturn())
+	{
+		closeMenu();
+		openMenu(headYaw);
+		mpReady = false;
+		showPage((int)Section::Multiplayer);
+		const std::string why = tcvr::match::lastEnd();
+		setStatus(why.empty() ? "The match is over" : why);
+		return MenuAction::None;
 	}
 	if (input.toggle)
 	{

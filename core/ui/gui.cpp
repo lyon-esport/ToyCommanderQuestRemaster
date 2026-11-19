@@ -17,6 +17,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "network/tcvr_match.h"
 #include "rend/osd.h"
 #include "cfg/cfg.h"
 #include "imgui.h"
@@ -469,6 +470,23 @@ void gui_start_game(const std::string& path)
 void gui_stop_game(const std::string& message)
 {
 	const LockGuard lock(guiMutex);
+	// tcvr: a multiplayer match that could not start or broke off: back to single player in the running
+	// app (the main page with the game's path loads it again at once), the VR menu says why
+	if (tcvr::match::gameStopped(message))
+	{
+		if (!message.empty())
+			WARN_LOG(COMMON, "Flycast has stopped in a match: %s", message.c_str());
+		emu.unloadGame();
+		reset_vmus();
+		if (!settings.content.path.empty())
+		{
+			gui_setState(GuiState::Closed);
+			gui_start_game(settings.content.path);
+		}
+		else
+			gui_setState(GuiState::Main);
+		return;
+	}
 	if (!commandLineStart)
 	{
 		// Exit to main menu
@@ -1113,6 +1131,21 @@ static void drawBoxartBackground()
 }
 
 static std::future<bool> networkStatus;
+
+// tcvr: a match start that waits too long for the other players: the same as the Cancel button
+void gui_cancel_network()
+{
+	const LockGuard lock(guiMutex);
+	if (gui_state != GuiState::NetworkStart || NetworkHandshake::instance == nullptr)
+		return;
+	WARN_LOG(NETWORK, "Netplay start cancelled: the other players did not come");
+	NetworkHandshake::instance->stop();
+	try {
+		networkStatus.get();
+	} catch (const FlycastException&) {
+	}
+	gui_stop_game("the other players did not come");
+}
 
 static void gui_network_start()
 {

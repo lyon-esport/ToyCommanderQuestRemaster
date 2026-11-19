@@ -32,6 +32,8 @@ void gui_display_profiler();
 void gui_open_onboarding();
 void gui_term();
 void gui_cancel_load();
+// tcvr: gives up a netplay start that waits for its peers (multiplayer match)
+void gui_cancel_network();
 void gui_refresh_files();
 void gui_cheats();
 void gui_keyboard_input(u32 wc);

@@ -677,3 +677,112 @@ TEST(TcvrLobbyAddress, ThisComputer)
 		EXPECT_TRUE(found);
 	}
 }
+
+// ---- the end of a match: back to the lobby page (task 3.5) -------------------------------------
+
+TEST(TcvrLobby, MatchOverBringsEverybodyBackToTheLobby)
+{
+	Net net;
+	Lobby host(fast()), a(fast()), b(fast());
+	net.prepare(host);
+	net.prepare(a);
+	net.prepare(b);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), { 0, 3, 15 }, err));
+	a.startSearch();
+	b.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return host.view().state.count() == 2; }));
+	ASSERT_TRUE(joinFirst(b, ident("BBB", 19715)));
+	ASSERT_TRUE(waitFor([&] { return host.view().state.count() == 3; }));
+	a.setReady(true);
+	b.setReady(true);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err)) << err;
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::Started && b.view().phase == Phase::Started; }));
+	// the match lasts longer than the lobby's drop time: the lobby stays connected through it
+	std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+	EXPECT_EQ(host.view().state.count(), 3);
+	EXPECT_EQ(a.view().phase, Phase::Started);
+	// a joiner can't come in during the match
+	Lobby late(fast());
+	net.prepare(late);
+	late.join(ident("LAT", 19730), "127.0.0.1", host.view().lobbyPort);
+	ASSERT_TRUE(waitFor([&] { return late.view().phase == Phase::Refused; }));
+	// every copy ends the match on its own (in any order)
+	a.matchOver();
+	host.matchOver();
+	b.matchOver();
+	for (Lobby *l : { &host, &a, &b })
+	{
+		ASSERT_TRUE(waitFor([&] { return l->view().phase == Phase::InLobby; }));
+		EXPECT_EQ(l->view().start.peers.size(), 0u);
+	}
+	// the same players, nobody ready, the settings kept
+	ASSERT_TRUE(waitFor([&] {
+		const State s = a.view().state;
+		return s.count() == 3 && !s.players[1].ready && !s.players[2].ready;
+	}));
+	EXPECT_EQ(a.view().state.players[0].name, "HOS");
+	EXPECT_EQ(a.view().state.players[1].name, "AAA");
+	EXPECT_EQ(a.view().state.players[2].name, "BBB");
+	EXPECT_EQ(a.view().state.settings, (Settings { 0, 3, 15 }));
+	EXPECT_EQ(a.view().mySlot, 1);
+	std::string why;
+	EXPECT_FALSE(host.canStart(why));
+	// the game is announced again (not started), and a second match can start
+	Lobby seeker(fast());
+	net.prepare(seeker);
+	seeker.startSearch();
+	ASSERT_TRUE(waitFor([&] { auto l = seeker.games(); return !l.empty() && !l.front().beacon.started && l.front().beacon.players == 3; }));
+	a.setReady(true);
+	b.setReady(true);
+	ASSERT_TRUE(waitFor([&] { return host.canStart(why); })) << why;
+	ASSERT_TRUE(host.start(2, err)) << err;
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::Started && b.view().phase == Phase::Started; }));
+	EXPECT_EQ(b.view().start.localIndex, 2);
+}
+
+TEST(TcvrLobby, HostGoneDuringTheMatch)
+{
+	Net net;
+	Lobby host(fast()), guest(fast());
+	net.prepare(host);
+	net.prepare(guest);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	guest.startSearch();
+	ASSERT_TRUE(joinFirst(guest, ident("GUE", 19714)));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::InLobby; }));
+	guest.setReady(true);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::Started; }));
+	host.leave();
+	// the match is not ended by the lobby (the netplay decides), but afterwards the host is gone
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	EXPECT_EQ(guest.view().phase, Phase::Started);
+	guest.matchOver();
+	EXPECT_EQ(guest.view().phase, Phase::HostLeft);
+	EXPECT_EQ(guest.view().message, "The host left");
+}
+
+TEST(TcvrLobby, MatchOverOutsideAMatchDoesNothing)
+{
+	Net net;
+	Lobby host(fast()), guest(fast());
+	net.prepare(host);
+	net.prepare(guest);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	guest.startSearch();
+	ASSERT_TRUE(joinFirst(guest, ident("GUE", 19714)));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::InLobby; }));
+	guest.setReady(true);
+	ASSERT_TRUE(waitFor([&] { return host.view().state.players[1].ready; }));
+	host.matchOver();
+	guest.matchOver();
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	EXPECT_EQ(guest.view().phase, Phase::InLobby);
+	EXPECT_TRUE(host.view().state.players[1].ready);
+}
