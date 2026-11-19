@@ -374,6 +374,7 @@ static std::string endMatch(const std::string& why)
 	lostPeer = false;
 	resultsDone = false;
 	setupShowing = false;
+	settings.input.fastForwardMode = false;
 	selfAway = false;
 	lastOwnFrameMs = 0;
 	awaySinceMs = 0;
@@ -824,6 +825,13 @@ uint32_t setupButtons()
 	{
 		setupShowing = false;
 		WARN_LOG(NETWORK, "MP SETUP: still not in the arena after 150 s, the game is shown");
+	}
+	// Behind the panel the setup runs as fast as the headsets go (no sound, no waiting on the audio): the
+	// emulated game is the same at any speed, and the netplay holds a copy that runs ahead of the others.
+	if (settings.input.fastForwardMode != setupShowing)
+	{
+		settings.input.fastForwardMode = setupShowing;
+		NOTICE_LOG(NETWORK, "MP SETUP: fast %s (frame %d)", setupShowing ? "on" : "off", s.frame);
 	}
 	if (s.holdLeft > 0)
 	{
