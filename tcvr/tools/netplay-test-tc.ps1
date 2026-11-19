@@ -49,6 +49,7 @@ param(
 	[ValidateSet('wave', 'hunt')][string]$Pattern = 'wave',	# hunt: P1 chases and shoots P2 (kills, respawns)
 	[ValidateRange(0, 2)][int]$Mode = 0,	# 0 Deathmatch, 1 Cat and Mice, 2 Capture the Flag
 	[switch]$Ram,			# with -Pattern hunt: no passes, the hunter flies straight at the target (collisions)
+	[switch]$TargetStill,	# with -Pattern hunt: the target never takes off (pad at rest, A now and then to respawn): an easy target (task 1.5)
 	[string]$BuildDir = '',	# folder with flycast.exe (default $env:TCVR_BUILD_WIN, else build-win here)
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
@@ -179,7 +180,7 @@ function Hunt-State([int]$p, [double]$t) {
 	$pulseA = (($u % 2) -lt 0.2)
 	# the target: full throttle, stick centred: it takes off, climbs into the ceiling and dies, then
 	# respawns with A ("Ready")
-	if ($p -ne 0) { return @($(if ($pulseA) { $BTN.A } else { 0 }), 0, 0, 0, 255) }
+	if ($p -ne 0) { return @($(if ($pulseA) { $BTN.A } else { 0 }), 0, 0, 0, $(if ($TargetStill) { 0 } else { 255 })) }
 	$it = Vehicle-Pos 1
 	if ($null -eq $me -or $null -eq $it -or $null -eq $heading) {
 		# (re)start: throttle and Ready; stuck against something for 2 s: reverse, turn and climb in turns
