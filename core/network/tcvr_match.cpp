@@ -15,6 +15,7 @@
 #include "version.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -160,8 +161,22 @@ void setPlayerName(const std::string& name)
 	config::VrMpName.save();
 }
 
+static std::atomic<bool> lostPeer;
+
+void peerLost()
+{
+	if (active)
+		lostPeer = true;
+}
+
 void poll()
 {
+	if (lostPeer.exchange(false) && active)
+	{
+		NOTICE_LOG(NETWORK, "MP match: a player left, the match is over");
+		leaveMatch();
+		return;
+	}
 	std::unique_lock<std::mutex> lock(mutex);
 	if (begun || !theOne)
 		return;
