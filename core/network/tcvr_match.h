@@ -41,6 +41,8 @@ void setPlayerName(const std::string& name);
 void poll();
 // True while this run of the game is a match.
 bool inMatch();
+// A player left or the network dropped (GGPO gave up on a peer): the next poll() ends the match.
+void peerLost();
 // The player left the match from the VR menu (or wants out): netplay off, game started again.
 std::string leaveMatch();
 // Called at each game load, before the netplay starts (emulator.cpp).

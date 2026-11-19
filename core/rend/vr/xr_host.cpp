@@ -572,12 +572,46 @@ bool initMenuLayer(int width, int height)
 	return true;
 }
 
+static const std::string& debugDir();
+
+// tcvr test aid: "touch files/menushot.request" writes the menu layer's last picture to files/menu.ppm
+// (the menu is its own compositor layer: neither capture.request's eye image nor a screencap of an
+// unworn headset shows it). Over dark grey, as the alpha is premultiplied.
+static void menuShot()
+{
+	const std::string request = debugDir() + "/menushot.request";
+	FILE *f = fopen(request.c_str(), "rb");
+	if (f == nullptr)
+		return;
+	fclose(f);
+	remove(request.c_str());
+	if (!menuLayer.ready || menuLayer.pixels.size() < (size_t)menuLayer.width * menuLayer.height * 4)
+		return;
+	const std::string path = debugDir() + "/menu.ppm";
+	f = fopen(path.c_str(), "wb");
+	if (f == nullptr)
+		return;
+	fprintf(f, "P6\n%d %d\n255\n", menuLayer.width, menuLayer.height);
+	std::vector<u8> row(menuLayer.width * 3);
+	for (int y = 0; y < menuLayer.height; y++)
+	{
+		const u8 *p = &menuLayer.pixels[(size_t)y * menuLayer.width * 4];
+		for (int x = 0; x < menuLayer.width; x++, p += 4)
+			for (int c = 0; c < 3; c++)
+				row[x * 3 + c] = (u8)std::min(255, p[c] + 40 * (255 - p[3]) / 255);
+		fwrite(row.data(), 1, row.size(), f);
+	}
+	fclose(f);
+	NOTICE_LOG(RENDERER, "XR: menu picture saved to %s", path.c_str());
+}
+
 // tcvr: the menu's picture into the next swapchain image, when what it says changed (the
 // layer shows the last image given)
 bool updateMenuLayer(const Panel& panel)
 {
 	if (!initMenuLayer(panel.imageWidth, panel.imageHeight))
 		return false;
+	menuShot();
 	std::string says;
 	for (const PanelLine& line : panel.lines)
 		says += line.text + '\n';
