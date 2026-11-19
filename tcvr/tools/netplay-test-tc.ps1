@@ -199,9 +199,9 @@ function Hunt-State([int]$p, [double]$t) {
 	while ($err -lt -[math]::PI) { $err += 2 * [math]::PI }
 	$deg = $err * 180 / [math]::PI
 	# passes: turn in and attack; after passing within 900, fly on straight until 2200 away
-	if ($Ram -or $TargetStill) { $hunt.Extend = $false }	# (a still target: no passes, a tight circle onto it)
-	elseif ($dist -lt 900 -and [math]::Abs($deg) -gt 30 -and -not $hunt.Extend) { $hunt.Extend = $true; $hunt.ExtendAt = $t }
-	if ($dist -gt 1800 -or ($hunt.Extend -and $t - $hunt.ExtendAt -gt 4)) { $hunt.Extend = $false }
+	if ($Ram) { $hunt.Extend = $false }
+	elseif ($dist -lt $(if ($TargetStill) { 500 } else { 900 }) -and [math]::Abs($deg) -gt 30 -and -not $hunt.Extend) { $hunt.Extend = $true; $hunt.ExtendAt = $t }
+	if ($dist -gt $(if ($TargetStill) { 1600 } else { 1800 }) -or ($hunt.Extend -and $t - $hunt.ExtendAt -gt 4)) { $hunt.Extend = $false }
 	$x = if ($hunt.Extend) { 0 } else { [int][math]::Max(-127, [math]::Min(127, -2.5 * $deg)) }
 	# pitch toward the slope that points at the target (y + = climb), limited to +-35 degrees and
 	# not below the ground: far away keep some height
@@ -209,20 +209,25 @@ function Hunt-State([int]$p, [double]$t) {
 	$want = [math]::Atan2($dz + $above, [math]::Max(1, $dist)) * 180 / [math]::PI
 	$want = [math]::Max(-45, [math]::Min(35, $want))
 	if ([math]::Abs($deg) -gt 60 -or $hunt.Extend) { $want = 3 }	# turning back or extending: level
-	if (-not $Ram -and $me[2] -lt $it[2] + 120 -and $climb -lt 0) { $want = 15 }	# near the ground: pull up
+	if ($TargetStill) {
+		# a target on the ground: come in low and level, just above it, so the gun fires along the floor at it
+		# (diving at it from 200-500 up, the shots went past)
+		$want = [math]::Atan2($it[2] + 25 - $me[2], 300) * 180 / [math]::PI
+		$want = [math]::Max(-30, [math]::Min(30, $want))
+	} elseif (-not $Ram -and $me[2] -lt $it[2] + 120 -and $climb -lt 0) { $want = 15 }	# near the ground: pull up
 	$y = [int][math]::Max(-100, [math]::Min(100, 4 * ($want - $climb)))
 	$b = 0
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 2600 -and (($u * 1000) % 300) -lt 150) { $b = $BTN.A }
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 3000 -and ($u % 2) -gt 1.7) { $b = $b -bor $BTN.B }
 	if ($TargetStill) {
 		# a still target: fire whenever it is roughly ahead and near (the gun sprays, the missile may home in)
-		if ([math]::Abs($deg) -lt 45 -and $dist -lt 1500) { $b = $b -bor $BTN.A }
+		if ([math]::Abs($deg) -lt 25 -and $dist -lt 1500 -and [math]::Abs($me[2] - $it[2]) -lt 150) { $b = $b -bor $BTN.A }
 		if ([math]::Abs($deg) -lt 60 -and $dist -lt 2500 -and ($u % 1.5) -gt 1.2) { $b = $b -bor $BTN.B }
 	}
 	if ($still -and $pulseA) { $b = $b -bor $BTN.A }
 	$r = if ($Ram -or $dist -gt 1000) { 255 } else { 160 }
 	$l = 0
-	if ($TargetStill -and [math]::Abs($deg) -gt 40) {
+	if ($TargetStill -and -not $hunt.Extend -and [math]::Abs($deg) -gt 40) {
 		# slow down to turn tighter (at full speed the hunter only circled the target 1400 away), brake when it is behind
 		$r = 60
 		if ([math]::Abs($deg) -gt 100) { $r = 0; $l = 255 }
