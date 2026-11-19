@@ -301,6 +301,12 @@ static cThread savestateThread(savestateThreadFunc, nullptr, "Flycast-save");
 
 extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_emu_JNIdc_pause(JNIEnv *env,jobject obj)
 {
+	// tcvr: in the headset the XR session decides (xr_host: STOPPING pauses a single-player game, the session
+	// starting again resumes it). An Android pause alone is often a 2D panel in front (a launcher such as QGO
+	// brings itself forward right after starting the game): the session stays VISIBLE and the game, its VR
+	// menu and its multiplayer lobby must go on (stopped here, they froze until the panel went away).
+	if (config::VrXr)
+		return;
 	if (config::GGPOEnable)
 	{
 		// hotd2-vr: in the headset, lifting it off or a system menu pauses the activity; the
@@ -324,6 +330,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_emu_JNIdc_pause(JNIE
 extern "C" JNIEXPORT void JNICALL Java_com_flycast_emulator_emu_JNIdc_resume(JNIEnv *env,jobject obj)
 {
     // (hotd2-vr: an online game in the headset was never paused, see JNIdc_pause)
+	if (config::VrXr)
+		return;		// (tcvr: the XR session resumes the game; a game the VR menu paused stays paused)
     if (game_started && !emu.running())
     {
     	game_started = false;

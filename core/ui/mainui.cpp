@@ -19,6 +19,9 @@
 */
 
 #include "rend/vr/xr_host.h"
+#ifdef USE_OPENXR
+#include "rend/vr/xr_menu.h"
+#endif
 #include "mainui.h"
 #include "hw/pvr/Renderer_if.h"
 #include "gui.h"
@@ -47,7 +50,13 @@ bool mainui_rend_frame()
 
 	// tcvr: a multiplayer match starts or ends: the game is loaded again in the running app
 	if (tcvr::match::reloadNow())
+	{
+#ifdef USE_OPENXR
+		// (a game the VR menu paused must not be started again by the menu: the loader starts the new one)
+		vr::xr::forgetPausedGame();
+#endif
 		gui_start_game(gui_last_game_path());
+	}
 	if (tcvr::match::startTimedOut())
 		gui_cancel_network();
 

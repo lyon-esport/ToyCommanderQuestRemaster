@@ -569,6 +569,16 @@ static void resetWatch();
 void gate()
 {
 	const int marker = config::VrMpMarker;
+	// The first game load of this run of the app: a "match over" mark from an earlier run is stale (that run's
+	// lobby is gone with it; the menu opened by itself on Multiplayer with "The match is over" at each start).
+	static bool firstLoad = true;
+	const bool first = firstLoad;
+	firstLoad = false;
+	if (first && marker == 0 && config::VrMpReturn)
+	{
+		NOTICE_LOG(NETWORK, "MP: a match-over mark from an earlier run of the app, dropped");
+		saveBool(config::VrMpReturn, false);
+	}
 	if (marker > 0)
 	{
 		if (nowSeconds() <= marker && !config::GGPOPeers.get().empty() && config::GGPOEnable)
@@ -589,13 +599,13 @@ void gate()
 		endLine = "The match could not start";
 		config::VrMpEndText.set("The match could not start");
 		config::VrMpEndText.save();
-		saveBool(config::VrMpReturn, true);
+		saveBool(config::VrMpReturn, !first);		// (not in a new run of the app: no lobby to go back to)
 	}
 	else if (marker < 0 && !active)
 	{
 		NOTICE_LOG(NETWORK, "MP: a match was left running, netplay switched off");
 		clearNetplay();
-		saveBool(config::VrMpReturn, true);
+		saveBool(config::VrMpReturn, !first);
 	}
 }
 

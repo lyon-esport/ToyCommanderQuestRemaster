@@ -850,6 +850,13 @@ void frameRates(float& headset, float& game)
 	game = gameFps;
 }
 
+void forgetPausedGame()
+{
+	if (pausedGame)
+		NOTICE_LOG(RENDERER, "XR menu: the game is loaded again: the menu won't start it");
+	pausedGame = false;
+}
+
 void closeMenu()
 {
 	if (!open)

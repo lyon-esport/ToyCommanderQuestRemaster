@@ -34,6 +34,9 @@ bool enabled();
 bool frame();
 // tcvr: a headset session exists (frame() can be called while the game loads again)
 bool hasSession();
+// tcvr: the game is paused because the XR session stopped (the app in the background): the emulator keeps
+// calling frame() so the session can start again and the game go on.
+bool sessionPausedTheGame();
 // The eye being drawn right now, or nullptr outside an eye pass.
 const Eye *currentEye();
 // The render context is going away (app in the background, renderer restart): drop the
