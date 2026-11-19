@@ -233,7 +233,8 @@ static std::string nameOf(int player)
 	return "Player " + std::to_string(player + 1);
 }
 
-// The end of a match, however it ends: netplay off, back to the lobby page.
+// The end of a match, however it ends: netplay off, back to the lobby page. The game is unloaded after
+// this (reloadNow, or gui_stop_game's own unload then afterUnload): netplay goes off then.
 static std::string endMatch(const std::string& why)
 {
 	NOTICE_LOG(NETWORK, "MP match over: %s", why.c_str());
@@ -245,10 +246,7 @@ static std::string endMatch(const std::string& why)
 		std::lock_guard<std::mutex> lock(mutex);
 		begun = false;
 	}
-	if (emu.running())
-		clearPending = true;
-	else
-		clearNetplay();
+	clearPending = true;
 	endLine = why;
 	saveBool(config::VrMpReturn, true);
 	if (lobbyStarted())
@@ -333,10 +331,8 @@ bool reloadNow()
 
 bool gameStopped(const std::string& message)
 {
+	// (a match already over, netplay still on until the unload: not a match any more)
 	const bool match = active || reloading == (int)Reload::IntoMatch || (config::GGPOEnable && !clearPending);
-	// (a match already over whose game stopped: netplay off now)
-	if (clearPending.exchange(false))
-		clearNetplay();
 	if (!match)
 	{
 		// already on the way back (a player left: poll() came first): the caller just loads the game
@@ -361,6 +357,12 @@ bool gameStopped(const std::string& message)
 	reloading = (int)Reload::BackToLobby;
 	reloadWanted = (int)Reload::None;
 	return true;
+}
+
+void afterUnload()
+{
+	if (clearPending.exchange(false))
+		clearNetplay();
 }
 
 bool startTimedOut()

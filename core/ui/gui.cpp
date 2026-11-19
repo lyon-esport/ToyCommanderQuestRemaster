@@ -492,6 +492,7 @@ void gui_stop_game(const std::string& message)
 			WARN_LOG(COMMON, "Flycast has stopped in a match: %s", message.c_str());
 		const std::string path = gui_last_game_path();		// (before unloadGame clears it)
 		emu.unloadGame();
+		tcvr::match::afterUnload();
 		reset_vmus();
 		if (!path.empty())
 		{

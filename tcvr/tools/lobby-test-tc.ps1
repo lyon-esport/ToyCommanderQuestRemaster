@@ -53,6 +53,7 @@ param(
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
 	[string]$Name = '',
+	[switch]$KillLast,			# the last copy is killed 20 s into the first match: the others must come back to the lobby
 	[int]$PortOffset = 0		# added to the pad (27241+), GGPO (19913+) and discovery (19790) ports: two tests on one PC at once
 )
 $ErrorActionPreference = 'Stop'
@@ -243,6 +244,28 @@ try {
 			continue
 		}
 		$t = ((Get-Date) - $t0).TotalSeconds
+		if ($KillLast -and $t -ge 20) {
+			# a player's app closes in the middle of the match: the others come back to the lobby page
+			$gone = $peers[-1]
+			Stop-Copy $gone
+			Say "$($gone.Name) killed in the match (20 s in)"
+			$killedAt = Get-Date
+			foreach ($peer in ($peers | Select-Object -SkipLast 1)) {
+				$r = Wait-Mp $peer 'STATE' { param($x) $x -like '*match=0*' } 60
+				Check ($r -like '*match=0*') ("{0}: back in the lobby, single player, after {1:N0} s: {2}" -f $peer.Name, ((Get-Date) - $killedAt).TotalSeconds, $r)
+				Check (-not $peer.Proc.HasExited) "$($peer.Name): the same process (no crash)"
+				$r = Send-Mp $peer 'RETURN'
+				Check ($r -like '*return=1*') "$($peer.Name): the menu would open on the lobby page: $r"
+				$why = [regex]::Match((Log-Text $peer), 'MP match over: [^\r\n]*').Value
+				Say "$($peer.Name): $why"
+			}
+			Start-Sleep -Seconds 3
+			foreach ($peer in ($peers | Select-Object -SkipLast 1)) {
+				Check (-not $peer.Proc.HasExited) "$($peer.Name): still running 3 s later"
+				Check ((Cfg-Text $peer) -notmatch 'GGPOPeers[ \t]*=[ \t]*\S') "$($peer.Name): netplay options cleared in emu.cfg"
+			}
+			throw 'stop: -KillLast done'
+		}
 		if ($t -ge $Seconds) { break }
 		foreach ($peer in $peers) {
 			# (nobody presses anything: the automatic setup does)
@@ -348,7 +371,7 @@ try {
 	}
 	}	# matches
 } catch {
-	Check $false ("the test stopped: " + $_.Exception.Message)
+	if ($_.Exception.Message -ne 'stop: -KillLast done') { Check $false ("the test stopped: " + $_.Exception.Message) }
 } finally {
 	foreach ($peer in $peers) { try { Stop-Copy $peer } catch { } }
 	$cmdUdp.Close()

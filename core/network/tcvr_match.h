@@ -60,6 +60,9 @@ bool reloadNow();
 // and true says the caller must load the game again in single player (not show an error nobody sees in
 // the headset). False: not a match, the caller goes on as usual.
 bool gameStopped(const std::string& message);
+// After gui_stop_game unloaded the game: netplay off now if a match ended (never before the unload:
+// Emulator::stop() ends the GGPO session only while netplay is on).
+void afterUnload();
 // True when a match start has waited too long for the other players (the caller cancels the netplay).
 bool startTimedOut();
 // What the headset shows instead of the game: a match starting, ending, or a paused player. False: nothing.
