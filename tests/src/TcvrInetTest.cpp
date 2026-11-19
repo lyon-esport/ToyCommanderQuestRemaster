@@ -313,7 +313,12 @@ TEST(TcvrInetTest, privateGamePin)
 	cb->setGamePin("2580");
 	lb.join(id, g.address, g.beacon.lobbyPort);
 	ASSERT_TRUE(waitUntil([&] { return lb.view().phase == lobby::Phase::Failed; }));
-	EXPECT_EQ("Too many wrong PINs: wait a minute", cb->lastRefusal());
+	EXPECT_EQ("Wait 2 seconds before trying again", cb->lastRefusal());
+	// after 2 s the right PIN gets in
+	std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+	cb->setGamePin("2580");
+	lb.join(id, g.address, g.beacon.lobbyPort);
+	ASSERT_TRUE(waitUntil([&] { return lb.view().phase == lobby::Phase::InLobby && la.view().state.count() == 3; }));
 }
 
 // A changed server key stops the client (a man in the middle, or a server that lost its key).

@@ -70,6 +70,7 @@ constexpr int PunchFastPhaseMs = 10000;
 constexpr int DirectFreshMs = 3000;		// the other side heard our direct packets this recently: send direct
 constexpr int AcceptTimeoutMs = 10000;
 constexpr int GamesVisibleMs = 3000;
+constexpr int PinRetryMs = 2000;		// after a wrong PIN, the same player waits this long before the next try (Manu)
 
 enum PeerKind : uint8_t { Punch = 1, Ggpo = 2, Pong = 3 };
 
@@ -885,7 +886,7 @@ struct InternetClient::Impl
 			const RefuseWhy why = plain.size() == 1 ? (RefuseWhy)plain[0] : RefuseWhy::WrongPin;
 			{
 				std::lock_guard<std::mutex> lock(mutex);
-				refusal = why == RefuseWhy::TooManyTries ? "Too many wrong PINs: wait a minute" : "Wrong PIN";
+				refusal = why == RefuseWhy::TooManyTries ? "Wait 2 seconds before trying again" : "Wrong PIN";
 			}
 			closeStream(s, false);
 			return;
@@ -895,7 +896,7 @@ struct InternetClient::Impl
 			Reader r(plain);
 			const uint16_t port = r.u16();
 			const std::string theirPin = r.str(PinLength);
-			// a private game: the PIN first (and a growing wait after wrong ones, against guessing)
+			// a private game: the PIN first (and 2 s between tries after a wrong one, against guessing)
 			if (!mine && !s && r.ok && !pin.empty())
 			{
 				PinTries& t = pinTries[m.peer];
@@ -911,7 +912,7 @@ struct InternetClient::Impl
 				{
 					refuse = true;
 					t.wrong++;
-					t.until = now + milliseconds(std::min(60000, 2000 << std::min(t.wrong - 1, 5)));
+					t.until = now + milliseconds(PinRetryMs);
 				}
 				if (refuse)
 				{

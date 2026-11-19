@@ -40,8 +40,8 @@ is handled as on the LAN.
   falls back to the server after 3 s of silence and is tried again.
 - Private games: the PIN only admits players; it is not an encryption key (4 digits are only 10,000
   values, far too easy to try them all against a key). The host's copy checks it (the server never sees
-  it), and wrong tries are slowed down twice: the host's copy makes the same player wait 2 s, 4 s, ... up to
-  60 s after each wrong PIN, and the server lets one address try to join private games at most 10 times a
+  it), and wrong tries are slowed down twice: after a wrong PIN the host's copy makes the same player wait
+  2 s before the next try, and the server lets one address try to join private games at most 10 times a
   minute, so trying every PIN from one address takes over 16 hours.
 - The encryption keys are the players' own (X25519). A server that lied about the players' keys could in
   principle put itself in the middle of a new game; it can never read a game between players whose keys it
