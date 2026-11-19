@@ -44,6 +44,7 @@ std::string cachedSaveName;
 bool saveNameKnown;
 
 constexpr int MarkerSeconds = 120;	// a start that takes longer than this is not a start
+constexpr int StartTimeoutSeconds = 60;	// in the running app: the other players did not come
 
 int nowSeconds()
 {
@@ -64,17 +65,28 @@ void clearNetplay()
 	config::VrMpNames.set(std::string());
 	config::VrMpNames.save();
 }
+// A match that ends while its game runs: netplay is switched off only once the game is unloaded
+// (reloadNow). Emulator::stop() ends the GGPO session only while GGPOEnable is on; switched off
+// first, GGPO went on restarting the SH4 for its frames and the reset that follows failed
+// ("Verify Failed: !ctx->CpuRunning", the host closed when it left a match).
+std::atomic<bool> clearPending;
 
-std::string restart()
+// The game is loaded again inside the running app (task X2: the app no longer restarts itself, which on
+// some headsets came back behind the Quest's own screens). The render thread does it (reloadNow), between
+// two headset frames; the headset keeps showing a panel meanwhile (panelText).
+enum class Reload { None, IntoMatch, BackToLobby };
+std::atomic<int> reloadWanted { (int)Reload::None };	// for the render thread
+std::atomic<int> reloading { (int)Reload::None };		// until the game runs again
+std::chrono::steady_clock::time_point reloadSince;
+std::string endLine;									// why the last match ended, for the menu
+
+std::string restart(Reload kind)
 {
-	WARN_LOG(NETWORK, "MP RESTART");		// (a warning: always in the log; the PC test script restarts the copy)
-	if (restartHook != nullptr)
-	{
-		const std::string line = restartHook();
-		if (!line.empty())
-			return line;
-	}
-	return "Restart needed";
+	WARN_LOG(NETWORK, "MP RESTART in the running app (%s)", kind == Reload::IntoMatch ? "into the match" : "back to the lobby");
+	reloadSince = std::chrono::steady_clock::now();
+	reloading = (int)kind;
+	reloadWanted = (int)kind;
+	return kind == Reload::IntoMatch ? "Starting the match..." : "Back to the lobby...";
 }
 
 std::string upper(const std::string& s)
@@ -86,8 +98,22 @@ std::string upper(const std::string& s)
 	return out;
 }
 
+// The players' names in match order (the lobby's slots, holes closed, as lobby::start orders them).
+std::vector<std::string> matchNames;
+std::mutex resultsMutex;
+Results lastResults;		// (resultsMutex: written on the emulator's thread)
+
 void startMatch(const lobby::View& v)
 {
+	matchNames.clear();
+	for (const lobby::PlayerInfo& p : v.state.players)
+		if (p.present)
+			matchNames.push_back(p.name);
+	{
+		std::lock_guard<std::mutex> lock(resultsMutex);
+		lastResults = Results();
+	}
+	endLine.clear();
 	const lobby::StartInfo& info = v.start;
 	const std::string hostAddress = v.role == lobby::Role::Host ? "127.0.0.1" : v.hostAddress;
 	const std::string peers = info.peerList(hostAddress);
@@ -115,7 +141,7 @@ void startMatch(const lobby::View& v)
 	config::VrMpEndText.set(std::string());
 	config::VrMpEndText.save();
 	saveInt(config::VrMpMarker, nowSeconds() + MarkerSeconds);
-	restart();
+	restart(Reload::IntoMatch);
 }
 
 }	// namespace
@@ -181,15 +207,85 @@ void setPlayerName(const std::string& name)
 }
 
 static std::atomic<bool> lostPeer;
+static std::atomic<bool> resultsDone;		// the game's results page has been and gone (setupButtons)
+
+// Whether this copy was the one away when the others went silent: its own app stood still for seconds
+// (process frozen, headset asleep). Not the game's frames: while one copy is away the others' games
+// wait for its inputs and stand still too. The app's own loop (poll(), every headset frame) goes on there.
+static std::atomic<int64_t> lastOwnFrameMs;		// poll()'s last call in the match
+static std::atomic<int64_t> awaySinceMs;		// when poll() came back after such a gap (0: none)
+static std::atomic<bool> selfAway;
+constexpr int64_t AwayMs = 5000;		// GGPO says "interrupted" after 2 s of silence: well past that
+
+static int64_t steadyMs() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void checkSelfAway()
+{
+	const int64_t now = steadyMs();
+	const int64_t last = lastOwnFrameMs, back = awaySinceMs;
+	const bool standing = last != 0 && now - last > AwayMs;		// (still away: the network thread came first)
+	const bool justBack = back != 0 && now - back < 20000;		// (back from away a moment ago)
+	if ((standing || justBack) && !selfAway.exchange(true))
+		NOTICE_LOG(NETWORK, "MP match: this copy's app stood still %s: it was away", standing ? "until now" : "a moment ago");
+}
+
+// poll(): the app's own loop is running (in a match)
+static void noteOwnLoop()
+{
+	const int64_t now = steadyMs();
+	const int64_t last = lastOwnFrameMs.exchange(now);
+	if (last != 0 && now - last > AwayMs)
+	{
+		awaySinceMs = now;
+		NOTICE_LOG(NETWORK, "MP match: this copy's app stood still for %.1f s", (now - last) / 1000.f);
+	}
+}
+
+static std::string leftLine(const std::string& who)
+{
+	if (selfAway)
+		return "The match is over: you were away too long";
+	return who.empty() ? "The match is over: a player left" : "The match is over: " + who + " left";
+}
+
+// "X left the match" notices (3-4 players: the match goes on) and why the last other player went
 static std::mutex noticeMutex;
 static std::string lostWhy;
 static std::string noticeText;
 static int noticeId;
 static std::chrono::steady_clock::time_point noticeUntil;
 
-// a player's name from the match's list, else "Player n"
+// Paused players (GGPO "connection interrupted"): the player number and since when, or none.
+static std::mutex pausedMutex;
+static std::vector<std::pair<int, std::chrono::steady_clock::time_point>> pausedPlayers;
+
+void peerInterrupted(int player, bool interrupted)
+{
+	if (player < 0)
+		return;
+	if (interrupted && active)
+		checkSelfAway();
+	std::lock_guard<std::mutex> lock(pausedMutex);
+	auto it = std::find_if(pausedPlayers.begin(), pausedPlayers.end(), [player](const auto& p) { return p.first == player; });
+	if (interrupted && it == pausedPlayers.end())
+		pausedPlayers.push_back({ player, std::chrono::steady_clock::now() });
+	else if (!interrupted && it != pausedPlayers.end())
+		pausedPlayers.erase(it);
+}
+
+static void clearPaused()
+{
+	std::lock_guard<std::mutex> lock(pausedMutex);
+	pausedPlayers.clear();
+}
+
+// a player's name: the lobby's names in match order (this run), else the match's list kept in emu.cfg
 static std::string nameOf(int player)
 {
+	if (player >= 0 && player < (int)matchNames.size() && !matchNames[player].empty())
+		return matchNames[player];
 	const std::string& list = config::VrMpNames.get();
 	size_t start = 0;
 	for (int i = 0; i < player && start != std::string::npos; i++)
@@ -210,8 +306,15 @@ static std::string nameOf(int player)
 void playerLeft(int player, bool allGone)
 {
 	const std::string who = nameOf(player);
+	{
+		// (gone: no "paused" panel for that player any more)
+		std::lock_guard<std::mutex> lock(pausedMutex);
+		pausedPlayers.erase(std::remove_if(pausedPlayers.begin(), pausedPlayers.end(), [player](const auto& p) { return p.first == player; }),
+				pausedPlayers.end());
+	}
 	if (!allGone)
 	{
+		// 3 or 4 players: the match goes on without that player (its pad neutral on every copy, ggpo.cpp)
 		NOTICE_LOG(NETWORK, "MP match: player %d (%s) left, the match goes on", player + 1, who.c_str());
 		std::lock_guard<std::mutex> lock(noticeMutex);
 		noticeText = who + " left the match";
@@ -219,19 +322,17 @@ void playerLeft(int player, bool allGone)
 		noticeUntil = std::chrono::steady_clock::now() + std::chrono::seconds(6);
 		return;
 	}
+	if (!active)
+		return;
+	checkSelfAway();
 	NOTICE_LOG(NETWORK, "MP match: player %d (%s) left, nobody else is left: the match is over", player + 1, who.c_str());
 	{
 		std::lock_guard<std::mutex> lock(noticeMutex);
-		lostWhy = ggpo::playerCount() <= 2 ? who + " left: the match is over" : "The other players left: the match is over";
+		lostWhy = selfAway ? leftLine(who)
+				: ggpo::playerCount() <= 2 ? leftLine(who) : "The match is over: the other players left";
 	}
-	if (!active)
-		return;
-	// Kept now, not at the next poll(): the netplay's error that follows can stop the game first (PC), and the
-	// next start must still find netplay off and the menu must still say why.
-	config::VrMpEndText.set(lostWhy);
-	config::VrMpEndText.save();
-	clearNetplay();
-	saveBool(config::VrMpReturn, true);
+	// the next poll() (or gameStopped, when the netplay's error stops the game first) ends the match: back
+	// to the lobby in the running app, netplay off once the game is unloaded
 	lostPeer = true;
 }
 
@@ -244,24 +345,78 @@ std::string notice(int& id)
 	return noticeText;
 }
 
+static std::string takeLostWhy()
+{
+	std::lock_guard<std::mutex> lock(noticeMutex);
+	std::string why;
+	why.swap(lostWhy);
+	return why;
+}
+
+std::string lastEnd();
+
 std::string endText()
 {
-	const std::string t = config::VrMpEndText.get();
+	const std::string t = lastEnd();
 	return t.empty() ? "The match is over" : t;
+}
+
+// The end of a match, however it ends: netplay off, back to the lobby page. The game is unloaded after
+// this (reloadNow, or gui_stop_game's own unload then afterUnload): netplay goes off then.
+static std::string endMatch(const std::string& why)
+{
+	const bool wasAway = selfAway;		// (this copy was the one away: no lobby handover from here)
+	NOTICE_LOG(NETWORK, "MP match over: %s", why.c_str());
+	active = false;
+	lostPeer = false;
+	resultsDone = false;
+	selfAway = false;
+	lastOwnFrameMs = 0;
+	awaySinceMs = 0;
+	clearPaused();
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		begun = false;
+	}
+	clearPending = true;
+	endLine = why;
+	config::VrMpEndText.set(why);
+	config::VrMpEndText.save();
+	saveBool(config::VrMpReturn, true);
+	if (lobbyStarted())
+		theLobby().matchOver(wasAway);
+	return why;
 }
 
 void poll()
 {
+	if (active)
+		noteOwnLoop();
 	if (lostPeer.exchange(false) && active)
 	{
-		std::string why;
-		{
-			std::lock_guard<std::mutex> lock(noticeMutex);
-			why = lostWhy;
-		}
+		std::string why = takeLostWhy();
+		if (why.empty())
+			why = leftLine(std::string());
 		NOTICE_LOG(NETWORK, "MP match: %s", why.c_str());
-		leaveMatch(why);
+		endMatch(why);
+		restart(Reload::BackToLobby);
 		return;
+	}
+	if (resultsDone.exchange(false) && active)
+	{
+		endMatch("The match is over");
+		restart(Reload::BackToLobby);
+		return;
+	}
+	if (reloading != (int)Reload::None)
+	{
+		// the game runs again: the reload is done
+		if (reloadWanted == (int)Reload::None && emu.running())
+		{
+			NOTICE_LOG(NETWORK, "MP: the game runs again (%.1f s)",
+					std::chrono::duration<float>(std::chrono::steady_clock::now() - reloadSince).count());
+			reloading = (int)Reload::None;
+		}
 	}
 	std::unique_lock<std::mutex> lock(mutex);
 	if (begun || !theOne)
@@ -287,16 +442,108 @@ bool inMatch()
 
 std::string leaveMatch(const std::string& why)
 {
-	active = false;
+	if (!active && reloading == (int)Reload::None)
+		return "Not in a match";
+	endMatch(why.empty() ? "You left the match" : why);
+	return restart(Reload::BackToLobby);
+}
+
+bool reloadNow()
+{
+	if (reloadWanted.exchange((int)Reload::None) == (int)Reload::None)
+		return false;
+	if (clearPending.exchange(false))
 	{
-		std::lock_guard<std::mutex> lock(mutex);
-		begun = false;
+		// the match's game stops with netplay still on (its GGPO session ends with it), then netplay off
+		// (unloadGame reads emu.cfg again: still the match's options until clearNetplay)
+		emu.unloadGame();
+		clearNetplay();
 	}
-	config::VrMpEndText.set(why);
-	config::VrMpEndText.save();
-	clearNetplay();
-	saveBool(config::VrMpReturn, true);
-	return restart();
+	return true;
+}
+
+bool gameStopped(const std::string& message)
+{
+	// (a match already over, netplay still on until the unload: not a match any more)
+	const bool match = active || reloading == (int)Reload::IntoMatch || (config::GGPOEnable && !clearPending);
+	if (!match)
+	{
+		// already on the way back (a player left: poll() came first): the caller just loads the game
+		if (reloading != (int)Reload::BackToLobby)
+			return false;
+		reloadWanted = (int)Reload::None;
+		return true;
+	}
+	WARN_LOG(NETWORK, "MP: the game stopped during a match: %s", message.c_str());
+	std::string who;
+	{
+		std::lock_guard<std::mutex> lock(pausedMutex);
+		if (!pausedPlayers.empty())
+			who = nameOf(pausedPlayers.front().first);
+	}
+	const std::string lost = takeLostWhy();		// (the last other player left: the netplay's error came first)
+	const bool starting = !active || reloading == (int)Reload::IntoMatch;
+	endMatch(starting ? "The match could not start" + (message.empty() ? std::string() : ": " + message)
+			: !lost.empty() ? lost
+			: !who.empty() || selfAway ? leftLine(who)
+			: "The match is over: " + (message.empty() ? std::string("the network dropped") : message));
+	// the caller loads the game again (single player); the panel says so meanwhile
+	reloadSince = std::chrono::steady_clock::now();
+	reloading = (int)Reload::BackToLobby;
+	reloadWanted = (int)Reload::None;
+	return true;
+}
+
+void afterUnload()
+{
+	if (clearPending.exchange(false))
+		clearNetplay();
+}
+
+bool startTimedOut()
+{
+	return reloading == (int)Reload::IntoMatch && reloadWanted == (int)Reload::None && !emu.running()
+			&& std::chrono::steady_clock::now() - reloadSince > std::chrono::seconds(StartTimeoutSeconds);
+}
+
+bool panelText(std::string& line, std::string& detail)
+{
+	const int r = reloading;
+	if (r == (int)Reload::IntoMatch)
+	{
+		const float secs = std::chrono::duration<float>(std::chrono::steady_clock::now() - reloadSince).count();
+		line = "Starting the match...";
+		detail = secs < 8.f ? "Waiting for the other players" : "Waiting for the other players (" + std::to_string(StartTimeoutSeconds - (int)secs) + " s)";
+		return true;
+	}
+	if (r == (int)Reload::BackToLobby)
+	{
+		line = endLine.empty() ? "The match is over" : endLine;
+		detail = "Back to the lobby...";
+		return true;
+	}
+	if (!inMatch())
+		return false;
+	std::lock_guard<std::mutex> lock(pausedMutex);
+	if (pausedPlayers.empty())
+		return false;
+	const auto& p = pausedPlayers.front();
+	// GGPO says "interrupted" after 2 s of silence and gives up after 10 s (ggpo.cpp)
+	const int left = std::max(0, 10 - 2 - (int)std::chrono::duration<float>(std::chrono::steady_clock::now() - p.second).count());
+	line = nameOf(p.first) + " paused the game";
+	detail = "The match goes on when " + nameOf(p.first) + " is back. Otherwise it ends in " + std::to_string(left) + " s.";
+	return true;
+}
+
+Results results()
+{
+	std::lock_guard<std::mutex> lock(resultsMutex);
+	return lastResults;
+}
+
+std::string lastEnd()
+{
+	return endLine;
 }
 
 // The Dreamcast devices of a match: the same on every copy, or GGPO refuses the peers (its
@@ -317,6 +564,8 @@ static void matchDevices()
 	NOTICE_LOG(NETWORK, "MP match: %d controllers with a VMU each", players);
 }
 
+static void resetWatch();
+
 void gate()
 {
 	const int marker = config::VrMpMarker;
@@ -327,12 +576,17 @@ void gate()
 			active = true;
 			saveInt(config::VrMpMarker, -1);		// running: any later load that finds this is a left-over
 			NOTICE_LOG(NETWORK, "MP match: this game start is a match");
+			resetWatch();			// (a second match in the same run of the app starts from scratch)
+			resultsDone = false;
+			lostPeer = false;
+			clearPaused();
 			matchDevices();
 			return;
 		}
 		NOTICE_LOG(NETWORK, "MP: a match start that did not happen, netplay switched off");
 		active = false;
 		clearNetplay();
+		endLine = "The match could not start";
 		config::VrMpEndText.set("The match could not start");
 		config::VrMpEndText.save();
 		saveBool(config::VrMpReturn, true);
@@ -371,6 +625,9 @@ constexpr u32 OptMode = 0x8C0A5ACC;
 constexpr u32 OptLimit = 0x8C0A60E8;		// the limit line's index 0..21, live while the page is open
 constexpr u32 OptLine = 0x8C0A5A78;			// the options page's cursor: 0 Room, 1 Mode, 2 Active Environment, 3 limit
 constexpr u32 RoomsMask = 0x8C0A5A5C;		// rooms unlocked (bit r-1 = room r, bit 7 extras)
+constexpr u32 ResultsPageBit = 0x80000000;	// the end-of-match results page (0x8C02FAD8)
+constexpr u32 TeamScores = 0x8C0C7DD4;		// 4 x u32, by team
+constexpr u32 KillTable = 0x8C0CDC68;		// 4 rows (killer) x 0x14: 4 x u32 by victim, then the team points
 constexpr int Fps = 60;
 constexpr int Hold = 9;						// frames a button is held
 constexpr int Gap = 12;						// frames between two presses
@@ -434,7 +691,86 @@ void fail(const char *why)
 
 int since() { return su.frame - su.stepFrame; }
 
+// The end of the match (task 3.5): the game's results page opens, the scores are kept, and when the page
+// closes (a player pressed on), or after a minute of it, every copy goes back to the lobby. Read once per
+// new frame (never in a rollback), the same on every copy.
+struct ResultsWatch
+{
+	int seenFrames = 0;		// frames in a row with the page open
+	int goneFrames = 0;		// frames in a row with the page closed, after it was open
+	bool open = false;
+	int openFrame = 0;
+	bool reported = false;
+} rw;
+
+Results readResults()
+{
+	Results r;
+	const int n = std::clamp((int)matchNames.size(), 0, 4);
+	for (int p = 0; p < n; p++)
+	{
+		Results::Line l;
+		l.name = matchNames[p];
+		l.team = (int)read32(Slots + p * 0x28) & 3;
+		l.points = (int)read32(TeamScores + l.team * 4);
+		for (int v = 0; v < 4; v++)
+			if (v != p)
+				l.kills += (int)read32(KillTable + p * 0x14 + v * 4);
+		r.lines.push_back(l);
+	}
+	std::stable_sort(r.lines.begin(), r.lines.end(), [](const Results::Line& a, const Results::Line& b) {
+		return a.points != b.points ? a.points > b.points : a.kills > b.kills;
+	});
+	r.valid = n > 0;
+	return r;
+}
+
+void watchResults(int frame)
+{
+	const bool page = onPage(ResultsPageBit);
+	if (!rw.open)
+	{
+		rw.seenFrames = page ? rw.seenFrames + 1 : 0;
+		if (rw.seenFrames >= 6)
+		{
+			rw.open = true;
+			rw.openFrame = frame;
+			rw.goneFrames = 0;
+			const Results r = readResults();
+			{
+				std::lock_guard<std::mutex> lock(resultsMutex);
+				lastResults = r;
+			}
+			NOTICE_LOG(NETWORK, "MP match: the results page is open (frame %d)", frame);
+			for (const Results::Line& l : r.lines)
+				NOTICE_LOG(NETWORK, "MP results: %s team %d, %d points, %d kills", l.name.c_str(), l.team + 1, l.points, l.kills);
+		}
+		return;
+	}
+	if (page)
+	{
+		rw.goneFrames = 0;
+		const Results r = readResults();	// (the page may still count up)
+		std::lock_guard<std::mutex> lock(resultsMutex);
+		lastResults = r;
+	}
+	else
+		rw.goneFrames++;
+	if (!rw.reported && (rw.goneFrames >= 30 || frame - rw.openFrame > 60 * Fps))
+	{
+		rw.reported = true;
+		NOTICE_LOG(NETWORK, "MP match: the results page %s (frame %d): back to the lobby", rw.goneFrames >= 30 ? "closed" : "stayed a minute", frame);
+		resultsDone = true;
+	}
+}
+
 }	// namespace
+
+static void resetWatch()
+{
+	su = Setup();
+	rw = ResultsWatch();
+}
 
 uint32_t setupButtons()
 {
@@ -454,6 +790,7 @@ uint32_t setupButtons()
 		NOTICE_LOG(NETWORK, "MP SETUP: player %d, mode %d room %d points %d", ggpo::localPlayerIndex() + 1, s.mode, s.room, s.points);
 	}
 	s.frame++;
+	watchResults(s.frame);
 	if (s.holdLeft > 0)
 	{
 		s.holdLeft--;
@@ -616,9 +953,40 @@ void openAllRooms(Event, void *)
 		addrspace::write8(RoomsMask, 0xFF);
 }
 
+// TEST ONLY (vr.MpTestEnd = N, 0 off, never set by the menu): from netplay frame N on, team 1's score is the
+// match's points limit, so the game ends the match itself and shows its results page, on cue, for tests
+// that can't score by flying. The frame is GGPO's (the same on every copy and in rollbacks), the write at the
+// same point of the frame as openAllRooms: the copies stay identical.
+constexpr u32 LimitValue = 0x8C0A60EC;		// the options' limit value (points in Deathmatch)
+void testEnd(Event, void *)
+{
+	const int n = config::VrMpTestEnd;
+	if (n <= 0 || !config::GGPOEnable || !ggpo::active())
+		return;
+	const int frame = ggpo::currentFrame();
+	if (frame < n)
+		return;
+	const u32 limit = addrspace::read32(LimitValue);
+	if (limit == 0 || limit > 1000)
+		return;
+	if (addrspace::read32(TeamScores) < limit)
+	{
+		addrspace::write32(TeamScores, limit);
+		static int logged = -1;
+		if (logged != n)
+		{
+			logged = n;
+			NOTICE_LOG(NETWORK, "MP TEST END: frame %d, team 1's score set to the limit %u", frame, limit);
+		}
+	}
+}
+
 struct RoomsRegistration
 {
-	RoomsRegistration() { EventManager::listen(Event::VBlank, openAllRooms); }
+	RoomsRegistration() {
+		EventManager::listen(Event::VBlank, openAllRooms);
+		EventManager::listen(Event::VBlank, testEnd);
+	}
 } roomsRegistration;
 
 }

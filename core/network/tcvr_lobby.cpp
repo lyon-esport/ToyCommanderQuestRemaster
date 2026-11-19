@@ -1037,6 +1037,10 @@ struct Lobby::Impl
 					view.phase = Phase::Failed;
 					view.message = "Could not reach the host";
 				});
+			else if (phase == Phase::Started)
+				// tcvr: in a match the match goes on as long as the netplay does; matchOver() then hands the
+				// lobby over (or says the host left)
+				withView([&](View& view) { view.message = "The host left"; });
 		}
 	}
 
@@ -1210,7 +1214,8 @@ struct Lobby::Impl
 		bool active = false;
 		Phase phase = Phase::Idle;
 		withView([&](View& view) { phase = view.phase; });
-		if (hosting && !started)
+		// (during a match too: the lobby stays connected, so the players come back to it afterwards)
+		if (hosting)
 		{
 			active = true;
 			const bool ping = now - lastPing >= std::chrono::milliseconds(timing.pingMs);
@@ -1219,7 +1224,9 @@ struct Lobby::Impl
 			const auto list = conns;		// onDisconnect edits conns
 			for (const ConnPtr& c : list)
 			{
-				if (now - c->lastRx > drop)
+				// (not during a match: a player whose app stands still a moment is still in it while the netplay
+				// counts it; a closed connection still drops it. matchOver() gives the silent ones a ping period.)
+				if (now - c->lastRx > drop && !started)
 					onDisconnect(c);
 				else if (ping)
 					send(c, MsgType::Ping);
@@ -1234,7 +1241,8 @@ struct Lobby::Impl
 			if (expired)
 				publishState();
 		}
-		else if (!hosting && hostConn && (phase == Phase::Connecting || phase == Phase::InLobby))
+		else if (!hosting && hostConn && !hostConn->closed
+				&& (phase == Phase::Connecting || phase == Phase::InLobby || phase == Phase::Started))
 		{
 			active = true;
 			if (phase == Phase::Connecting && rejoining)
@@ -1248,8 +1256,8 @@ struct Lobby::Impl
 				closeConn(hostConn);
 				withView([&](View& view) { view.phase = Phase::Failed; view.message = "The host doesn't answer"; });
 			}
-			else if (now - hostConn->lastRx > drop)
-				onDisconnect(hostConn);
+			else if (now - hostConn->lastRx > drop && phase != Phase::Started)
+				onDisconnect(hostConn);		// (in a match: only a closed connection, as on the host)
 			else if (now - lastPing >= std::chrono::milliseconds(timing.pingMs))
 			{
 				lastPing = now;
@@ -1737,6 +1745,82 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 				impl->send(impl->slots[order[k]], MsgType::Start, encode(mine));
 		}
 		return true;
+	});
+}
+
+void Lobby::matchOver(bool wasAway)
+{
+	impl->run([&] {
+		if (impl->hosting)
+		{
+			if (!impl->started)
+				return;
+			impl->started = false;
+			for (int i = 1; i < MaxPlayers; i++)
+				impl->slotReady[i] = false;
+			const auto now = Clock::now();
+			for (const Impl::ConnPtr& c : impl->conns)
+				c->lastRx = std::max(c->lastRx, now - std::chrono::milliseconds(impl->timing.pingMs));
+			impl->withView([&](View& view) {
+				view.phase = Phase::InLobby;
+				view.start = StartInfo();
+				view.message.clear();
+			});
+			impl->publishState();
+			if (!impl->beaconRunning)
+				impl->beaconTick();
+			impl->startTick();
+			return;
+		}
+		bool inMatch = false;
+		impl->withView([&](View& view) { inMatch = view.phase == Phase::Started; });
+		if (!inMatch)
+			return;
+		const bool hostThere = impl->hostConn && !impl->hostConn->closed;
+		impl->withView([&](View& view) {
+			view.start = StartInfo();
+			if (hostThere)
+			{
+				view.phase = Phase::InLobby;
+				view.message.clear();
+				// (not ready again until the player says so: the host clears every ready mark too)
+				view.state.players[std::max(0, std::min(view.mySlot, MaxPlayers - 1))].ready = false;
+			}
+		});
+		if (hostThere)
+		{
+			// (its pings may wait unread in the socket, after this copy stood still: one ping period to read them)
+			const auto now = Clock::now();
+			impl->hostConn->lastRx = std::max(impl->hostConn->lastRx, now - std::chrono::milliseconds(impl->timing.pingMs));
+			impl->lastPing = now;
+			impl->startTick();
+		}
+		else if (wasAway)
+		{
+			// this copy was the one away (its app stood still): the host dropped it, it did not leave. No
+			// handover from here: the others are still in the host's lobby. Joining again gets back in.
+			if (impl->hostConn)
+				impl->closeConn(impl->hostConn);
+			impl->hostConn.reset();
+			impl->withView([&](View& view) {
+				view.phase = Phase::HostLeft;
+				view.message = "You were away too long: join the game again";
+			});
+		}
+		else
+		{
+			// the host left during the match: the next player hosts the same lobby (handover), as before a
+			// match; nobody left to host: "The host left"
+			State last;
+			int mine = -1;
+			impl->withView([&](View& view) {
+				for (PlayerInfo& p : view.state.players)
+					p.ready = false;
+				last = view.state;
+				mine = view.mySlot;
+			});
+			impl->handover(last, mine);
+		}
 	});
 }
 

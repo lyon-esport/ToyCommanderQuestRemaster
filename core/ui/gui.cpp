@@ -17,6 +17,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui.h"
+#include "network/tcvr_match.h"
 #include "rend/osd.h"
 #include "cfg/cfg.h"
 #include "imgui.h"
@@ -451,12 +452,26 @@ void gui_open_settings()
 	}
 }
 
-void gui_start_game(const std::string& path)
+// tcvr: the last game started, for loading it again after a match (unloadGame clears settings.content)
+static std::string lastGamePath;
+const std::string& gui_last_game_path() {
+	// (a game started from the command line has not been through gui_start_game)
+	if (lastGamePath.empty() && !settings.content.path.empty())
+		lastGamePath = settings.content.path;
+	return lastGamePath;
+}
+
+void gui_start_game(const std::string& pathArg)
 {
 	const LockGuard lock(guiMutex);
 	if (gui_state != GuiState::Main && gui_state != GuiState::Closed && gui_state != GuiState::Commands
 			&& gui_state != GuiState::Pause)
 		return;
+	// tcvr: a copy, the path is often settings.content.path, which unloadGame clears (the in-app
+	// reload of a match then booted with no game: "No BIOS file found")
+	const std::string path = pathArg;
+	if (!path.empty())
+		lastGamePath = path;
 	emu.unloadGame();
 	reset_vmus();
     chat.reset();
@@ -469,6 +484,25 @@ void gui_start_game(const std::string& path)
 void gui_stop_game(const std::string& message)
 {
 	const LockGuard lock(guiMutex);
+	// tcvr: a multiplayer match that could not start or broke off: back to single player in the running
+	// app (the main page with the game's path loads it again at once), the VR menu says why
+	if (tcvr::match::gameStopped(message))
+	{
+		if (!message.empty())
+			WARN_LOG(COMMON, "Flycast has stopped in a match: %s", message.c_str());
+		const std::string path = gui_last_game_path();		// (before unloadGame clears it)
+		emu.unloadGame();
+		tcvr::match::afterUnload();
+		reset_vmus();
+		if (!path.empty())
+		{
+			gui_setState(GuiState::Closed);
+			gui_start_game(path);
+		}
+		else
+			gui_setState(GuiState::Main);
+		return;
+	}
 	if (!commandLineStart)
 	{
 		// Exit to main menu
@@ -1113,6 +1147,21 @@ static void drawBoxartBackground()
 }
 
 static std::future<bool> networkStatus;
+
+// tcvr: a match start that waits too long for the other players: the same as the Cancel button
+void gui_cancel_network()
+{
+	const LockGuard lock(guiMutex);
+	if (gui_state != GuiState::NetworkStart || NetworkHandshake::instance == nullptr)
+		return;
+	WARN_LOG(NETWORK, "Netplay start cancelled: the other players did not come");
+	NetworkHandshake::instance->stop();
+	try {
+		networkStatus.get();
+	} catch (const FlycastException&) {
+	}
+	gui_stop_game("the other players did not come");
+}
 
 static void gui_network_start()
 {

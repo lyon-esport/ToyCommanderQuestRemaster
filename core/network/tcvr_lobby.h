@@ -295,6 +295,12 @@ public:
 	void setReady(bool ready);
 
 	// -- both
+	// The match that START began is over (ended normally or a player left): back to the lobby page with
+	// the same players, nobody ready, a host announces its game again. A joiner whose host went away
+	// during the match ends in HostLeft. Nothing happens outside phase Started.
+	// wasAway: this copy was the one away (its app stood still): with its host connection gone it does not take
+	// the lobby over (HostLeft, "You were away too long: join the game again").
+	void matchOver(bool wasAway = false);
 	void leave();							// tells the others and goes back to Idle
 	View view();							// a copy of what the menu needs
 

@@ -32,6 +32,8 @@ void gui_display_profiler();
 void gui_open_onboarding();
 void gui_term();
 void gui_cancel_load();
+// tcvr: gives up a netplay start that waits for its peers (multiplayer match)
+void gui_cancel_network();
 void gui_refresh_files();
 void gui_cheats();
 void gui_keyboard_input(u32 wc);
@@ -46,6 +48,7 @@ void gui_set_mouse_wheel(float delta);
 void gui_set_insets(int left, int right, int top, int bottom);
 void gui_stop_game(const std::string& message = "");
 void gui_start_game(const std::string& path);
+const std::string& gui_last_game_path();	// tcvr: the last game started (empty: none)
 void gui_error(const std::string& what);
 void gui_setOnScreenKeyboardCallback(void (*callback)(bool show));
 void gui_loadState(bool inRam = false);

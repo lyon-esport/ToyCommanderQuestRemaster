@@ -180,9 +180,20 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
             // hotd2-vr: started from the headset's app library. The Flycast menu can't be
             // shown in the headset, so boot the player's game directly, or show the setup
             // panel when it can't be found (or read) yet.
+            if (vrBootedGame != null) {
+                // tcvr: another instance of this activity in a process that runs the game already
+                // (started again while its task was there, e.g. "am start"): it takes over the running
+                // emulator (its surface). Booting the game again ended a multiplayer match.
+                vrGamePath = vrBootedGame;
+                Log.i("flycast", "VR build started again, the game runs already: not booted again");
+                Log.i("flycast", "BaseGLActivity.onCreate done");
+                return;
+            }
             String game = findVrGame();
             vrGamePath = game;
             Log.i("flycast", "VR build started without a game, booting " + game);
+            if (game != null)
+                vrBootedGame = game;
             if (game == null) {
                 showVrSetup();
                 return;
@@ -285,6 +296,9 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
 
     // tcvr: the disc image started from the headset's library (null otherwise)
     private String vrGamePath;
+    // tcvr: the disc image this process booted (VR build), for the whole process: a later instance of
+    // the activity does not boot it again (a new game starts in a new process: Quit, the setup panel)
+    private static String vrBootedGame;
 
     // tcvr: called from native code (emulator.cpp) when the disc isn't Toy Commander (Europe), the
     // only version the VR build runs: kept as refused, and back to the setup panel, which says why.

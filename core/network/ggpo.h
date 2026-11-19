@@ -34,6 +34,8 @@ bool active();
 // tcvr: this copy's player (0 = player 1) and how many play, in a netplay session (else 0 and 1)
 int localPlayerIndex();
 int playerCount();
+// tcvr: the frame the session is at (the last state saved: the same on every copy, in rollbacks too), -1 none
+int currentFrame();
 void displayStats();
 void endOfFrame();
 void sendChatMessage(int playerNum, const std::string& msg);
