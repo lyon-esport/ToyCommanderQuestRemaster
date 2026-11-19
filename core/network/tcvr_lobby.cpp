@@ -208,6 +208,10 @@ std::vector<uint8_t> encode(const Hello& m)
 	w.str(m.appVersion);
 	w.bytes(m.disc.data(), m.disc.size());
 	w.u16(m.ggpoPort);
+	w.u16(m.lobbyPort);
+	w.u32(m.lobbyId);
+	w.u8(m.slot);
+	w.u8(m.ready);
 	return w.b;
 }
 
@@ -219,6 +223,12 @@ bool decode(const std::vector<uint8_t>& p, Hello& m)
 	m.appVersion = cleanText(r.str());
 	r.bytes(m.disc.data(), m.disc.size());
 	m.ggpoPort = r.u16();
+	if (m.protocol != ProtocolVersion)
+		return r.ok;		// (another version: refused for it, the rest is not read)
+	m.lobbyPort = r.u16();
+	m.lobbyId = r.u32();
+	m.slot = r.u8();
+	m.ready = r.u8() != 0;
 	return r.ok;
 }
 
@@ -246,6 +256,8 @@ std::vector<uint8_t> encode(const State& m)
 	Writer w;
 	w.u32(m.revision);
 	w.settings(m.settings);
+	w.u32(m.lobbyId);
+	w.u8(m.hostSlot);
 	for (const PlayerInfo& p : m.players)
 	{
 		w.u8(p.present);
@@ -255,6 +267,7 @@ std::vector<uint8_t> encode(const State& m)
 			w.u8(p.ready);
 			w.str(p.address);
 			w.u16(p.ggpoPort);
+			w.u16(p.lobbyPort);
 		}
 	}
 	return w.b;
@@ -266,6 +279,8 @@ bool decode(const std::vector<uint8_t>& p, State& m)
 	m = State();
 	m.revision = r.u32();
 	m.settings = r.settings();
+	m.lobbyId = r.u32();
+	m.hostSlot = r.u8();
 	for (PlayerInfo& pl : m.players)
 	{
 		pl.present = r.u8() != 0;
@@ -275,9 +290,10 @@ bool decode(const std::vector<uint8_t>& p, State& m)
 			pl.ready = r.u8() != 0;
 			pl.address = cleanText(r.str());
 			pl.ggpoPort = r.u16();
+			pl.lobbyPort = r.u16();
 		}
 	}
-	return r.ok;
+	return r.ok && m.hostSlot < MaxPlayers;
 }
 
 std::vector<uint8_t> encodeReady(bool ready) { return { (uint8_t)ready }; }
@@ -600,6 +616,21 @@ using Clock = std::chrono::steady_clock;
 using asio::ip::tcp;
 using asio::ip::udp;
 
+// TCVR_NET_LOOPBACK=1 (PC test copies on one computer): listen on 127.0.0.1 only, so the system firewall never
+// asks about each new test copy. Games are then only found and joined on this computer.
+// Several copies cannot share one loopback port for the beacons (only one of them would hear each), so in this
+// mode each copy listens on the first free port of discoveryPort .. +LoopbackPorts-1, and beacons go to all of them.
+static bool loopbackOnly()
+{
+	const char *loop = std::getenv("TCVR_NET_LOOPBACK");
+	return loop != nullptr && loop[0] == '1';
+}
+static asio::ip::address_v4 listenAddress()
+{
+	return loopbackOnly() ? asio::ip::address_v4::loopback() : asio::ip::address_v4::any();
+}
+constexpr int LoopbackPorts = 8;
+
 namespace
 {
 
@@ -638,6 +669,7 @@ struct Lobby::Impl
 		int slot = -1;
 		std::string address;
 		uint16_t ggpoPort = 0;
+		uint16_t lobbyPort = 0;		// its standby lobby port
 		Clock::time_point lastRx = Clock::now();
 		Clock::time_point accepted = Clock::now();
 	};
@@ -670,12 +702,31 @@ struct Lobby::Impl
 	asio::steady_timer beaconTimer;
 	asio::steady_timer tickTimer;
 	std::unique_ptr<tcp::acceptor> acceptor;
-	std::vector<ConnPtr> conns;			// host: every connection (slot >= 1 after HELLO)
+	std::unique_ptr<tcp::acceptor> standby;	// joiner: the lobby port it hosts on after a handover
+	std::vector<ConnPtr> conns;			// host: every connection (a slot after HELLO)
 	ConnPtr hostConn;					// joiner
 	std::array<ConnPtr, MaxPlayers> slots;
 	Identity me;
 	Settings settings;
-	uint32_t hostId = 0;
+	uint32_t hostId = 0;				// the game's id (kept by a new host after a handover)
+	int hostSlot = 0;					// host: its own slot
+	bool myReady = false;				// joiner: the ready mark it sent
+	// host after a handover: a slot kept for a player who comes back (HELLO with the game's id and slot)
+	struct Kept
+	{
+		bool on = false;
+		PlayerInfo info;
+		Clock::time_point until;
+	};
+	std::array<Kept, MaxPlayers> kept;
+	// joiner during a handover: the lobby as it was, the new host's slot, and when to give up
+	bool rejoining = false;
+	// joiner: players who left the lobby lately. The host's STATE can drop a player who is in fact taking
+	// over (it left the old host first); such a player still counts for choosing the new host.
+	std::array<std::pair<PlayerInfo, Clock::time_point>, MaxPlayers> recentlyGone {};
+	State handoverState;
+	int handoverTo = -1;
+	Clock::time_point handoverEnd;
 	bool hosting = false;
 	bool started = false;
 	bool beaconRunning = false;
@@ -727,9 +778,25 @@ struct Lobby::Impl
 		try {
 			auto s = std::make_unique<udp::socket>(io);
 			s->open(udp::v4());
-			s->set_option(asio::socket_base::reuse_address(true));
 			s->set_option(asio::socket_base::broadcast(true));
-			s->bind(udp::endpoint(udp::v4(), discoveryPort));
+			if (loopbackOnly())
+			{
+				asio::error_code ec;
+				for (int k = 0; k < LoopbackPorts; k++)
+				{
+					ec.clear();
+					s->bind(udp::endpoint(listenAddress(), (uint16_t)(discoveryPort + k)), ec);
+					if (!ec)
+						break;
+				}
+				if (ec)
+					throw asio::system_error(ec);
+			}
+			else
+			{
+				s->set_option(asio::socket_base::reuse_address(true));
+				s->bind(udp::endpoint(listenAddress(), discoveryPort));
+			}
 			disc = std::move(s);
 			if (broadcastHook)
 				broadcastHook(true);
@@ -836,7 +903,8 @@ struct Lobby::Impl
 			const auto addr = asio::ip::make_address_v4(t, ec);
 			if (ec)
 				continue;
-			disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, discoveryPort), [data](const asio::error_code&, size_t) {});
+			for (int k = 0; k < (loopbackOnly() && addr.is_loopback() ? LoopbackPorts : 1); k++)
+				disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, (uint16_t)(discoveryPort + k)), [data](const asio::error_code&, size_t) {});
 		}
 	}
 
@@ -935,7 +1003,7 @@ struct Lobby::Impl
 		closeConn(c);
 		if (hosting)
 		{
-			if (c->slot > 0 && slots[c->slot] == c)
+			if (c->slot >= 0 && slots[c->slot] == c)
 			{
 				slots[c->slot].reset();
 				c->slot = -1;
@@ -945,19 +1013,180 @@ struct Lobby::Impl
 		}
 		else if (c == hostConn)
 		{
-			withView([&](View& view) {
-				if (view.phase == Phase::Connecting)
-				{
+			Phase phase;
+			State last;
+			int mine;
+			withView([&](View& view) { phase = view.phase; last = view.state; mine = view.mySlot; });
+			if (rejoining)
+			{
+				// the new host can't be reached: the next one in slot order, if any
+				handoverState.players[handoverTo].present = false;
+				handover(handoverState, mine);
+			}
+			else if (phase == Phase::InLobby)
+			{
+				const auto now = Clock::now();
+				for (int i = 0; i < MaxPlayers; i++)
+					if (!last.players[i].present && recentlyGone[i].first.present
+							&& now - recentlyGone[i].second < std::chrono::milliseconds(timing.handoverMs))
+						last.players[i] = recentlyGone[i].first;
+				handover(last, mine);
+			}
+			else if (phase == Phase::Connecting)
+				withView([&](View& view) {
 					view.phase = Phase::Failed;
 					view.message = "Could not reach the host";
-				}
-				else if (view.phase == Phase::InLobby)
-				{
-					view.phase = Phase::HostLeft;
-					view.message = "The host left";
-				}
-			});
+				});
 		}
+	}
+
+	// ---- host handover (before the match)
+
+	// The host is gone: the next player in slot order (after the host) hosts the same game; the others
+	// join it and get their slots back.
+	void handover(const State& last, int mySlot)
+	{
+		if (hostConn)
+			closeConn(hostConn);
+		hostConn.reset();
+		rejoining = false;
+		int next = -1;
+		for (int i = 0; i < MaxPlayers && next < 0; i++)
+			if (i != last.hostSlot && last.players[i].present)
+				next = i;
+		if (next < 0 || mySlot < 0 || last.lobbyId == 0)
+		{
+			hostLeft();
+			return;
+		}
+		if (next == mySlot)
+		{
+			becomeHost(last, mySlot);
+			return;
+		}
+		// join the new host on its standby port. Its address is as the old host saw it: a player on the old
+		// host's own computer shows as this computer (127.x) there, so that one is reached at the old host's address.
+		const PlayerInfo& nh = last.players[next];
+		std::string address = nh.address;
+		std::string oldHost;
+		withView([&](View& view) { oldHost = view.hostAddress; });
+		if (address.empty() || isLoopback(address))
+			address = oldHost.empty() ? "127.0.0.1" : oldHost;
+		asio::error_code ec;
+		const auto addr = asio::ip::make_address_v4(address, ec);
+		if (ec || nh.lobbyPort == 0)
+		{
+			State rest = last;
+			rest.players[next].present = false;
+			handover(rest, mySlot);
+			return;
+		}
+		if (!rejoining || handoverState.lobbyId != last.lobbyId)
+			handoverEnd = Clock::now() + std::chrono::milliseconds(timing.handoverMs);
+		rejoining = true;
+		handoverState = last;
+		handoverTo = next;
+		const std::string name = nh.name;
+		withView([&](View& view) {
+			view.phase = Phase::Connecting;
+			view.hostAddress = address;
+			view.lobbyPort = nh.lobbyPort;
+			view.message = "The host left. " + name + " is the new host: joining...";
+		});
+		connect(addr, nh.lobbyPort);
+	}
+
+	void hostLeft()
+	{
+		rejoining = false;
+		withView([&](View& view) {
+			view.phase = Phase::HostLeft;
+			view.message = "The host left";
+		});
+	}
+
+	void becomeHost(const State& last, int mySlot)
+	{
+		if (!standby)
+		{
+			hostLeft();
+			return;
+		}
+		acceptor = std::move(standby);
+		hosting = true;
+		started = false;
+		hostSlot = mySlot;
+		hostId = last.lobbyId;
+		settings = last.settings;
+		revision = last.revision;
+		slotNames = {};
+		slotReady = {};
+		for (auto& s : slots)
+			s.reset();
+		const auto until = Clock::now() + std::chrono::milliseconds(timing.handoverMs);
+		for (int i = 0; i < MaxPlayers; i++)
+		{
+			kept[i] = Kept();
+			if (i != mySlot && i != last.hostSlot && last.players[i].present)
+			{
+				kept[i].on = true;
+				kept[i].info = last.players[i];
+				kept[i].info.ready = false;
+				kept[i].until = until;
+			}
+		}
+		lastPing = Clock::now();
+		const std::string addr = localAddress();
+		const uint16_t port = acceptor->local_endpoint().port();
+		const std::string oldName = last.players[last.hostSlot].name;
+		publishState();		// (the view's state first: the menu never shows the old list under the new role)
+		withView([&](View& view) {
+			view.role = Role::Host;
+			view.phase = Phase::InLobby;
+			view.mySlot = mySlot;
+			view.hostAddress = addr;
+			view.lobbyPort = port;
+			view.message = oldName + " left: you are the host now";
+		});
+		updateDiscovery();
+		acceptLoop();
+		beaconTick();
+		startTick();
+	}
+
+	void connect(const asio::ip::address_v4& addr, uint16_t port)
+	{
+		auto c = std::make_shared<Conn>(io);
+		hostConn = c;
+		connectStart = Clock::now();
+		lastPing = Clock::now();
+		c->sock.async_connect(tcp::endpoint(addr, port), [this, c](const asio::error_code& ec) {
+			if (c->closed)
+				return;
+			if (ec)
+			{
+				onDisconnect(c);
+				return;
+			}
+			asio::error_code e2;
+			c->sock.set_option(tcp::no_delay(true), e2);
+			c->lastRx = Clock::now();
+			Hello h;
+			h.name = me.name;
+			h.appVersion = me.appVersion;
+			h.disc = me.disc;
+			h.ggpoPort = me.ggpoPort;
+			h.lobbyPort = standby ? standby->local_endpoint(e2).port() : 0;
+			if (rejoining)
+			{
+				h.lobbyId = handoverState.lobbyId;
+				withView([&](View& view) { h.slot = view.mySlot >= 0 ? (uint8_t)view.mySlot : NoSlot; });
+				h.ready = myReady;
+			}
+			send(c, MsgType::Hello, encode(h));
+			readLoop(c);
+		});
+		startTick();
 	}
 
 	void startTick()
@@ -995,11 +1224,26 @@ struct Lobby::Impl
 				else if (ping)
 					send(c, MsgType::Ping);
 			}
+			bool expired = false;
+			for (Kept& k : kept)
+				if (k.on && now >= k.until)
+				{
+					k.on = false;		// not back in time: the slot is free
+					expired = true;
+				}
+			if (expired)
+				publishState();
 		}
 		else if (!hosting && hostConn && (phase == Phase::Connecting || phase == Phase::InLobby))
 		{
 			active = true;
-			if (phase == Phase::Connecting && now - connectStart > std::chrono::milliseconds(timing.connectMs))
+			if (phase == Phase::Connecting && rejoining)
+			{
+				// the new host may not know yet that the old one is gone: it answers once it does
+				if (now > handoverEnd)
+					onDisconnect(hostConn);		// the next one, or "The host left"
+			}
+			else if (phase == Phase::Connecting && now - connectStart > std::chrono::milliseconds(timing.connectMs))
 			{
 				closeConn(hostConn);
 				withView([&](View& view) { view.phase = Phase::Failed; view.message = "The host doesn't answer"; });
@@ -1023,15 +1267,19 @@ struct Lobby::Impl
 		State s;
 		s.revision = revision;
 		s.settings = settings;
+		s.lobbyId = hostId;
+		s.hostSlot = (uint8_t)hostSlot;
 		for (int i = 0; i < MaxPlayers; i++)
 		{
 			PlayerInfo& p = s.players[i];
-			if (i == 0)
+			if (i == hostSlot)
 			{
 				p.present = true;
 				p.name = cleanName(me.name);
 				p.ready = true;
 				p.ggpoPort = me.ggpoPort;
+				asio::error_code ec;
+				p.lobbyPort = acceptor ? acceptor->local_endpoint(ec).port() : 0;
 			}
 			else if (slots[i])
 			{
@@ -1040,7 +1288,10 @@ struct Lobby::Impl
 				p.ready = slotReady[i];
 				p.address = slots[i]->address;
 				p.ggpoPort = slots[i]->ggpoPort;
+				p.lobbyPort = slots[i]->lobbyPort;
 			}
+			else if (kept[i].on)
+				p = kept[i].info;		// after a handover, not back yet
 		}
 		return s;
 	}
@@ -1053,7 +1304,7 @@ struct Lobby::Impl
 		const State s = currentState();
 		withView([&](View& view) { view.state = s; });
 		const auto payload = encode(s);
-		for (int i = 1; i < MaxPlayers; i++)
+		for (int i = 0; i < MaxPlayers; i++)
 			if (slots[i])
 				send(slots[i], MsgType::State, payload);
 	}
@@ -1072,8 +1323,13 @@ struct Lobby::Impl
 			}
 			RefuseReason why = RefuseReason::None;
 			int slot = -1;
-			for (int i = 1; i < MaxPlayers && slot < 0; i++)
-				if (!slots[i])
+			// back after a handover: its own slot
+			const bool back = h.lobbyId != 0 && h.lobbyId == hostId && h.slot < MaxPlayers && h.slot != hostSlot
+					&& !slots[h.slot];
+			if (back)
+				slot = h.slot;
+			for (int i = 0; i < MaxPlayers && slot < 0; i++)
+				if (i != hostSlot && !slots[i] && !kept[i].on)
 					slot = i;
 			if (started)
 				why = RefuseReason::Started;
@@ -1092,9 +1348,11 @@ struct Lobby::Impl
 			}
 			c->slot = slot;
 			c->ggpoPort = h.ggpoPort;
+			c->lobbyPort = h.lobbyPort;
 			slots[slot] = c;
 			slotNames[slot] = h.name;
-			slotReady[slot] = false;
+			slotReady[slot] = back && h.ready;
+			kept[slot].on = false;
 			send(c, MsgType::Welcome, encodeWelcome((uint8_t)slot));
 			publishState();
 			break;
@@ -1102,7 +1360,7 @@ struct Lobby::Impl
 		case MsgType::Ready:
 		{
 			bool ready;
-			if (c->slot > 0 && decodeReady(f.payload, ready) && slotReady[c->slot] != ready)
+			if (c->slot >= 0 && decodeReady(f.payload, ready) && slotReady[c->slot] != ready)
 			{
 				slotReady[c->slot] = ready;
 				publishState();
@@ -1165,10 +1423,15 @@ struct Lobby::Impl
 				onDisconnect(c);
 				return;
 			}
+			const bool wasRejoining = rejoining;
+			rejoining = false;
 			withView([&](View& view) {
 				view.mySlot = slot;
 				view.phase = Phase::InLobby;
-				view.message.clear();
+				if (wasRejoining)
+					view.message = "The host left: " + handoverState.players[handoverTo].name + " is the new host";
+				else
+					view.message.clear();
 			});
 			break;
 		}
@@ -1194,7 +1457,14 @@ struct Lobby::Impl
 			}
 			withView([&](View& view) {
 				if (s.revision >= view.state.revision)
+				{
+					for (int i = 0; i < MaxPlayers; i++)
+						if (view.state.players[i].present && !s.players[i].present && s.lobbyId == view.state.lobbyId)
+							recentlyGone[i] = { view.state.players[i], Clock::now() };
+						else if (s.players[i].present)
+							recentlyGone[i].first.present = false;
 					view.state = s;
+				}
 			});
 			break;
 		}
@@ -1233,14 +1503,20 @@ struct Lobby::Impl
 		conns.clear();
 		for (auto& s : slots)
 			s.reset();
-		if (acceptor)
-		{
-			asio::error_code ec;
-			acceptor->close(ec);
-			acceptor.reset();
-		}
+		for (auto *a : { &acceptor, &standby })
+			if (*a)
+			{
+				asio::error_code ec;
+				(*a)->close(ec);
+				a->reset();
+			}
 		hosting = false;
 		started = false;
+		hostSlot = 0;
+		myReady = false;
+		rejoining = false;
+		kept = {};
+		recentlyGone = {};
 		beaconTimer.cancel();
 		tickTimer.cancel();
 		if (!keepView)
@@ -1257,12 +1533,20 @@ struct Lobby::Impl
 		}
 		int n = 1;
 		bool allReady = true;
-		for (int i = 1; i < MaxPlayers; i++)
-			if (slots[i])
+		bool missing = false;
+		for (int i = 0; i < MaxPlayers; i++)
+			if (i != hostSlot && slots[i])
 			{
 				n++;
 				allReady = allReady && slotReady[i];
 			}
+			else if (i != hostSlot && kept[i].on)
+				missing = true;
+		if (missing)
+		{
+			why = "Waiting for the players to come back";
+			return false;
+		}
 		if (n < 2)
 		{
 			why = "Waiting for another player";
@@ -1348,7 +1632,8 @@ void Lobby::query(const std::string& address)
 		if (ec)
 			return;
 		auto data = std::make_shared<std::vector<uint8_t>>(encodeQuery());
-		impl->disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, impl->discoveryPort), [data](const asio::error_code&, size_t) {});
+		for (int k = 0; k < (loopbackOnly() && addr.is_loopback() ? LoopbackPorts : 1); k++)
+			impl->disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, (uint16_t)(impl->discoveryPort + k)), [data](const asio::error_code&, size_t) {});
 	});
 }
 
@@ -1360,7 +1645,7 @@ bool Lobby::host(const Identity& me, const Settings& settings, std::string& erro
 			auto acc = std::make_unique<tcp::acceptor>(impl->io);
 			acc->open(tcp::v4());
 			acc->set_option(asio::socket_base::reuse_address(true));
-			acc->bind(tcp::endpoint(tcp::v4(), 0));
+			acc->bind(tcp::endpoint(listenAddress(), 0));
 			acc->listen();
 			impl->acceptor = std::move(acc);
 		} catch (const std::exception& e) {
@@ -1370,7 +1655,9 @@ bool Lobby::host(const Identity& me, const Settings& settings, std::string& erro
 		impl->me = me;
 		impl->me.name = cleanName(me.name);
 		impl->settings = settings;
-		impl->hostId = impl->rng();
+		do
+			impl->hostId = impl->rng();
+		while (impl->hostId == 0);		// (0: no game, for a rejoin)
 		impl->hosting = true;
 		impl->started = false;
 		impl->revision = 0;
@@ -1426,8 +1713,9 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 			return false;
 		// players in slot order, holes closed
 		std::vector<int> order;
+		const int hostSlot = impl->hostSlot;
 		for (int i = 0; i < MaxPlayers; i++)
-			if (i == 0 || impl->slots[i])
+			if (i == hostSlot || impl->slots[i])
 				order.push_back(i);
 		const State s = impl->currentState();
 		StartInfo base;
@@ -1435,13 +1723,13 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 		base.sessionId = impl->rng();
 		base.settings = impl->settings;
 		for (int i : order)
-			base.peers.push_back({ i == 0 ? std::string() : s.players[i].address, s.players[i].ggpoPort });
+			base.peers.push_back({ i == hostSlot ? std::string() : s.players[i].address, s.players[i].ggpoPort });
 		impl->started = true;
 		for (size_t k = 0; k < order.size(); k++)
 		{
 			StartInfo mine = base;
 			mine.localIndex = (int)k;
-			if (order[k] == 0)
+			if (order[k] == hostSlot)
 			{
 				impl->withView([&](View& view) { view.start = mine; view.phase = Phase::Started; });
 			}
@@ -1474,30 +1762,18 @@ void Lobby::join(const Identity& me, const std::string& address, uint16_t lobbyP
 			impl->withView([&](View& view) { view.phase = Phase::Failed; view.message = "Not a valid address"; });
 			return;
 		}
-		auto c = std::make_shared<Impl::Conn>(impl->io);
-		impl->hostConn = c;
-		impl->connectStart = Clock::now();
-		impl->lastPing = Clock::now();
-		c->sock.async_connect(tcp::endpoint(addr, lobbyPort), [impl = impl.get(), c](const asio::error_code& ec) {
-			if (c->closed)
-				return;
-			if (ec)
-			{
-				impl->onDisconnect(c);
-				return;
-			}
-			asio::error_code e2;
-			c->sock.set_option(tcp::no_delay(true), e2);
-			c->lastRx = Clock::now();
-			Hello h;
-			h.name = impl->me.name;
-			h.appVersion = impl->me.appVersion;
-			h.disc = impl->me.disc;
-			h.ggpoPort = impl->me.ggpoPort;
-			impl->send(c, MsgType::Hello, encode(h));
-			impl->readLoop(c);
-		});
-		impl->startTick();
+		// the standby lobby port: where this player hosts the game if the host leaves before the match
+		try {
+			auto acc = std::make_unique<tcp::acceptor>(impl->io);
+			acc->open(tcp::v4());
+			acc->set_option(asio::socket_base::reuse_address(true));
+			acc->bind(tcp::endpoint(listenAddress(), 0));
+			acc->listen();
+			impl->standby = std::move(acc);
+		} catch (const std::exception&) {
+			impl->standby.reset();		// no handover to this player; joining still works
+		}
+		impl->connect(addr, lobbyPort);
 	});
 }
 
@@ -1506,6 +1782,7 @@ void Lobby::setReady(bool ready)
 	impl->run([&] {
 		if (impl->hosting || !impl->hostConn)
 			return;
+		impl->myReady = ready;
 		impl->send(impl->hostConn, MsgType::Ready, encodeReady(ready));
 	});
 }
@@ -1524,7 +1801,7 @@ void Lobby::leave()
 		};
 		if (impl->hosting)
 		{
-			for (int i = 1; i < MaxPlayers; i++)
+			for (int i = 0; i < MaxPlayers; i++)
 				sayBye(impl->slots[i]);
 		}
 		else if (impl->hostConn)

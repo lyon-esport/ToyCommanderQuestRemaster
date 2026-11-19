@@ -21,6 +21,10 @@
   .\tcvr\tools\netplay-test-tc.ps1 -Players 4 -Seconds 670 four copies, 10 min of battle
   .\tcvr\tools\netplay-test-tc.ps1 -Local 4                no network: one copy, 4 local pads
                                                            (the 4-player check), shots only
+  .\tcvr\tools\netplay-test-tc.ps1 -Players 4 -KillPlayer 3 -KillAt 120 -Seconds 440
+                                                           player 3's copy is killed (its process ended) 120 s
+                                                           into the game: the other copies must go on together
+                                                           (task 1.4); they are compared with each other
 
   Paths: the game image is taken from -GamePath or the first .chd/.gdi/.cue in
   $env:TCVR_PRIVATE_ROOT\Source (default: the folder above this repository). Each copy runs
@@ -45,10 +49,13 @@ param(
 	[ValidateSet('wave', 'hunt')][string]$Pattern = 'wave',	# hunt: P1 chases and shoots P2 (kills, respawns)
 	[ValidateRange(0, 2)][int]$Mode = 0,	# 0 Deathmatch, 1 Cat and Mice, 2 Capture the Flag
 	[switch]$Ram,			# with -Pattern hunt: no passes, the hunter flies straight at the target (collisions)
+	[switch]$TargetStill,	# with -Pattern hunt: the target never takes off (pad at rest, A now and then to respawn): an easy target (task 1.5)
 	[string]$BuildDir = '',	# folder with flycast.exe (default $env:TCVR_BUILD_WIN, else build-win here)
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
 	[string]$Name = '',
+	[int]$KillPlayer = 0,	# >0: this player's copy is killed at -KillAt (a player who leaves or drops, task 1.4)
+	[double]$KillAt = 0,	# seconds of game (as -Seconds) when it is killed
 	[int]$PortOffset = 0	# added to the pad listener ports (27041+) and, with the player list, the GGPO ports (19713+): two tests on one PC at once (use -List for 2 copies)
 )
 $ErrorActionPreference = 'Stop'
@@ -63,7 +70,7 @@ if (-not $GamePath) {
 if (-not $GamePath -or -not (Test-Path $GamePath)) { throw 'No Toy Commander image (give -GamePath)' }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:TEMP 'tcvr-netplay' }
 if (-not $Name) {
-	$Name = if ($Local) { "local$($Local)p" } else { "net$($Players)p" + $(if ($List -and $Players -eq 2) { 'list' } else { '' }) + "_d$($NetDelay)_l$($Loss)" + $(if ($StallGuest) { "_stall$StallGuest" } else { '' }) }
+	$Name = if ($Local) { "local$($Local)p" } else { "net$($Players)p" + $(if ($List -and $Players -eq 2) { 'list' } else { '' }) + "_d$($NetDelay)_l$($Loss)" + $(if ($StallGuest) { "_stall$StallGuest" } else { '' }) + $(if ($KillPlayer) { "_kill$KillPlayer" } else { '' }) }
 }
 if (-not $OutDir) { $OutDir = Join-Path $private ("multiplayer\phase0\{0}_{1}" -f (Get-Date -Format 'yyyyMMdd_HHmmss'), $Name) }
 $shotDir = Join-Path $WorkDir "shots"
@@ -151,7 +158,7 @@ function Vehicle-Pos([int]$p) {
 	return ,@([BitConverter]::ToSingle($b, 0), [BitConverter]::ToSingle($b, 4), [BitConverter]::ToSingle($b, 8))
 }
 $hunt = @{ Hist = @{ 0 = [System.Collections.Generic.List[object]]::new(); 1 = [System.Collections.Generic.List[object]]::new() }
-	Vehicle = @{}; Respawns = @{ 0 = 0; 1 = 0 }; Still = @{}; Extend = $false; ExtendAt = 0.0; NextLog = 0.0; Log = [System.Collections.Generic.List[string]]::new() }
+	Vehicle = @{}; Respawns = @{ 0 = 0; 1 = 0 }; Still = @{}; Extend = $false; ExtendAt = 0.0; NextLog = 0.0; LastClimb = $null; Log = [System.Collections.Generic.List[string]]::new() }
 function Hunt-State([int]$p, [double]$t) {
 	$u = $t - $playFrom
 	$me = Vehicle-Pos $p
@@ -168,12 +175,12 @@ function Hunt-State([int]$p, [double]$t) {
 			$climb = [math]::Atan2($dz, $run) * 180 / [math]::PI
 			$hunt.Still[$p] = $t
 		} elseif ($null -eq $hunt.Still[$p]) { $hunt.Still[$p] = $t }
-		$still = ($t - $hunt.Still[$p]) -gt 2
+		$still = ($t - $hunt.Still[$p]) -gt $(if ($TargetStill) { 3 } else { 2 })
 	}
 	$pulseA = (($u % 2) -lt 0.2)
 	# the target: full throttle, stick centred: it takes off, climbs into the ceiling and dies, then
 	# respawns with A ("Ready")
-	if ($p -ne 0) { return @($(if ($pulseA) { $BTN.A } else { 0 }), 0, 0, 0, 255) }
+	if ($p -ne 0) { return @($(if ($pulseA) { $BTN.A } else { 0 }), 0, 0, 0, $(if ($TargetStill) { 0 } else { 255 })) }
 	$it = Vehicle-Pos 1
 	if ($null -eq $me -or $null -eq $it -or $null -eq $heading) {
 		# (re)start: throttle and Ready; stuck against something for 2 s: reverse, turn and climb in turns
@@ -193,8 +200,8 @@ function Hunt-State([int]$p, [double]$t) {
 	$deg = $err * 180 / [math]::PI
 	# passes: turn in and attack; after passing within 900, fly on straight until 2200 away
 	if ($Ram) { $hunt.Extend = $false }
-	elseif ($dist -lt 900 -and [math]::Abs($deg) -gt 30 -and -not $hunt.Extend) { $hunt.Extend = $true; $hunt.ExtendAt = $t }
-	if ($dist -gt 1800 -or ($hunt.Extend -and $t - $hunt.ExtendAt -gt 4)) { $hunt.Extend = $false }
+	elseif ($dist -lt $(if ($TargetStill) { 500 } else { 900 }) -and [math]::Abs($deg) -gt $(if ($TargetStill) { 60 } else { 30 }) -and -not $hunt.Extend) { $hunt.Extend = $true; $hunt.ExtendAt = $t }
+	if ($dist -gt $(if ($TargetStill) { 1600 } else { 1800 }) -or ($hunt.Extend -and $t - $hunt.ExtendAt -gt 4)) { $hunt.Extend = $false }
 	$x = if ($hunt.Extend) { 0 } else { [int][math]::Max(-127, [math]::Min(127, -2.5 * $deg)) }
 	# pitch toward the slope that points at the target (y + = climb), limited to +-35 degrees and
 	# not below the ground: far away keep some height
@@ -202,19 +209,48 @@ function Hunt-State([int]$p, [double]$t) {
 	$want = [math]::Atan2($dz + $above, [math]::Max(1, $dist)) * 180 / [math]::PI
 	$want = [math]::Max(-45, [math]::Min(35, $want))
 	if ([math]::Abs($deg) -gt 60 -or $hunt.Extend) { $want = 3 }	# turning back or extending: level
-	if (-not $Ram -and $me[2] -lt $it[2] + 120 -and $climb -lt 0) { $want = 15 }	# near the ground: pull up
+	if ($TargetStill) {
+		# a target on the ground: come in low and level, just above it, so the gun fires along the floor at it
+		# (diving at it from 200-500 up, the shots went past)
+		$want = [math]::Atan2($it[2] + 25 - $me[2], 300) * 180 / [math]::PI
+		$want = [math]::Max(-30, [math]::Min(30, $want))
+	} elseif (-not $Ram -and $me[2] -lt $it[2] + 120 -and $climb -lt 0) { $want = 15 }	# near the ground: pull up
 	$y = [int][math]::Max(-100, [math]::Min(100, 4 * ($want - $climb)))
+	if ($TargetStill) {
+		# one thing at a time: high above the target, wings level (x small) and only come down; turn in
+		# fully once low. Gentler, damped pitch (4x gain clamped at 100 swung from steep climbs to steep
+		# dives, and pitch in a steep bank only turned the plane)
+		$high = $me[2] - $it[2]
+		if ($high -gt 120) { $x = [int][math]::Max(-40, [math]::Min(40, $x)) }
+		if ($dist -lt 1500) { $want = [math]::Max(-15, [math]::Min(10, $want)) }
+		$dclimb = if ($null -ne $hunt.LastClimb) { $climb - $hunt.LastClimb } else { 0 }
+		$hunt.LastClimb = $climb
+		$y = [int][math]::Max(-60, [math]::Min(60, 1.5 * ($want - $climb) - 0.5 * $dclimb))
+		# but push down hard when climbing well past the wanted slope or too high (at speed +-60 could not stop a 50 degree climb)
+		if ($climb -gt $want + 20 -or $high -gt 300) { $y = -100 }
+	}
 	$b = 0
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 2600 -and (($u * 1000) % 300) -lt 150) { $b = $BTN.A }
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 3000 -and ($u % 2) -gt 1.7) { $b = $b -bor $BTN.B }
+	if ($TargetStill) {
+		# a still target: fire whenever it is roughly ahead and near (the gun sprays, the missile may home in)
+		if ([math]::Abs($deg) -lt 25 -and $dist -lt 1500 -and [math]::Abs($me[2] - $it[2]) -lt 150) { $b = $b -bor $BTN.A }
+		if ([math]::Abs($deg) -lt 20 -and $dist -lt 1500 -and [math]::Abs($me[2] - $it[2]) -lt 300) { $b = $b -bor $BTN.A }
+		if ([math]::Abs($deg) -lt 60 -and $dist -lt 2500 -and ($u % 1.5) -gt 1.2) { $b = $b -bor $BTN.B }
+	}
 	if ($still -and $pulseA) { $b = $b -bor $BTN.A }
 	$r = if ($Ram -or $dist -gt 1000) { 255 } else { 160 }
+	$l = 0
+	if ($TargetStill -and -not $hunt.Extend -and [math]::Abs($deg) -gt 40) {
+		# slow down to turn tighter (at full speed the hunter only circled the target 1400 away), brake when it is behind
+		$r = 60		# no braking: stopped near the ground, it took off again in a steep climb
+	}
 	if ($u -ge $hunt.NextLog) {
 		$hunt.NextLog = $u + 0.5
 		$hunt.Log.Add(('{0:0.0} me {1:0} {2:0} {3:0} target {4:0} {5:0} {6:0} dist {7:0} err {8:0} climb {9:0} want {10:0} x {11} y {12} b {13}' -f `
 			$u, $me[0], $me[1], $me[2], $it[0], $it[1], $it[2], $dist, $deg, $climb, $want, $x, $y, $b))
 	}
-	return @($b, $x, $y, 0, $r)
+	return @($b, $x, $y, $l, $r)
 }
 
 function Pad-Message([int]$p, [double]$t) {
@@ -269,6 +305,7 @@ if ($Pages) { $env:HOTD2VR_SYNCPAGES = '1' }
 foreach ($peer in $peers) {
 	if (-not $Local) { $env:HOTD2VR_SYNCLOG = Join-Path $peer.Dir 'sync.txt' }
 	if ($StallGuest -and $peer -eq $peers[-1]) { $env:HOTD2VR_STALLRENDER = $StallGuest } else { Remove-Item Env:HOTD2VR_STALLRENDER -ErrorAction SilentlyContinue }
+	$env:TCVR_NET_LOOPBACK = '1'	# all copies talk over 127.0.0.1: listen there only (no firewall prompt for each new copy)
 	$cfg = "$base,config:vr.UdpPort=$($peer.Port),$($peer.Net)"
 	$peer | Add-Member Proc (Start-Process -FilePath (Join-Path $peer.Dir 'flycast.exe') `
 		-ArgumentList @('-config', $cfg, "`"$GamePath`"") -WorkingDirectory $peer.Dir -PassThru)
@@ -282,11 +319,13 @@ foreach ($k in @('HOTD2VR_SYNCLOG', 'HOTD2VR_SYNCDUMP', 'HOTD2VR_SYNCPAGES', 'HO
 $udp = New-Object System.Net.Sockets.UdpClient
 $launch = Get-Date
 $t0 = $null
+$killed = $null		# the killed copy, and the last frame in each other copy's sync log at that moment
+$killFrame = @{}
 $shotQueue = [System.Collections.Generic.Queue[double]]::new()
 foreach ($s in ($shots | Sort-Object)) { $shotQueue.Enqueue($s) }
 try {
 	while ($true) {
-		foreach ($peer in $peers) { if ($peer.Proc.HasExited) { throw "$($peer.Name) closed early (code $($peer.Proc.ExitCode))" } }
+		foreach ($peer in $peers) { if ($peer -ne $killed -and $peer.Proc.HasExited) { throw "$($peer.Name) closed early (code $($peer.Proc.ExitCode))" } }
 		if ($null -eq $t0) {
 			$ready = if ($Local) { ((Get-Date) - $launch).TotalSeconds -ge 0.5 } else {
 				$f = Join-Path $peers[0].Dir 'sync.txt'; (Test-Path $f) -and (Get-Item $f).Length -gt 0 }
@@ -296,7 +335,18 @@ try {
 		}
 		$t = ((Get-Date) - $t0).TotalSeconds
 		if ($t -ge $Seconds) { break }
+		if ($KillPlayer -and $null -eq $killed -and $t -ge $KillAt) {
+			$killed = $peers[$KillPlayer - 1]
+			Stop-Process -Id $killed.Proc.Id -Force
+			foreach ($peer in $peers) {
+				if ($peer -eq $killed) { continue }
+				$last = (Get-Content (Join-Path $peer.Dir 'sync.txt') -Tail 1 -ErrorAction SilentlyContinue)
+				$killFrame[$peer.Name] = if ($last) { [int]($last.Split(' ')[0]) } else { 0 }
+			}
+			Write-Output ("{0:0.0} s: {1} killed (the others were at frame {2})" -f $t, $killed.Name, (($killFrame.Values | Measure-Object -Maximum).Maximum))
+		}
 		for ($p = 0; $p -lt $pads; $p++) {
+			if ($peers[$p] -eq $killed) { continue }
 			if ($Local) { $text = (Pad-Message $p $t) -replace '^PAD 0', "PAD $p"; $port = $peers[0].Port }
 			else { $text = Pad-Message $p $t; $port = $peers[$p].Port }
 			$msg = [Text.Encoding]::ASCII.GetBytes($text)
@@ -306,6 +356,7 @@ try {
 			$at = $shotQueue.Dequeue()
 			# the emulator saves its last frame itself ("SHOT"): works with the desktop locked
 			foreach ($peer in $peers) {
+				if ($peer -eq $killed) { continue }
 				$msg = [Text.Encoding]::ASCII.GetBytes(("SHOT {0}" -f (Join-Path $shotDir ("{0}_{1:000}.png" -f $peer.Name, $at))))
 				[void]$udp.Send($msg, $msg.Length, '127.0.0.1', $peer.Port)
 			}
@@ -340,6 +391,15 @@ Say ("run {0}: {1} s, {7} copies, GGPO delay {2}, network delay {3} ms, loss {4}
 	$Name, $Seconds, $Delay, $NetDelay, $Loss, $Oop, $StallGuest, $peers.Count)
 Say ("pattern {0}, mode {1}" -f $Pattern, @("Deathmatch", "Cat and Mice", "Capture the Flag")[$Mode])
 foreach ($k in $scores.Keys) { Say ("{0}: score counters 0x8C0CDC68 at the end: {1}" -f $k, $scores[$k]) }
+if ($KillPlayer) {
+	Say ("{0} killed {1:0.0} s into the game, at about frame {2}" -f $peers[$KillPlayer - 1].Name, $KillAt, (($killFrame.Values | Measure-Object -Maximum).Maximum))
+	foreach ($peer in $peers) {
+		if ($peer -eq $killed) { continue }
+		$log = Join-Path $peer.Dir 'flycast.log'
+		$left = if (Test-Path $log) { Select-String -Path $log -Pattern 'GGPO: player \d+ left.*' | Select-Object -First 1 } else { $null }
+		Say ("{0} log: {1}" -f $peer.Name, $(if ($left) { $left.Matches[0].Value } else { 'no "player left" line' }))
+	}
+}
 if ($Pattern -eq "hunt") { Say ("respawns seen (new vehicle in the player record): P1 {0}, P2 {1}" -f $hunt.Respawns[0], $hunt.Respawns[1]) }
 if (-not $Local) {
 	$logs = @{}
@@ -366,9 +426,11 @@ if (-not $Local) {
 	}
 	# the last frames may still be predictions: only frames GGPO can no longer roll back count
 	# Every copy is compared with p1's.
-	$ref = $peers[0].Name
-	$others = @($peers | Select-Object -Skip 1 | ForEach-Object { $_.Name })
-	$upTo = ($peers | ForEach-Object { ($logs[$_.Name].Keys | Measure-Object -Maximum).Maximum } | Measure-Object -Minimum).Minimum - 10
+	# (with -KillPlayer: the copies that were still there at the end)
+	$cmp = @($peers | Where-Object { $_ -ne $killed })
+	$ref = $cmp[0].Name
+	$others = @($cmp | Select-Object -Skip 1 | ForEach-Object { $_.Name })
+	$upTo = ($cmp | ForEach-Object { ($logs[$_.Name].Keys | Measure-Object -Maximum).Maximum } | Measure-Object -Minimum).Minimum - 10
 	$common = @($logs[$ref].Keys | Where-Object { $fr = $_; $_ -le $upTo -and -not ($others | Where-Object { -not $logs[$_].ContainsKey($fr) }) } | Sort-Object)
 	# The verdict is on main RAM and video + sound RAM. The saved-state hash is only reported: the
 	# rollback state holds a few host pointers (SH-4 part; seen at frames 600 and 4000 on
@@ -394,7 +456,11 @@ if (-not $Local) {
 	Say ("saved-state hash (host pointers included, informative only) differs on {0} of {1} frames" -f $stateDiff, $common.Count)
 	if ($null -eq $firstDiff) {
 		Say ("IDENTICAL on {4} copies for {0} confirmed frames (frames {1}..{2}, {3:0.0} s of game): main RAM and video/sound RAM" -f `
-			$common.Count, $common[0], $common[-1], ($common.Count / 60.0), $peers.Count)
+			$common.Count, $common[0], $common[-1], ($common.Count / 60.0), $cmp.Count)
+		if ($KillPlayer) {
+			$after = @($common | Where-Object { $_ -gt (($killFrame.Values | Measure-Object -Maximum).Maximum) }).Count
+			Say ("  of which {0} frames ({1:0.0} s of game) after {2} was killed" -f $after, ($after / 60.0), $peers[$KillPlayer - 1].Name)
+		}
 	} else {
 		Say ("frames compared: {0}, frames that differ: {1}" -f $common.Count, $diffCount)
 		if ($Pages) {

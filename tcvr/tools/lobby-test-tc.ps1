@@ -22,6 +22,12 @@
   .\tcvr\tools\lobby-test-tc.ps1 -InputDelay 0         the host starts with GGPO input delay 0 (MP START 0; the VR menu
                                                        starts with 2)
   .\tcvr\tools\lobby-test-tc.ps1 -Mode 2 -Room 7 -Points 40   other match settings
+  .\tcvr\tools\lobby-test-tc.ps1 -Players 4 -Handover        the host (p1) leaves the lobby before the match: p2 must
+                                                       host the same game in its own slot, the others come back to
+                                                       their slots; the match is then played by the 3 others
+  .\tcvr\tools\lobby-test-tc.ps1 -KillAt 70 -Seconds 100      the last copy is killed 70 s into the match (task 1.4): with
+                                                       2 players the other one ends the match and the menu says who
+                                                       left; with 3 or 4 the others go on and are compared
 
   In the match nobody touches a pad: the automatic setup (task 3.4, tcvr_match.cpp setupButtons) takes every
   copy to the game's team and vehicle page with the host's Mode, Room and Points; the test checks its log lines
@@ -49,6 +55,8 @@ param(
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
 	[string]$Name = '',
+	[switch]$Handover,			# p1 (the host) leaves the lobby before the match (host handover; 3 or 4 players)
+	[double]$KillAt = 0,		# >0: the last copy is killed this many seconds into the match (a player who drops)
 	[int]$PortOffset = 0		# added to the pad (27241+), GGPO (19913+) and discovery (19790) ports: two tests on one PC at once
 )
 $ErrorActionPreference = 'Stop'
@@ -62,7 +70,8 @@ if (-not $GamePath) {
 }
 if (-not $GamePath -or -not (Test-Path $GamePath)) { throw 'No Toy Commander image (give -GamePath)' }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:TEMP 'tcvr-lobby' }
-if (-not $Name) { $Name = "lobby$($Players)p_d$($NetDelay)_l$($Loss)" }
+if (-not $Name) { $Name = "lobby$($Players)p_d$($NetDelay)_l$($Loss)" + $(if ($Handover) { '_handover' } else { '' }) + $(if ($KillAt) { '_kill' } else { '' }) }
+if ($Handover -and $Players -lt 3) { throw '-Handover needs 3 or 4 players (one leaves, two play)' }
 if (-not $OutDir) { $OutDir = Join-Path $private ("multiplayer\lobby\{0}_{1}" -f (Get-Date -Format 'yyyyMMdd_HHmmss'), $Name) }
 New-Item -ItemType Directory -Force $WorkDir, $OutDir | Out-Null
 
@@ -99,6 +108,7 @@ function Start-Copy($peer, [bool]$sync) {
 	if ($sync) { $env:HOTD2VR_SYNCLOG = Join-Path $peer.Dir 'sync.txt' } else { Remove-Item Env:HOTD2VR_SYNCLOG -ErrorAction SilentlyContinue }
 	if ($NetDelay) { $env:GGPO_NETWORK_DELAY = $NetDelay }
 	if ($Loss) { $env:GGPO_PACKET_LOSS = $Loss }
+	$env:TCVR_NET_LOOPBACK = '1'	# all copies talk over 127.0.0.1: listen there only (no firewall prompt for each new copy)
 	$cfg = "$base,config:vr.UdpPort=$($peer.Port)"
 	$peer.Proc = Start-Process -FilePath (Join-Path $peer.Dir 'flycast.exe') `
 		-ArgumentList @('-config', $cfg, "`"$GamePath`"") -WorkingDirectory $peer.Dir -PassThru
@@ -186,11 +196,36 @@ try {
 	Check ($r -like "*$want*") "the host settings ($want) are in the lobby"
 	$r = Send-Mp $peers[1] 'STATE'
 	Check ($r -like "*$want*") "a joiner sees the host's settings: $r"
+
+	if ($Handover) {
+		# ---- 2b. the host leaves before the match: the next player in slot order hosts the same game
+		[void](Send-Mp $peers[2] 'READY 1')		# (a ready mark is kept through the handover)
+		Start-Sleep -Milliseconds 500
+		$sw = [Diagnostics.Stopwatch]::StartNew()
+		$r = Send-Mp $peers[0] 'LEAVE'
+		Check ($r -like 'MPR idle*') "p1 (the host) leaves the lobby: $r"
+		$r = Wait-Mp $peers[1] 'STATE' { param($x) $x -like 'MPR lobby*role=host*' } 15
+		Check ($r -like "MPR lobby players=$($Players - 1) slot=1 *host=1 role=host*") ("p2 hosts the game now, in its own slot, after {0:0.0} s: {1}" -f $sw.Elapsed.TotalSeconds, $r)
+		for ($i = 2; $i -lt $Players; $i++) {
+			$r = Wait-Mp $peers[$i] 'STATE' { param($x) $x -like 'MPR lobby*host=1 role=joiner*' } 15
+			Check ($r -like "MPR lobby players=$($Players - 1) slot=$i *host=1 role=joiner*") ("{0} is back in slot {1} with the new host, after {2:0.0} s: {3}" -f $peers[$i].Name, $i, $sw.Elapsed.TotalSeconds, $r)
+			Check ($r -like "*$want*") "$($peers[$i].Name): the settings are kept"
+		}
+		$r = Send-Mp $peers[1] 'STATE'
+		Check ($r -like '*ready=-11*') "p3's ready mark is kept: $r"
+		for ($i = 2; $i -lt $Players; $i++) { [void](Send-Mp $peers[$i] 'READY 0') }
+		Stop-Copy $peers[0]
+		$peers = @($peers | Select-Object -Skip 1)
+		for ($i = 0; $i -lt $peers.Count; $i++) { $peers[$i].Index = $i }
+		$Players = $peers.Count
+		Say "the match is now played by $Players copies (p2 hosts)"
+	}
 	$r = Send-Mp $peers[0] "START $InputDelay"
 	Check ($r -like 'MPR error*') "Start is refused while the joiners are not ready: $r"
 	for ($i = 1; $i -lt $Players; $i++) { [void](Send-Mp $peers[$i] 'READY 1') }
-	$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like 'MPR lobby*ready=1111*' -or ($Players -eq 3 -and $x -like 'MPR lobby*ready=111-*') -or ($Players -eq 2 -and $x -like 'MPR lobby*ready=11--*') } 10
-	Check ($r -like '*ready=11*') "the ready marks reach the host: $r"
+	$allReady = { param($x) ([regex]::Match($x, 'ready=([01-]{4})').Groups[1].Value -replace '[^1]', '').Length -eq $Players }
+	$r = Wait-Mp $peers[0] 'STATE' $allReady 10
+	Check (& $allReady $r) "the ready marks reach the host: $r"
 
 	# ---- 3. start: options written, restart asked
 	$r = Send-Mp $peers[0] "START $InputDelay"
@@ -217,8 +252,9 @@ try {
 	$udp = New-Object System.Net.Sockets.UdpClient
 	$launch = Get-Date
 	$t0 = $null
+	$killed = $null
 	while ($true) {
-		foreach ($peer in $peers) { if ($peer.Proc.HasExited) { throw "$($peer.Name) closed during the match (code $($peer.Proc.ExitCode))" } }
+		foreach ($peer in $peers) { if ($peer -ne $killed -and $peer.Proc.HasExited) { throw "$($peer.Name) closed during the match (code $($peer.Proc.ExitCode))" } }
 		if ($null -eq $t0) {
 			$f = Join-Path $peers[0].Dir 'sync.txt'
 			if ((Test-Path $f) -and (Get-Item $f).Length -gt 0) { $t0 = Get-Date }
@@ -228,7 +264,14 @@ try {
 		}
 		$t = ((Get-Date) - $t0).TotalSeconds
 		if ($t -ge $Seconds) { break }
+		if ($KillAt -and $null -eq $killed -and $t -ge $KillAt) {
+			$killed = $peers[-1]
+			Stop-Copy $killed
+			Say ("{0:0.0} s into the match: {1} killed" -f $t, $killed.Name)
+			if ($Players -eq 2) { break }
+		}
 		foreach ($peer in $peers) {
+			if ($peer -eq $killed) { continue }
 			# (nobody presses anything: the automatic setup does)
 			$msg = [Text.Encoding]::ASCII.GetBytes('PAD 0 0 0 0 0 0')
 			[void]$udp.Send($msg, $msg.Length, '127.0.0.1', $peer.Port)
@@ -236,6 +279,40 @@ try {
 		Start-Sleep -Milliseconds 30
 	}
 	$udp.Close()
+
+	if ($killed -and $Players -eq 2) {
+		# ---- 4b. two players, one gone: the other's match ends, its menu says who left
+		$alone = $peers[0]
+		$sw = [Diagnostics.Stopwatch]::StartNew()
+		# (the netplay waits 10 s for a silent player; then the match ends. On the PC the netplay's error then
+		# stops the game, so the log and emu.cfg are checked rather than the copy's answers)
+		$line = $null
+		while ($sw.Elapsed.TotalSeconds -lt 40) {
+			$line = [regex]::Match((Log-Text $alone), 'MP match: [^\r\n]*left[^\r\n]*')
+			if ($line.Success) { break }
+			Start-Sleep -Milliseconds 500
+		}
+		Check $line.Success ("{0}: the match is over {1:0.0} s after {2} left: {3}" -f $alone.Name, $sw.Elapsed.TotalSeconds, $killed.Name, $line.Value)
+		Start-Sleep -Seconds 2
+		Check ((Cfg-Text $alone) -notmatch 'GGPOPeers[ \t]*=[ \t]*\S') "$($alone.Name): netplay options cleared in emu.cfg"
+		Stop-Copy $alone
+		Start-Sleep -Seconds 2
+		Start-Copy $alone $false
+		$r = Wait-Mp $alone 'STATE' { param($x) $x -like 'MPR idle*' } 120
+		Check ($r -like 'MPR idle*match=0*') "$($alone.Name): the game is single player again: $r"
+		$r = Send-Mp $alone 'RETURN'
+		Check ($r -like '*return=1 why=P2 left: the match is over*') "$($alone.Name): the menu opens on the Multiplayer page and says who left: $r"
+		throw 'END-2P'		# (nothing else to check)
+	}
+	if ($killed) {
+		foreach ($peer in $peers) {
+			if ($peer -eq $killed) { continue }
+			$line = [regex]::Match((Log-Text $peer), 'MP match: [^\r\n]*goes on')
+			Check $line.Success ("{0} log: {1}" -f $peer.Name, $(if ($line.Success) { $line.Value } else { 'no "the match goes on" line' }))
+		}
+		$peers = @($peers | Where-Object { $_ -ne $killed })
+		Say "the $($peers.Count) other copies are checked and compared"
+	}
 
 	# the automatic setup: every copy on the team and vehicle page with the host's settings
 	foreach ($peer in $peers) {
@@ -308,7 +385,7 @@ try {
 		}
 	}
 	Check ($common.Count -gt 600) "the match ran: $($common.Count) confirmed frames compared"
-	Check ($null -eq $firstDiff) $(if ($null -eq $firstDiff) { "IDENTICAL on $Players copies for $($common.Count) confirmed frames (main RAM, video/sound RAM)" } else { "FIRST DIFFERENCE at $firstDiff" })
+	Check ($null -eq $firstDiff) $(if ($null -eq $firstDiff) { "IDENTICAL on $($peers.Count) copies for $($common.Count) confirmed frames (main RAM, video/sound RAM)" } else { "FIRST DIFFERENCE at $firstDiff" })
 
 	# ---- 6. leave the match
 	foreach ($peer in $peers) {
@@ -333,7 +410,7 @@ try {
 		Check ($r -like '*return=0*') "$($peer.Name): the mark is given once"
 	}
 } catch {
-	Check $false ("the test stopped: " + $_.Exception.Message)
+	if ($_.Exception.Message -ne 'END-2P') { Check $false ("the test stopped: " + $_.Exception.Message) }
 } finally {
 	foreach ($peer in $peers) { try { Stop-Copy $peer } catch { } }
 	$cmdUdp.Close()

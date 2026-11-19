@@ -583,9 +583,20 @@ UdpProtocol::OnInput(UdpMsg *msg, int len)
        */
       UdpMsg::connect_status* remote_status = msg->u.input.peer_connect_status;
       for (unsigned i = 0; i < ARRAY_SIZE(_peer_connect_status); i++) {
-         ASSERT(remote_status[i].last_frame >= _peer_connect_status[i].last_frame);
-         _peer_connect_status[i].disconnected = _peer_connect_status[i].disconnected || remote_status[i].disconnected;
-         _peer_connect_status[i].last_frame = MAX(_peer_connect_status[i].last_frame, remote_status[i].last_frame);
+         /*
+          * tcvr: with 3 or 4 players, a peer that sees a player go puts that player's last frame back to
+          * the earliest one any peer had from it (Peer2PeerBackend::PollNPlayers), so the frame it reports
+          * can go down once it says "disconnected". Every copy must take that lower frame: from the frame
+          * after it, the gone player's pad is neutral on every copy. (The original asserted that the frame
+          * only grows, and kept the highest: the match stopped, or copies picked different frames.)
+          */
+         if (remote_status[i].disconnected) {
+            if (!_peer_connect_status[i].disconnected || remote_status[i].last_frame < _peer_connect_status[i].last_frame)
+               _peer_connect_status[i].last_frame = remote_status[i].last_frame;
+            _peer_connect_status[i].disconnected = 1;
+         } else if (!_peer_connect_status[i].disconnected) {
+            _peer_connect_status[i].last_frame = MAX(_peer_connect_status[i].last_frame, remote_status[i].last_frame);
+         }
       }
    }
 

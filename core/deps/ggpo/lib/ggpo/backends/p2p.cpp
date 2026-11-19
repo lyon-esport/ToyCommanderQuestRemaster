@@ -242,6 +242,24 @@ int Peer2PeerBackend::PollNPlayers(int current_frame)
       }
       Log("  total_min_confirmed = %d.", total_min_confirmed);
    }
+
+   /*
+    * tcvr: a player who left: until every other player still here says so too, the frame it left at may
+    * still go down (a peer that got fewer of its inputs). Confirming frames past it now could make a copy
+    * throw away inputs it then needs to replay from that lower frame. So hold the confirmed frame there.
+    */
+   for (queue = 0; queue < _num_players; queue++) {
+      if (!_local_connect_status[queue].disconnected) {
+         continue;
+      }
+      for (i = 0; i < _num_players; i++) {
+         if (i != queue && _endpoints[i].IsRunning() && _endpoints[i].GetPeerConnectStatus(queue, &last_received)) {
+            Log("  queue %d left, endpoint %d has not said so yet: holding at %d.", queue, i, _local_connect_status[queue].last_frame);
+            total_min_confirmed = MIN(total_min_confirmed, _local_connect_status[queue].last_frame);
+            break;
+         }
+      }
+   }
    return total_min_confirmed;
 }
 
