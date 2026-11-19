@@ -209,10 +209,11 @@ void setPlayerName(const std::string& name)
 static std::atomic<bool> lostPeer;
 static std::atomic<bool> resultsDone;		// the game's results page has been and gone (setupButtons)
 
-// This copy's own last frame in the match (setupButtons, every frame), and whether this copy was the one
-// away: its own game stood still for seconds (process frozen, headset asleep) when the others went
-// silent. Then the others did not leave: this player was away too long.
-static std::atomic<int64_t> lastOwnFrameMs;
+// Whether this copy was the one away when the others went silent: its own app stood still for seconds
+// (process frozen, headset asleep). Not the game's frames: while one copy is away the others' games
+// wait for its inputs and stand still too. The app's own loop (poll(), every headset frame) goes on there.
+static std::atomic<int64_t> lastOwnFrameMs;		// poll()'s last call in the match
+static std::atomic<int64_t> awaySinceMs;		// when poll() came back after such a gap (0: none)
 static std::atomic<bool> selfAway;
 constexpr int64_t AwayMs = 5000;		// GGPO says "interrupted" after 2 s of silence: well past that
 
@@ -222,9 +223,24 @@ static int64_t steadyMs() {
 
 static void checkSelfAway()
 {
-	const int64_t last = lastOwnFrameMs;
-	if (last != 0 && steadyMs() - last > AwayMs && !selfAway.exchange(true))
-		NOTICE_LOG(NETWORK, "MP match: this copy stood still for %.1f s: it was away", (steadyMs() - last) / 1000.f);
+	const int64_t now = steadyMs();
+	const int64_t last = lastOwnFrameMs, back = awaySinceMs;
+	const bool standing = last != 0 && now - last > AwayMs;		// (still away: the network thread came first)
+	const bool justBack = back != 0 && now - back < 20000;		// (back from away a moment ago)
+	if ((standing || justBack) && !selfAway.exchange(true))
+		NOTICE_LOG(NETWORK, "MP match: this copy's app stood still %s: it was away", standing ? "until now" : "a moment ago");
+}
+
+// poll(): the app's own loop is running (in a match)
+static void noteOwnLoop()
+{
+	const int64_t now = steadyMs();
+	const int64_t last = lastOwnFrameMs.exchange(now);
+	if (last != 0 && now - last > AwayMs)
+	{
+		awaySinceMs = now;
+		NOTICE_LOG(NETWORK, "MP match: this copy's app stood still for %.1f s", (now - last) / 1000.f);
+	}
 }
 
 static std::string leftLine(const std::string& who)
@@ -355,6 +371,7 @@ static std::string endMatch(const std::string& why)
 	resultsDone = false;
 	selfAway = false;
 	lastOwnFrameMs = 0;
+	awaySinceMs = 0;
 	clearPaused();
 	{
 		std::lock_guard<std::mutex> lock(mutex);
@@ -372,6 +389,8 @@ static std::string endMatch(const std::string& why)
 
 void poll()
 {
+	if (active)
+		noteOwnLoop();
 	if (lostPeer.exchange(false) && active)
 	{
 		std::string why = takeLostWhy();
@@ -756,7 +775,6 @@ uint32_t setupButtons()
 {
 	if (!inMatch())
 		return 0;
-	lastOwnFrameMs = steadyMs();
 	Setup& s = su;
 	if (!s.started)
 	{
