@@ -199,7 +199,7 @@ function Hunt-State([int]$p, [double]$t) {
 	while ($err -lt -[math]::PI) { $err += 2 * [math]::PI }
 	$deg = $err * 180 / [math]::PI
 	# passes: turn in and attack; after passing within 900, fly on straight until 2200 away
-	if ($Ram) { $hunt.Extend = $false }
+	if ($Ram -or $TargetStill) { $hunt.Extend = $false }	# (a still target: no passes, a tight circle onto it)
 	elseif ($dist -lt 900 -and [math]::Abs($deg) -gt 30 -and -not $hunt.Extend) { $hunt.Extend = $true; $hunt.ExtendAt = $t }
 	if ($dist -gt 1800 -or ($hunt.Extend -and $t - $hunt.ExtendAt -gt 4)) { $hunt.Extend = $false }
 	$x = if ($hunt.Extend) { 0 } else { [int][math]::Max(-127, [math]::Min(127, -2.5 * $deg)) }
@@ -216,12 +216,18 @@ function Hunt-State([int]$p, [double]$t) {
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 3000 -and ($u % 2) -gt 1.7) { $b = $b -bor $BTN.B }
 	if ($still -and $pulseA) { $b = $b -bor $BTN.A }
 	$r = if ($Ram -or $dist -gt 1000) { 255 } else { 160 }
+	$l = 0
+	if ($TargetStill -and [math]::Abs($deg) -gt 40) {
+		# slow down to turn tighter (at full speed the hunter only circled the target 1400 away), brake when it is behind
+		$r = 60
+		if ([math]::Abs($deg) -gt 100) { $r = 0; $l = 255 }
+	}
 	if ($u -ge $hunt.NextLog) {
 		$hunt.NextLog = $u + 0.5
 		$hunt.Log.Add(('{0:0.0} me {1:0} {2:0} {3:0} target {4:0} {5:0} {6:0} dist {7:0} err {8:0} climb {9:0} want {10:0} x {11} y {12} b {13}' -f `
 			$u, $me[0], $me[1], $me[2], $it[0], $it[1], $it[2], $dist, $deg, $climb, $want, $x, $y, $b))
 	}
-	return @($b, $x, $y, 0, $r)
+	return @($b, $x, $y, $l, $r)
 }
 
 function Pad-Message([int]$p, [double]$t) {

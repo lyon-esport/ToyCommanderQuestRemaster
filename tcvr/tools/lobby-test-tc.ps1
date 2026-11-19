@@ -283,12 +283,16 @@ try {
 		# ---- 4b. two players, one gone: the other's match ends, its menu says who left
 		$alone = $peers[0]
 		$sw = [Diagnostics.Stopwatch]::StartNew()
-		$r = Wait-Mp $alone 'STATE' { param($x) $x -like '*match=0*' } 40
-		Check ($r -like '*match=0*') ("{0}: the match is over {1:0.0} s after {2} left: {3}" -f $alone.Name, $sw.Elapsed.TotalSeconds, $killed.Name, $r)
-		$log = Log-Text $alone
-		$line = [regex]::Match($log, 'MP match: [^\r\n]*left[^\r\n]*')
-		Check $line.Success ("{0} log: {1}" -f $alone.Name, $line.Value)
-		Check ($log -match 'MP RESTART') "$($alone.Name): asked for a restart"
+		# (the netplay waits 10 s for a silent player; then the match ends. On the PC the netplay's error then
+		# stops the game, so the log and emu.cfg are checked rather than the copy's answers)
+		$line = $null
+		while ($sw.Elapsed.TotalSeconds -lt 40) {
+			$line = [regex]::Match((Log-Text $alone), 'MP match: [^\r\n]*left[^\r\n]*')
+			if ($line.Success) { break }
+			Start-Sleep -Milliseconds 500
+		}
+		Check $line.Success ("{0}: the match is over {1:0.0} s after {2} left: {3}" -f $alone.Name, $sw.Elapsed.TotalSeconds, $killed.Name, $line.Value)
+		Start-Sleep -Seconds 2"
 		Check ((Cfg-Text $alone) -notmatch 'GGPOPeers[ \t]*=[ \t]*\S') "$($alone.Name): netplay options cleared in emu.cfg"
 		Stop-Copy $alone
 		Start-Sleep -Seconds 2

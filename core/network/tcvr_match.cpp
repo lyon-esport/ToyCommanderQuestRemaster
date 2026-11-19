@@ -224,8 +224,15 @@ void playerLeft(int player, bool allGone)
 		std::lock_guard<std::mutex> lock(noticeMutex);
 		lostWhy = ggpo::playerCount() <= 2 ? who + " left: the match is over" : "The other players left: the match is over";
 	}
-	if (active)
-		lostPeer = true;
+	if (!active)
+		return;
+	// Kept now, not at the next poll(): the netplay's error that follows can stop the game first (PC), and the
+	// next start must still find netplay off and the menu must still say why.
+	config::VrMpEndText.set(lostWhy);
+	config::VrMpEndText.save();
+	clearNetplay();
+	saveBool(config::VrMpReturn, true);
+	lostPeer = true;
 }
 
 std::string notice(int& id)
