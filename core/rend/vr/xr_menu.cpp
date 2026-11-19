@@ -867,6 +867,42 @@ void noteHeadsetFrame()
 	}
 }
 
+bool sameEntry(const Entry& a, const Entry& b)
+{
+	return a.action == b.action && a.index == b.index && a.id == b.id;
+}
+
+// The Multiplayer pages change by themselves (a player joins, a game appears, the lobby connects):
+// the cursor stays on the line it was on, goes to the first useful line when the lobby's phase
+// changes or the first game appears, and never rests on an information line.
+void keepSelection(const std::vector<Entry>& list)
+{
+	static Entry last { Action::Info };
+	static int lastIndex = -1, lastPage = -2, lastPhase = -1, lastGames = 0;
+	const int pageKey = page == (int)Section::Multiplayer ? 100 + (int)mpPage : page;
+	int phase = -1;
+	if (page == (int)Section::Multiplayer && mpPage == MpPage::Lobby && tcvr::match::lobbyStarted())
+		phase = (int)tcvr::match::theLobby().view().phase;
+	const int games = (int)std::count_if(list.begin(), list.end(), [](const Entry& e) { return e.action == Action::MpGame; });
+	if (pageKey == lastPage && selected == lastIndex)
+	{
+		if (phase != lastPhase || (lastGames == 0 && games > 0))
+			selected = firstSelectable(list);
+		else if (!sameEntry(list[selected], last))
+		{
+			auto it = std::find_if(list.begin(), list.end(), [](const Entry& e) { return sameEntry(e, last); });
+			selected = it != list.end() ? (int)(it - list.begin()) : firstSelectable(list);
+		}
+	}
+	if (isInfo(list[selected]))
+		selected = firstSelectable(list);
+	last = list[selected];
+	lastIndex = selected;
+	lastPage = pageKey;
+	lastPhase = phase;
+	lastGames = games;
+}
+
 MenuAction updateMenu(const MenuInput& input, float headYaw)
 {
 	// (also with the menu closed: START from the host arrives whenever it likes)
@@ -906,6 +942,7 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 	}
 	const auto list = entries();
 	selected = std::clamp(selected, 0, (int)list.size() - 1);
+	keepSelection(list);
 	// the stick: one step, then repeats while held
 	int dir = 0;
 	const glm::vec2& s = input.stick;
