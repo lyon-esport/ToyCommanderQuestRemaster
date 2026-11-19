@@ -198,10 +198,38 @@ void setPlayerName(const std::string& name)
 static std::atomic<bool> lostPeer;
 static std::atomic<bool> resultsDone;		// the game's results page has been and gone (setupButtons)
 
+// This copy's own last frame in the match (setupButtons, every frame), and whether this copy was the one
+// away: its own game stood still for seconds (process frozen, headset asleep) when the others went
+// silent. Then the others did not leave: this player was away too long.
+static std::atomic<int64_t> lastOwnFrameMs;
+static std::atomic<bool> selfAway;
+constexpr int64_t AwayMs = 5000;		// GGPO says "interrupted" after 2 s of silence: well past that
+
+static int64_t steadyMs() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void checkSelfAway()
+{
+	const int64_t last = lastOwnFrameMs;
+	if (last != 0 && steadyMs() - last > AwayMs && !selfAway.exchange(true))
+		NOTICE_LOG(NETWORK, "MP match: this copy stood still for %.1f s: it was away", (steadyMs() - last) / 1000.f);
+}
+
+static std::string leftLine(const std::string& who)
+{
+	if (selfAway)
+		return "The match is over: you were away too long";
+	return who.empty() ? "The match is over: a player left" : "The match is over: " + who + " left";
+}
+
 void peerLost()
 {
 	if (active)
+	{
+		checkSelfAway();
 		lostPeer = true;
+	}
 }
 
 // Paused players (GGPO "connection interrupted"): the player number and since when, or none.
@@ -212,6 +240,8 @@ void peerInterrupted(int player, bool interrupted)
 {
 	if (player < 0)
 		return;
+	if (interrupted && active)
+		checkSelfAway();
 	std::lock_guard<std::mutex> lock(pausedMutex);
 	auto it = std::find_if(pausedPlayers.begin(), pausedPlayers.end(), [player](const auto& p) { return p.first == player; });
 	if (interrupted && it == pausedPlayers.end())
@@ -241,6 +271,8 @@ static std::string endMatch(const std::string& why)
 	active = false;
 	lostPeer = false;
 	resultsDone = false;
+	selfAway = false;
+	lastOwnFrameMs = 0;
 	clearPaused();
 	{
 		std::lock_guard<std::mutex> lock(mutex);
@@ -265,7 +297,7 @@ void poll()
 			if (!pausedPlayers.empty())
 				who = nameOf(pausedPlayers.front().first);
 		}
-		endMatch(who.empty() ? "The match is over: a player left" : "The match is over: " + who + " left");
+		endMatch(leftLine(who));
 		restart(Reload::BackToLobby);
 		return;
 	}
@@ -350,7 +382,7 @@ bool gameStopped(const std::string& message)
 	}
 	const bool starting = !active || reloading == (int)Reload::IntoMatch;
 	endMatch(starting ? "The match could not start" + (message.empty() ? std::string() : ": " + message)
-			: !who.empty() ? "The match is over: " + who + " left"
+			: !who.empty() || selfAway ? leftLine(who)
 			: "The match is over: " + (message.empty() ? std::string("the network dropped") : message));
 	// the caller loads the game again (single player); the panel says so meanwhile
 	reloadSince = std::chrono::steady_clock::now();
@@ -638,6 +670,7 @@ uint32_t setupButtons()
 {
 	if (!inMatch())
 		return 0;
+	lastOwnFrameMs = steadyMs();
 	Setup& s = su;
 	if (!s.started)
 	{

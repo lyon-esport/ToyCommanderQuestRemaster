@@ -872,7 +872,9 @@ void noteHeadsetFrame()
 	if (secs >= 1.f)
 	{
 		headsetFps = headsetFrames / secs;
-		gameFps = (FrameCount - lastFrameCount) / secs;
+		// (the game loaded again in the running app, for a match: its frame count starts again from 0;
+		// the unsigned difference showed "game 4271623" for a second)
+		gameFps = FrameCount >= lastFrameCount ? (FrameCount - lastFrameCount) / secs : 0.f;
 		headsetFrames = 0;
 		lastFrameCount = FrameCount;
 		rateSince = now;
