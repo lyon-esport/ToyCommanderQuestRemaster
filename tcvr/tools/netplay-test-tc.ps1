@@ -305,6 +305,7 @@ if ($Pages) { $env:HOTD2VR_SYNCPAGES = '1' }
 foreach ($peer in $peers) {
 	if (-not $Local) { $env:HOTD2VR_SYNCLOG = Join-Path $peer.Dir 'sync.txt' }
 	if ($StallGuest -and $peer -eq $peers[-1]) { $env:HOTD2VR_STALLRENDER = $StallGuest } else { Remove-Item Env:HOTD2VR_STALLRENDER -ErrorAction SilentlyContinue }
+	$env:TCVR_NET_LOOPBACK = '1'	# all copies talk over 127.0.0.1: listen there only (no firewall prompt for each new copy)
 	$cfg = "$base,config:vr.UdpPort=$($peer.Port),$($peer.Net)"
 	$peer | Add-Member Proc (Start-Process -FilePath (Join-Path $peer.Dir 'flycast.exe') `
 		-ArgumentList @('-config', $cfg, "`"$GamePath`"") -WorkingDirectory $peer.Dir -PassThru)

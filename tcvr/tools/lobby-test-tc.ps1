@@ -108,6 +108,7 @@ function Start-Copy($peer, [bool]$sync) {
 	if ($sync) { $env:HOTD2VR_SYNCLOG = Join-Path $peer.Dir 'sync.txt' } else { Remove-Item Env:HOTD2VR_SYNCLOG -ErrorAction SilentlyContinue }
 	if ($NetDelay) { $env:GGPO_NETWORK_DELAY = $NetDelay }
 	if ($Loss) { $env:GGPO_PACKET_LOSS = $Loss }
+	$env:TCVR_NET_LOOPBACK = '1'	# all copies talk over 127.0.0.1: listen there only (no firewall prompt for each new copy)
 	$cfg = "$base,config:vr.UdpPort=$($peer.Port)"
 	$peer.Proc = Start-Process -FilePath (Join-Path $peer.Dir 'flycast.exe') `
 		-ArgumentList @('-config', $cfg, "`"$GamePath`"") -WorkingDirectory $peer.Dir -PassThru

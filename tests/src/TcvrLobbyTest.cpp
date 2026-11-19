@@ -25,7 +25,7 @@ State sampleState()
 	State s;
 	s.revision = 7;
 	s.settings = { 2, 5, 90 };
-	s.players[0] = { true, "MAN", true, "192.0.2.6", 19713, 40001 };
+	s.players[0] = { true, "AAA", true, "192.0.2.6", 19713, 40001 };
 	s.players[2] = { true, "ZOE", false, "", 19714, 40002 };
 	s.lobbyId = 0x12345678;
 	s.hostSlot = 2;
@@ -172,7 +172,7 @@ TEST(TcvrLobbyCodec, BeaconAndQuery)
 	b.hostId = 12345;
 	b.appVersion = "1.0";
 	b.gameId = "MK-5102050";
-	b.hostName = "MAN";
+	b.hostName = "AAA";
 	b.settings = { 1, 4, 60 };
 	b.players = 3;
 	b.lobbyPort = 40001;
@@ -180,7 +180,7 @@ TEST(TcvrLobbyCodec, BeaconAndQuery)
 	const auto bytes = encode(b);
 	ASSERT_EQ(decodeDatagram(bytes.data(), bytes.size(), out), Datagram::Beacon);
 	EXPECT_EQ(out.hostId, 12345u);
-	EXPECT_EQ(out.hostName, "MAN");
+	EXPECT_EQ(out.hostName, "AAA");
 	EXPECT_EQ(out.settings, b.settings);
 	EXPECT_EQ(out.players, 3);
 	EXPECT_EQ(out.lobbyPort, 40001);

@@ -616,6 +616,21 @@ using Clock = std::chrono::steady_clock;
 using asio::ip::tcp;
 using asio::ip::udp;
 
+// TCVR_NET_LOOPBACK=1 (PC test copies on one computer): listen on 127.0.0.1 only, so the system firewall never
+// asks about each new test copy. Games are then only found and joined on this computer.
+// Several copies cannot share one loopback port for the beacons (only one of them would hear each), so in this
+// mode each copy listens on the first free port of discoveryPort .. +LoopbackPorts-1, and beacons go to all of them.
+static bool loopbackOnly()
+{
+	const char *loop = std::getenv("TCVR_NET_LOOPBACK");
+	return loop != nullptr && loop[0] == '1';
+}
+static asio::ip::address_v4 listenAddress()
+{
+	return loopbackOnly() ? asio::ip::address_v4::loopback() : asio::ip::address_v4::any();
+}
+constexpr int LoopbackPorts = 8;
+
 namespace
 {
 
@@ -763,9 +778,25 @@ struct Lobby::Impl
 		try {
 			auto s = std::make_unique<udp::socket>(io);
 			s->open(udp::v4());
-			s->set_option(asio::socket_base::reuse_address(true));
 			s->set_option(asio::socket_base::broadcast(true));
-			s->bind(udp::endpoint(udp::v4(), discoveryPort));
+			if (loopbackOnly())
+			{
+				asio::error_code ec;
+				for (int k = 0; k < LoopbackPorts; k++)
+				{
+					ec.clear();
+					s->bind(udp::endpoint(listenAddress(), (uint16_t)(discoveryPort + k)), ec);
+					if (!ec)
+						break;
+				}
+				if (ec)
+					throw asio::system_error(ec);
+			}
+			else
+			{
+				s->set_option(asio::socket_base::reuse_address(true));
+				s->bind(udp::endpoint(listenAddress(), discoveryPort));
+			}
 			disc = std::move(s);
 			if (broadcastHook)
 				broadcastHook(true);
@@ -872,7 +903,8 @@ struct Lobby::Impl
 			const auto addr = asio::ip::make_address_v4(t, ec);
 			if (ec)
 				continue;
-			disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, discoveryPort), [data](const asio::error_code&, size_t) {});
+			for (int k = 0; k < (loopbackOnly() && addr.is_loopback() ? LoopbackPorts : 1); k++)
+				disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, (uint16_t)(discoveryPort + k)), [data](const asio::error_code&, size_t) {});
 		}
 	}
 
@@ -1600,7 +1632,8 @@ void Lobby::query(const std::string& address)
 		if (ec)
 			return;
 		auto data = std::make_shared<std::vector<uint8_t>>(encodeQuery());
-		impl->disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, impl->discoveryPort), [data](const asio::error_code&, size_t) {});
+		for (int k = 0; k < (loopbackOnly() && addr.is_loopback() ? LoopbackPorts : 1); k++)
+			impl->disc->async_send_to(asio::buffer(*data), udp::endpoint(addr, (uint16_t)(impl->discoveryPort + k)), [data](const asio::error_code&, size_t) {});
 	});
 }
 
@@ -1612,7 +1645,7 @@ bool Lobby::host(const Identity& me, const Settings& settings, std::string& erro
 			auto acc = std::make_unique<tcp::acceptor>(impl->io);
 			acc->open(tcp::v4());
 			acc->set_option(asio::socket_base::reuse_address(true));
-			acc->bind(tcp::endpoint(tcp::v4(), 0));
+			acc->bind(tcp::endpoint(listenAddress(), 0));
 			acc->listen();
 			impl->acceptor = std::move(acc);
 		} catch (const std::exception& e) {
@@ -1734,7 +1767,7 @@ void Lobby::join(const Identity& me, const std::string& address, uint16_t lobbyP
 			auto acc = std::make_unique<tcp::acceptor>(impl->io);
 			acc->open(tcp::v4());
 			acc->set_option(asio::socket_base::reuse_address(true));
-			acc->bind(tcp::endpoint(tcp::v4(), 0));
+			acc->bind(tcp::endpoint(listenAddress(), 0));
 			acc->listen();
 			impl->standby = std::move(acc);
 		} catch (const std::exception&) {
