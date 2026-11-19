@@ -1221,6 +1221,10 @@ int localPlayerIndex() {
 	return active() ? localPlayerNum : 0;
 }
 
+int currentFrame() {
+	return active() ? lastSavedFrame : -1;
+}
+
 int playerCount() {
 	return active() ? numPlayers : 1;
 }

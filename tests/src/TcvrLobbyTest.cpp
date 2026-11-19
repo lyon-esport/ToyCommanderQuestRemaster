@@ -1025,6 +1025,60 @@ TEST(TcvrLobby, HostGoneDuringTheMatch)
 	EXPECT_EQ(guest.view().message, "HOS left: you are the host now");
 }
 
+// The copy that was away (its app stood still) and lost its host connection does not take the lobby over:
+// the others are still in the host's lobby; it says so and can join again.
+TEST(TcvrLobby, AwayCopyDoesNotTakeTheLobbyOver)
+{
+	Net net;
+	Lobby host(fast()), guest(fast());
+	net.prepare(host);
+	net.prepare(guest);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	guest.startSearch();
+	ASSERT_TRUE(joinFirst(guest, ident("GUE", 19714)));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::InLobby; }));
+	guest.setReady(true);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::Started; }));
+	host.leave();		// (as seen from the guest: its host connection is gone)
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	guest.matchOver(true);
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::HostLeft; }));
+	EXPECT_EQ(guest.view().message, "You were away too long: join the game again");
+	EXPECT_NE(guest.view().role, Role::Host);
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	EXPECT_EQ(guest.view().phase, Phase::HostLeft);		// (and stays so: nobody hosts here)
+}
+
+// During a match the host keeps a player whose lobby connection is silent (its app stands still a moment):
+// only the netplay decides; after the match the silent player is dropped as usual.
+TEST(TcvrLobby, SilentPlayerKeptDuringTheMatch)
+{
+	Net net;
+	Timing silent = fast();
+	silent.pingMs = 100000;		// the guest never pings (as a frozen app)
+	Lobby host(fast()), guest(silent);
+	net.prepare(host);
+	net.prepare(guest);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	guest.startSearch();
+	ASSERT_TRUE(joinFirst(guest, ident("GUE", 19714)));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::InLobby; }));
+	guest.setReady(true);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::Started; }));
+	// several drop periods without a word from the guest during the match: still in the lobby
+	std::this_thread::sleep_for(std::chrono::milliseconds(fast().dropMs * 3));
+	EXPECT_TRUE(host.view().state.players[1].present);
+	// after the match the silent guest is dropped as usual
+	host.matchOver();
+	EXPECT_TRUE(waitFor([&] { return !host.view().state.players[1].present; }, 3000));
+}
+
 TEST(TcvrLobby, MatchOverOutsideAMatchDoesNothing)
 {
 	Net net;

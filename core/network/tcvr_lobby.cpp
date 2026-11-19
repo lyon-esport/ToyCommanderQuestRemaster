@@ -1224,7 +1224,9 @@ struct Lobby::Impl
 			const auto list = conns;		// onDisconnect edits conns
 			for (const ConnPtr& c : list)
 			{
-				if (now - c->lastRx > drop)
+				// (not during a match: a player whose app stands still a moment is still in it while the netplay
+				// counts it; a closed connection still drops it. matchOver() gives the silent ones a ping period.)
+				if (now - c->lastRx > drop && !started)
 					onDisconnect(c);
 				else if (ping)
 					send(c, MsgType::Ping);
@@ -1254,8 +1256,8 @@ struct Lobby::Impl
 				closeConn(hostConn);
 				withView([&](View& view) { view.phase = Phase::Failed; view.message = "The host doesn't answer"; });
 			}
-			else if (now - hostConn->lastRx > drop)
-				onDisconnect(hostConn);
+			else if (now - hostConn->lastRx > drop && phase != Phase::Started)
+				onDisconnect(hostConn);		// (in a match: only a closed connection, as on the host)
 			else if (now - lastPing >= std::chrono::milliseconds(timing.pingMs))
 			{
 				lastPing = now;
@@ -1746,7 +1748,7 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 	});
 }
 
-void Lobby::matchOver()
+void Lobby::matchOver(bool wasAway)
 {
 	impl->run([&] {
 		if (impl->hosting)
@@ -1787,8 +1789,23 @@ void Lobby::matchOver()
 		});
 		if (hostThere)
 		{
-			impl->lastPing = Clock::now();
+			// (its pings may wait unread in the socket, after this copy stood still: one ping period to read them)
+			const auto now = Clock::now();
+			impl->hostConn->lastRx = std::max(impl->hostConn->lastRx, now - std::chrono::milliseconds(impl->timing.pingMs));
+			impl->lastPing = now;
 			impl->startTick();
+		}
+		else if (wasAway)
+		{
+			// this copy was the one away (its app stood still): the host dropped it, it did not leave. No
+			// handover from here: the others are still in the host's lobby. Joining again gets back in.
+			if (impl->hostConn)
+				impl->closeConn(impl->hostConn);
+			impl->hostConn.reset();
+			impl->withView([&](View& view) {
+				view.phase = Phase::HostLeft;
+				view.message = "You were away too long: join the game again";
+			});
 		}
 		else
 		{

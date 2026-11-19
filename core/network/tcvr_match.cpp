@@ -365,6 +365,7 @@ std::string endText()
 // this (reloadNow, or gui_stop_game's own unload then afterUnload): netplay goes off then.
 static std::string endMatch(const std::string& why)
 {
+	const bool wasAway = selfAway;		// (this copy was the one away: no lobby handover from here)
 	NOTICE_LOG(NETWORK, "MP match over: %s", why.c_str());
 	active = false;
 	lostPeer = false;
@@ -383,7 +384,7 @@ static std::string endMatch(const std::string& why)
 	config::VrMpEndText.save();
 	saveBool(config::VrMpReturn, true);
 	if (lobbyStarted())
-		theLobby().matchOver();
+		theLobby().matchOver(wasAway);
 	return why;
 }
 
@@ -952,9 +953,40 @@ void openAllRooms(Event, void *)
 		addrspace::write8(RoomsMask, 0xFF);
 }
 
+// TEST ONLY (vr.MpTestEnd = N, 0 off, never set by the menu): from netplay frame N on, team 1's score is the
+// match's points limit, so the game ends the match itself and shows its results page, on cue, for tests
+// that can't score by flying. The frame is GGPO's (the same on every copy and in rollbacks), the write at the
+// same point of the frame as openAllRooms: the copies stay identical.
+constexpr u32 LimitValue = 0x8C0A60EC;		// the options' limit value (points in Deathmatch)
+void testEnd(Event, void *)
+{
+	const int n = config::VrMpTestEnd;
+	if (n <= 0 || !config::GGPOEnable || !ggpo::active())
+		return;
+	const int frame = ggpo::currentFrame();
+	if (frame < n)
+		return;
+	const u32 limit = addrspace::read32(LimitValue);
+	if (limit == 0 || limit > 1000)
+		return;
+	if (addrspace::read32(TeamScores) < limit)
+	{
+		addrspace::write32(TeamScores, limit);
+		static int logged = -1;
+		if (logged != n)
+		{
+			logged = n;
+			NOTICE_LOG(NETWORK, "MP TEST END: frame %d, team 1's score set to the limit %u", frame, limit);
+		}
+	}
+}
+
 struct RoomsRegistration
 {
-	RoomsRegistration() { EventManager::listen(Event::VBlank, openAllRooms); }
+	RoomsRegistration() {
+		EventManager::listen(Event::VBlank, openAllRooms);
+		EventManager::listen(Event::VBlank, testEnd);
+	}
 } roomsRegistration;
 
 }
