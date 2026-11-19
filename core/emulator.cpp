@@ -1184,6 +1184,10 @@ bool Emulator::render()
 	// head-tracked, and the menu) and reading the controllers, which close the menu
 	if (state == Loaded && vr::xr::enabled() && vr::xr::menuOpen())
 		return vr::xr::frame();
+	// tcvr: the XR session stopped (the app in the background) and paused the game: the frames go on, so
+	// the session can start again and the game with it
+	if (state == Loaded && vr::xr::enabled() && vr::xr::sessionPausedTheGame())
+		return vr::xr::frame();
 #endif
 
 	if (!config::ThreadedRendering)
