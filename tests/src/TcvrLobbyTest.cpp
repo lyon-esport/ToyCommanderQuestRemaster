@@ -25,8 +25,10 @@ State sampleState()
 	State s;
 	s.revision = 7;
 	s.settings = { 2, 5, 90 };
-	s.players[0] = { true, "MAN", true, "", 19713 };
-	s.players[2] = { true, "ZOE", false, "192.0.2.7", 19714 };
+	s.players[0] = { true, "MAN", true, "192.0.2.6", 19713, 40001 };
+	s.players[2] = { true, "ZOE", false, "", 19714, 40002 };
+	s.lobbyId = 0x12345678;
+	s.hostSlot = 2;
 	return s;
 }
 
@@ -78,6 +80,38 @@ TEST(TcvrLobbyCodec, HelloRoundTrip)
 	EXPECT_EQ(out.protocol, ProtocolVersion);
 }
 
+TEST(TcvrLobbyCodec, HelloRejoinRoundTrip)
+{
+	Hello h;
+	h.name = "ZOE";
+	h.appVersion = "v";
+	h.ggpoPort = 19714;
+	h.lobbyPort = 50123;
+	h.lobbyId = 0xDEADBEEF;
+	h.slot = 2;
+	h.ready = true;
+	Hello out;
+	ASSERT_TRUE(decode(encode(h), out));
+	EXPECT_EQ(out.lobbyPort, 50123);
+	EXPECT_EQ(out.lobbyId, 0xDEADBEEFu);
+	EXPECT_EQ(out.slot, 2);
+	EXPECT_TRUE(out.ready);
+	// a fresh join: no game id, no slot
+	Hello fresh;
+	ASSERT_TRUE(decode(encode(Hello()), fresh));
+	EXPECT_EQ(fresh.lobbyId, 0u);
+	EXPECT_EQ(fresh.slot, NoSlot);
+	EXPECT_FALSE(fresh.ready);
+	// an older app's HELLO (protocol 1, shorter) still decodes: it is then refused for its version
+	Hello old;
+	old.protocol = 1;
+	auto bytes = encode(old);
+	bytes.resize(bytes.size() - 8);
+	Hello oldOut;
+	ASSERT_TRUE(decode(bytes, oldOut));
+	EXPECT_EQ(oldOut.protocol, 1);
+}
+
 TEST(TcvrLobbyCodec, StateRoundTrip)
 {
 	const State s = sampleState();
@@ -89,10 +123,18 @@ TEST(TcvrLobbyCodec, StateRoundTrip)
 	EXPECT_TRUE(out.players[0].present);
 	EXPECT_FALSE(out.players[1].present);
 	EXPECT_EQ(out.players[2].name, "ZOE");
-	EXPECT_EQ(out.players[2].address, "192.0.2.7");
+	EXPECT_EQ(out.players[2].address, "");
+	EXPECT_EQ(out.players[0].address, "192.0.2.6");
 	EXPECT_EQ(out.players[2].ggpoPort, 19714);
 	EXPECT_TRUE(out.players[0].ready);
 	EXPECT_FALSE(out.players[2].ready);
+	EXPECT_EQ(out.lobbyId, 0x12345678u);
+	EXPECT_EQ(out.hostSlot, 2);
+	EXPECT_EQ(out.players[0].lobbyPort, 40001);
+	EXPECT_EQ(out.players[2].lobbyPort, 40002);
+	State bad = s;
+	bad.hostSlot = 4;
+	EXPECT_FALSE(decode(encode(bad), out));
 }
 
 TEST(TcvrLobbyCodec, StartRoundTripAndPeerList)
@@ -231,6 +273,7 @@ Timing fast()
 	t.pingMs = 100;
 	t.dropMs = 600;
 	t.connectMs = 800;
+	t.handoverMs = 1500;
 	return t;
 }
 
@@ -471,8 +514,218 @@ TEST(TcvrLobby, SettingsChangeReachesJoiners)
 	ASSERT_TRUE(waitFor([&] { auto l = guest.games(); return !l.empty() && l.front().beacon.settings == (Settings { 2, 7, 120 }); }));
 }
 
-TEST(TcvrLobby, HostLeavingIsReported)
+TEST(TcvrLobby, HostLeavingHandsTheGameToTheOnlyJoiner)
 {
+	Net net;
+	Lobby host(fast()), guest(fast()), late(fast());
+	net.prepare(host);
+	net.prepare(guest);
+	net.prepare(late);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), { 2, 4, 40 }, err));
+	guest.startSearch();
+	ASSERT_TRUE(joinFirst(guest, ident("GUE", 19714)));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::InLobby; }));
+	const uint32_t id = guest.view().state.lobbyId;
+	EXPECT_NE(id, 0u);
+	host.leave();
+	// the joiner hosts the same game, alone
+	ASSERT_TRUE(waitFor([&] { return guest.view().role == Role::Host && guest.view().phase == Phase::InLobby; }));
+	const View v = guest.view();
+	EXPECT_EQ(v.mySlot, 1);
+	EXPECT_EQ(v.state.hostSlot, 1);
+	EXPECT_EQ(v.state.lobbyId, id);
+	EXPECT_EQ(v.state.count(), 1);
+	EXPECT_EQ(v.state.settings, (Settings { 2, 4, 40 }));
+	EXPECT_EQ(v.message, "HOS left: you are the host now");
+	EXPECT_EQ(host.view().phase, Phase::Idle);
+	// and announces it: a new player finds it (same game id, the new host's name) and joins
+	late.startSearch();
+	ASSERT_TRUE(waitFor([&] { auto l = late.games(); return !l.empty() && l.front().beacon.hostName == "GUE"; }));
+	EXPECT_EQ(late.games().front().hostId, id);
+	ASSERT_TRUE(joinFirst(late, ident("LAT", 19715)));
+	ASSERT_TRUE(waitFor([&] { return late.view().phase == Phase::InLobby; }));
+	EXPECT_EQ(late.view().mySlot, 0);		// the free slot
+	EXPECT_EQ(late.view().state.hostSlot, 1);
+	ASSERT_TRUE(waitFor([&] { return guest.view().state.count() == 2; }));
+}
+
+TEST(TcvrLobby, HostLeavingWithFourPlayers)
+{
+	// the next player in slot order hosts; the others come back to their own slots, ready marks kept
+	Net net;
+	Lobby host(fast());
+	Lobby g[3] = { Lobby(fast()), Lobby(fast()), Lobby(fast()) };
+	net.prepare(host);
+	for (Lobby& l : g)
+		net.prepare(l);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), { 1, 3, 30 }, err));
+	for (int i = 0; i < 3; i++)
+	{
+		g[i].startSearch();
+		ASSERT_TRUE(joinFirst(g[i], ident(std::string("P") + char('1' + i), 19714 + i)));
+		ASSERT_TRUE(waitFor([&] { return g[i].view().phase == Phase::InLobby; }));
+	}
+	ASSERT_TRUE(waitFor([&] { return g[2].view().state.count() == 4; }));
+	g[2].setReady(true);
+	ASSERT_TRUE(waitFor([&] { return g[1].view().state.players[3].ready; }));
+	const uint32_t id = g[0].view().state.lobbyId;
+	host.leave();
+	ASSERT_TRUE(waitFor([&] { return g[0].view().role == Role::Host; }));
+	ASSERT_TRUE(waitFor([&] {
+		return g[1].view().phase == Phase::InLobby && g[2].view().phase == Phase::InLobby && g[0].view().state.count() == 3
+			&& g[1].view().state.hostSlot == 1 && g[2].view().state.count() == 3;
+	}, 4000));
+	for (int i = 0; i < 3; i++)
+	{
+		const View v = g[i].view();
+		EXPECT_EQ(v.mySlot, i + 1) << "player " << i;
+		EXPECT_EQ(v.state.lobbyId, id);
+		EXPECT_EQ(v.state.hostSlot, 1);
+		EXPECT_FALSE(v.state.players[0].present);
+		EXPECT_EQ(v.state.players[1].name, "P1");
+		EXPECT_EQ(v.state.players[2].name, "P2");
+		EXPECT_EQ(v.state.players[3].name, "P3");
+		EXPECT_EQ(v.state.settings, (Settings { 1, 3, 30 }));
+	}
+	EXPECT_EQ(g[1].view().role, Role::Joiner);
+	EXPECT_EQ(g[1].view().message, "The host left: P1 is the new host");
+	EXPECT_FALSE(g[0].view().state.players[2].ready);
+	EXPECT_TRUE(g[0].view().state.players[3].ready);		// kept
+	// the new host starts the match: players in slot order, the new host first
+	std::string why;
+	EXPECT_FALSE(g[0].canStart(why));
+	g[1].setReady(true);
+	ASSERT_TRUE(waitFor([&] { return g[0].canStart(why); })) << why;
+	ASSERT_TRUE(g[0].start(2, err)) << err;
+	EXPECT_EQ(g[0].view().start.localIndex, 0);
+	for (int i = 1; i < 3; i++)
+	{
+		ASSERT_TRUE(waitFor([&] { return g[i].view().phase == Phase::Started; })) << "joiner " << i;
+		const StartInfo s = g[i].view().start;
+		EXPECT_EQ(s.localIndex, i);
+		ASSERT_EQ(s.peers.size(), 3u);
+		EXPECT_EQ(s.peers[0].address, "");			// the host: the address it was joined by
+		EXPECT_EQ(s.peers[0].port, 19714);
+		EXPECT_EQ(s.peers[1].port, 19715);
+		EXPECT_EQ(s.peers[2].port, 19716);
+		const std::string ha = g[i].view().hostAddress;
+		EXPECT_FALSE(ha.empty());
+		EXPECT_EQ(s.peerList(ha).substr(0, ha.size() + 6), ha + ":19714");
+	}
+}
+
+TEST(TcvrLobby, HostVanishingHandsOver)
+{
+	// no LEAVE: the host's process is gone (its sockets close)
+	Net net;
+	auto host = std::make_unique<Lobby>(fast());
+	Lobby a(fast()), b(fast());
+	net.prepare(*host);
+	net.prepare(a);
+	net.prepare(b);
+	std::string err;
+	ASSERT_TRUE(host->host(ident("HOS", 19713), {}, err));
+	a.startSearch();
+	b.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::InLobby; }));
+	ASSERT_TRUE(joinFirst(b, ident("BBB", 19715)));
+	ASSERT_TRUE(waitFor([&] { return b.view().state.count() == 3; }));
+	host.reset();
+	ASSERT_TRUE(waitFor([&] { return a.view().role == Role::Host && b.view().phase == Phase::InLobby && b.view().state.hostSlot == 1; }, 4000));
+	EXPECT_EQ(b.view().mySlot, 2);
+	EXPECT_EQ(a.view().state.count(), 2);
+}
+
+TEST(TcvrLobby, HostSilentHandsOver)
+{
+	// the host's network goes quiet (no pings): the joiners drop it after dropMs and hand over
+	Net net;
+	Timing quiet = fast();
+	quiet.pingMs = 100000;
+	Lobby host(quiet), a(fast()), b(fast());
+	net.prepare(host);
+	net.prepare(a);
+	net.prepare(b);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	a.startSearch();
+	b.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::InLobby; }));
+	ASSERT_TRUE(joinFirst(b, ident("BBB", 19715)));
+	ASSERT_TRUE(waitFor([&] { return b.view().state.count() == 3; }));
+	ASSERT_TRUE(waitFor([&] { return a.view().role == Role::Host && b.view().phase == Phase::InLobby && b.view().state.hostSlot == 1; }, 4000));
+	EXPECT_EQ(b.view().mySlot, 2);
+}
+
+TEST(TcvrLobby, SlotKeptOnlyForAWhile)
+{
+	// host and player 3 gone at once: player 2 hosts and keeps slot 2 for player 3, then frees it.
+	// Player 3 is a bare connection here, so it surely never comes back.
+	Net net;
+	auto host = std::make_unique<Lobby>(fast());
+	Lobby a(fast());
+	net.prepare(*host);
+	net.prepare(a);
+	std::string err;
+	ASSERT_TRUE(host->host(ident("HOS", 19713), {}, err));
+	a.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::InLobby; }));
+	asio::io_context io;
+	asio::ip::tcp::socket b(io);
+	b.connect(asio::ip::tcp::endpoint(asio::ip::make_address_v4("127.0.0.1"), host->view().lobbyPort));
+	Hello h;
+	h.name = "BBB";
+	h.appVersion = "1.0";
+	h.disc.fill(1);
+	h.ggpoPort = 19715;
+	h.lobbyPort = 1;		// nothing there
+	asio::write(b, asio::buffer(encodeFrame(MsgType::Hello, encode(h))));
+	ASSERT_TRUE(waitFor([&] { return a.view().state.count() == 3; }));
+	host.reset();
+	ASSERT_TRUE(waitFor([&] { return a.view().role == Role::Host; }));
+	EXPECT_EQ(a.view().state.count(), 2);		// BBB's slot, kept
+	EXPECT_TRUE(a.view().state.players[2].present);
+	std::string why;
+	EXPECT_FALSE(a.canStart(why));
+	EXPECT_EQ(why, "Waiting for the players to come back");
+	ASSERT_TRUE(waitFor([&] { return a.view().state.count() == 1; }, 3000));
+	EXPECT_FALSE(a.canStart(why));
+	EXPECT_EQ(why, "Waiting for another player");
+}
+
+TEST(TcvrLobby, NextInLineGoneToo)
+{
+	// host and player 2 (the next host) gone at once: player 3 tries player 2, then hosts itself
+	Net net;
+	auto host = std::make_unique<Lobby>(fast());
+	auto a = std::make_unique<Lobby>(fast());
+	Lobby b(fast());
+	net.prepare(*host);
+	net.prepare(*a);
+	net.prepare(b);
+	std::string err;
+	ASSERT_TRUE(host->host(ident("HOS", 19713), {}, err));
+	a->startSearch();
+	b.startSearch();
+	ASSERT_TRUE(joinFirst(*a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return a->view().phase == Phase::InLobby; }));
+	ASSERT_TRUE(joinFirst(b, ident("BBB", 19715)));
+	ASSERT_TRUE(waitFor([&] { return b.view().state.count() == 3; }));
+	a.reset();
+	host.reset();
+	ASSERT_TRUE(waitFor([&] { return b.view().role == Role::Host && b.view().phase == Phase::InLobby; }, 5000));
+	EXPECT_EQ(b.view().state.hostSlot, 2);
+	EXPECT_EQ(b.view().mySlot, 2);
+}
+
+TEST(TcvrLobby, NoHandoverOnceStarted)
+{
+	// after START the lobby is done: the netplay deals with a player who leaves
 	Net net;
 	Lobby host(fast()), guest(fast());
 	net.prepare(host);
@@ -482,10 +735,14 @@ TEST(TcvrLobby, HostLeavingIsReported)
 	guest.startSearch();
 	ASSERT_TRUE(joinFirst(guest, ident("GUE", 19714)));
 	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::InLobby; }));
+	guest.setReady(true);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err));
+	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::Started; }));
 	host.leave();
-	ASSERT_TRUE(waitFor([&] { return guest.view().phase == Phase::HostLeft; }));
-	EXPECT_EQ(guest.view().message, "The host left");
-	EXPECT_EQ(host.view().phase, Phase::Idle);
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	EXPECT_EQ(guest.view().phase, Phase::Started);
+	EXPECT_EQ(guest.view().role, Role::Joiner);
 }
 
 TEST(TcvrLobby, JoinerLeavingFreesItsSlot)

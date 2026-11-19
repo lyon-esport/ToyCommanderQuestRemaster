@@ -15,6 +15,13 @@
 		PING    either way       keep-alive every 2 s; a side silent for 6 s is dropped
 		START   host -> all      the players in slot order as address:port, this copy's index, input delay
 
+	Host handover (before the match): every joiner keeps a lobby port open from the moment it joins ("standby"),
+	and the host's STATE lists each player's address and standby port. When the host goes away (LEAVE, a
+	closed connection or 6 s of silence), the next player in slot order becomes the host on its standby port
+	with the same game (same id, settings and slots) and starts announcing it; the others connect to it and
+	ask for their own slot back (HELLO with the game's id and their slot). A slot is kept for its player for
+	10 s; then it is free again.
+
 	On START the app sets network:GGPOPeers / network:GGPOPlayer, turns netplay on and restarts the
 	game (tcvr_lobby_glue). Everything here is plain asio and the standard library, so the protocol
 	has unit tests that run without the emulator (tests/src/TcvrLobbyTest.cpp).
@@ -35,7 +42,7 @@ namespace tcvr::lobby
 
 constexpr int MaxPlayers = 4;
 constexpr uint16_t DiscoveryPort = 19790;	// UDP; not the GGPO port (19713)
-constexpr uint8_t ProtocolVersion = 1;
+constexpr uint8_t ProtocolVersion = 2;	// 2: host handover (standby ports, rejoin)
 constexpr size_t NameMax = 8;				// the menu offers 3 letters; a longer name from elsewhere is cut
 
 // The game's multiplayer options page, as the game shows it (measured on PC, 2026-11-18).
@@ -97,7 +104,13 @@ struct Hello
 	std::string appVersion;
 	std::array<uint8_t, 16> disc {};
 	uint16_t ggpoPort = 0;
+	uint16_t lobbyPort = 0;			// the joiner's standby lobby port (TCP): where it hosts if the host leaves
+	// coming back after a host handover: the game's id and the slot this player had (else 0 and NoSlot)
+	uint32_t lobbyId = 0;
+	uint8_t slot = 0xFF;
+	bool ready = false;				// (rejoin) the player's ready mark, kept
 };
+constexpr uint8_t NoSlot = 0xFF;
 
 struct PlayerInfo
 {
@@ -106,6 +119,7 @@ struct PlayerInfo
 	bool ready = false;
 	std::string address;			// as the host sees it ("" for the host itself)
 	uint16_t ggpoPort = 0;
+	uint16_t lobbyPort = 0;			// its lobby port: the host's, or a joiner's standby port
 };
 
 struct State
@@ -113,6 +127,8 @@ struct State
 	uint32_t revision = 0;
 	Settings settings;
 	std::array<PlayerInfo, MaxPlayers> players;
+	uint32_t lobbyId = 0;			// the game's id (the beacon's hostId); kept across a host handover
+	uint8_t hostSlot = 0;			// the host's slot: 0, or another after a handover
 	int count() const;
 };
 
@@ -177,6 +193,7 @@ struct Timing
 	int pingMs = 2000;			// keep-alive
 	int dropMs = 6000;			// silent for this long: gone
 	int connectMs = 5000;		// joiner: no answer from the host
+	int handoverMs = 10000;		// host handover: a slot kept for its player, and the time to reach the new host
 };
 
 struct FoundGame
@@ -203,7 +220,7 @@ struct View
 	Role role = Role::None;
 	Phase phase = Phase::Idle;
 	RefuseReason refuse = RefuseReason::None;
-	std::string message;		// a line for the menu when the phase is not InLobby
+	std::string message;		// a line for the menu when the phase is not InLobby (InLobby: a note, may be empty)
 	State state;
 	int mySlot = -1;
 	std::string hostAddress;	// the address to give another player to join by hand

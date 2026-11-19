@@ -21,6 +21,10 @@
   .\tcvr\tools\netplay-test-tc.ps1 -Players 4 -Seconds 670 four copies, 10 min of battle
   .\tcvr\tools\netplay-test-tc.ps1 -Local 4                no network: one copy, 4 local pads
                                                            (the 4-player check), shots only
+  .\tcvr\tools\netplay-test-tc.ps1 -Players 4 -KillPlayer 3 -KillAt 120 -Seconds 440
+                                                           player 3's copy is killed (its process ended) 120 s
+                                                           into the game: the other copies must go on together
+                                                           (task 1.4); they are compared with each other
 
   Paths: the game image is taken from -GamePath or the first .chd/.gdi/.cue in
   $env:TCVR_PRIVATE_ROOT\Source (default: the folder above this repository). Each copy runs
@@ -49,6 +53,8 @@ param(
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
 	[string]$Name = '',
+	[int]$KillPlayer = 0,	# >0: this player's copy is killed at -KillAt (a player who leaves or drops, task 1.4)
+	[double]$KillAt = 0,	# seconds of game (as -Seconds) when it is killed
 	[int]$PortOffset = 0	# added to the pad listener ports (27041+) and, with the player list, the GGPO ports (19713+): two tests on one PC at once (use -List for 2 copies)
 )
 $ErrorActionPreference = 'Stop'
@@ -63,7 +69,7 @@ if (-not $GamePath) {
 if (-not $GamePath -or -not (Test-Path $GamePath)) { throw 'No Toy Commander image (give -GamePath)' }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:TEMP 'tcvr-netplay' }
 if (-not $Name) {
-	$Name = if ($Local) { "local$($Local)p" } else { "net$($Players)p" + $(if ($List -and $Players -eq 2) { 'list' } else { '' }) + "_d$($NetDelay)_l$($Loss)" + $(if ($StallGuest) { "_stall$StallGuest" } else { '' }) }
+	$Name = if ($Local) { "local$($Local)p" } else { "net$($Players)p" + $(if ($List -and $Players -eq 2) { 'list' } else { '' }) + "_d$($NetDelay)_l$($Loss)" + $(if ($StallGuest) { "_stall$StallGuest" } else { '' }) + $(if ($KillPlayer) { "_kill$KillPlayer" } else { '' }) }
 }
 if (-not $OutDir) { $OutDir = Join-Path $private ("multiplayer\phase0\{0}_{1}" -f (Get-Date -Format 'yyyyMMdd_HHmmss'), $Name) }
 $shotDir = Join-Path $WorkDir "shots"
@@ -282,11 +288,13 @@ foreach ($k in @('HOTD2VR_SYNCLOG', 'HOTD2VR_SYNCDUMP', 'HOTD2VR_SYNCPAGES', 'HO
 $udp = New-Object System.Net.Sockets.UdpClient
 $launch = Get-Date
 $t0 = $null
+$killed = $null		# the killed copy, and the last frame in each other copy's sync log at that moment
+$killFrame = @{}
 $shotQueue = [System.Collections.Generic.Queue[double]]::new()
 foreach ($s in ($shots | Sort-Object)) { $shotQueue.Enqueue($s) }
 try {
 	while ($true) {
-		foreach ($peer in $peers) { if ($peer.Proc.HasExited) { throw "$($peer.Name) closed early (code $($peer.Proc.ExitCode))" } }
+		foreach ($peer in $peers) { if ($peer -ne $killed -and $peer.Proc.HasExited) { throw "$($peer.Name) closed early (code $($peer.Proc.ExitCode))" } }
 		if ($null -eq $t0) {
 			$ready = if ($Local) { ((Get-Date) - $launch).TotalSeconds -ge 0.5 } else {
 				$f = Join-Path $peers[0].Dir 'sync.txt'; (Test-Path $f) -and (Get-Item $f).Length -gt 0 }
@@ -296,7 +304,18 @@ try {
 		}
 		$t = ((Get-Date) - $t0).TotalSeconds
 		if ($t -ge $Seconds) { break }
+		if ($KillPlayer -and $null -eq $killed -and $t -ge $KillAt) {
+			$killed = $peers[$KillPlayer - 1]
+			Stop-Process -Id $killed.Proc.Id -Force
+			foreach ($peer in $peers) {
+				if ($peer -eq $killed) { continue }
+				$last = (Get-Content (Join-Path $peer.Dir 'sync.txt') -Tail 1 -ErrorAction SilentlyContinue)
+				$killFrame[$peer.Name] = if ($last) { [int]($last.Split(' ')[0]) } else { 0 }
+			}
+			Write-Output ("{0:0.0} s: {1} killed (the others were at frame {2})" -f $t, $killed.Name, (($killFrame.Values | Measure-Object -Maximum).Maximum))
+		}
 		for ($p = 0; $p -lt $pads; $p++) {
+			if ($peers[$p] -eq $killed) { continue }
 			if ($Local) { $text = (Pad-Message $p $t) -replace '^PAD 0', "PAD $p"; $port = $peers[0].Port }
 			else { $text = Pad-Message $p $t; $port = $peers[$p].Port }
 			$msg = [Text.Encoding]::ASCII.GetBytes($text)
@@ -306,6 +325,7 @@ try {
 			$at = $shotQueue.Dequeue()
 			# the emulator saves its last frame itself ("SHOT"): works with the desktop locked
 			foreach ($peer in $peers) {
+				if ($peer -eq $killed) { continue }
 				$msg = [Text.Encoding]::ASCII.GetBytes(("SHOT {0}" -f (Join-Path $shotDir ("{0}_{1:000}.png" -f $peer.Name, $at))))
 				[void]$udp.Send($msg, $msg.Length, '127.0.0.1', $peer.Port)
 			}
@@ -340,6 +360,15 @@ Say ("run {0}: {1} s, {7} copies, GGPO delay {2}, network delay {3} ms, loss {4}
 	$Name, $Seconds, $Delay, $NetDelay, $Loss, $Oop, $StallGuest, $peers.Count)
 Say ("pattern {0}, mode {1}" -f $Pattern, @("Deathmatch", "Cat and Mice", "Capture the Flag")[$Mode])
 foreach ($k in $scores.Keys) { Say ("{0}: score counters 0x8C0CDC68 at the end: {1}" -f $k, $scores[$k]) }
+if ($KillPlayer) {
+	Say ("{0} killed {1:0.0} s into the game, at about frame {2}" -f $peers[$KillPlayer - 1].Name, $KillAt, (($killFrame.Values | Measure-Object -Maximum).Maximum))
+	foreach ($peer in $peers) {
+		if ($peer -eq $killed) { continue }
+		$log = Join-Path $peer.Dir 'flycast.log'
+		$left = if (Test-Path $log) { Select-String -Path $log -Pattern 'GGPO: player \d+ left.*' | Select-Object -First 1 } else { $null }
+		Say ("{0} log: {1}" -f $peer.Name, $(if ($left) { $left.Matches[0].Value } else { 'no "player left" line' }))
+	}
+}
 if ($Pattern -eq "hunt") { Say ("respawns seen (new vehicle in the player record): P1 {0}, P2 {1}" -f $hunt.Respawns[0], $hunt.Respawns[1]) }
 if (-not $Local) {
 	$logs = @{}
@@ -366,9 +395,11 @@ if (-not $Local) {
 	}
 	# the last frames may still be predictions: only frames GGPO can no longer roll back count
 	# Every copy is compared with p1's.
-	$ref = $peers[0].Name
-	$others = @($peers | Select-Object -Skip 1 | ForEach-Object { $_.Name })
-	$upTo = ($peers | ForEach-Object { ($logs[$_.Name].Keys | Measure-Object -Maximum).Maximum } | Measure-Object -Minimum).Minimum - 10
+	# (with -KillPlayer: the copies that were still there at the end)
+	$cmp = @($peers | Where-Object { $_ -ne $killed })
+	$ref = $cmp[0].Name
+	$others = @($cmp | Select-Object -Skip 1 | ForEach-Object { $_.Name })
+	$upTo = ($cmp | ForEach-Object { ($logs[$_.Name].Keys | Measure-Object -Maximum).Maximum } | Measure-Object -Minimum).Minimum - 10
 	$common = @($logs[$ref].Keys | Where-Object { $fr = $_; $_ -le $upTo -and -not ($others | Where-Object { -not $logs[$_].ContainsKey($fr) }) } | Sort-Object)
 	# The verdict is on main RAM and video + sound RAM. The saved-state hash is only reported: the
 	# rollback state holds a few host pointers (SH-4 part; seen at frames 600 and 4000 on
@@ -394,7 +425,11 @@ if (-not $Local) {
 	Say ("saved-state hash (host pointers included, informative only) differs on {0} of {1} frames" -f $stateDiff, $common.Count)
 	if ($null -eq $firstDiff) {
 		Say ("IDENTICAL on {4} copies for {0} confirmed frames (frames {1}..{2}, {3:0.0} s of game): main RAM and video/sound RAM" -f `
-			$common.Count, $common[0], $common[-1], ($common.Count / 60.0), $peers.Count)
+			$common.Count, $common[0], $common[-1], ($common.Count / 60.0), $cmp.Count)
+		if ($KillPlayer) {
+			$after = @($common | Where-Object { $_ -gt (($killFrame.Values | Measure-Object -Maximum).Maximum) }).Count
+			Say ("  of which {0} frames ({1:0.0} s of game) after {2} was killed" -f $after, ($after / 60.0), $peers[$KillPlayer - 1].Name)
+		}
 	} else {
 		Say ("frames compared: {0}, frames that differ: {1}" -f $common.Count, $diffCount)
 		if ($Pages) {
