@@ -214,6 +214,11 @@ function Hunt-State([int]$p, [double]$t) {
 	$b = 0
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 2600 -and (($u * 1000) % 300) -lt 150) { $b = $BTN.A }
 	if ([math]::Abs($deg) -lt 15 -and -not $hunt.Extend -and $dist -lt 3000 -and ($u % 2) -gt 1.7) { $b = $b -bor $BTN.B }
+	if ($TargetStill) {
+		# a still target: fire whenever it is roughly ahead and near (the gun sprays, the missile may home in)
+		if ([math]::Abs($deg) -lt 45 -and $dist -lt 1500) { $b = $b -bor $BTN.A }
+		if ([math]::Abs($deg) -lt 60 -and $dist -lt 2500 -and ($u % 1.5) -gt 1.2) { $b = $b -bor $BTN.B }
+	}
 	if ($still -and $pulseA) { $b = $b -bor $BTN.A }
 	$r = if ($Ram -or $dist -gt 1000) { 255 } else { 160 }
 	$l = 0

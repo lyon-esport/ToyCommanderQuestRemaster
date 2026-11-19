@@ -292,7 +292,7 @@ try {
 			Start-Sleep -Milliseconds 500
 		}
 		Check $line.Success ("{0}: the match is over {1:0.0} s after {2} left: {3}" -f $alone.Name, $sw.Elapsed.TotalSeconds, $killed.Name, $line.Value)
-		Start-Sleep -Seconds 2"
+		Start-Sleep -Seconds 2
 		Check ((Cfg-Text $alone) -notmatch 'GGPOPeers[ \t]*=[ \t]*\S') "$($alone.Name): netplay options cleared in emu.cfg"
 		Stop-Copy $alone
 		Start-Sleep -Seconds 2
