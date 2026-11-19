@@ -11,6 +11,7 @@
 #include <asio.hpp>
 
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <thread>
 
@@ -565,4 +566,114 @@ TEST(TcvrLobby, GarbageOnTheLobbyPortIsDropped)
 	s.read_some(asio::buffer(b), ec);
 	EXPECT_TRUE(ec == asio::error::eof || ec == asio::error::connection_reset);
 	EXPECT_EQ(host.view().state.count(), 1);
+}
+
+// ---- the address a host announces ----------------------------------------------------------
+
+namespace
+{
+
+NetInterface nif(const std::string& name, const std::string& address, bool gateway = false,
+		const std::string& description = "")
+{
+	NetInterface n;
+	n.name = name;
+	n.description = description;
+	n.address = address;
+	n.gateway = gateway;
+	return n;
+}
+
+}
+
+TEST(TcvrLobbyAddress, UnusableAddresses)
+{
+	EXPECT_LT(lanScore(nif("lo", "127.0.0.1")), 0);
+	NetInterface lo = nif("Loopback Pseudo-Interface 1", "203.0.113.5");
+	lo.loopback = true;
+	EXPECT_LT(lanScore(lo), 0);
+	EXPECT_LT(lanScore(nif("Wi-Fi", "169.254.12.3")), 0);	// no DHCP lease, leakscan:allow (link-local example)
+	EXPECT_LT(lanScore(nif("Wi-Fi", "0.0.0.0")), 0);
+	EXPECT_LT(lanScore(nif("Wi-Fi", "not an address")), 0);
+	NetInterface down = nif("Wi-Fi", "192.0.2.20", true);
+	down.up = false;
+	EXPECT_LT(lanScore(down), 0);
+	EXPECT_EQ(pickLanAddress({}), "");
+	EXPECT_EQ(pickLanAddress({ nif("lo", "127.0.0.1"), down }), "");
+}
+
+// the bug found on the PC: the Hyper-V "Default Switch" (no gateway) was announced instead of Wi-Fi
+TEST(TcvrLobbyAddress, WindowsSkipsHyperVDefaultSwitch)
+{
+	const std::string hv = "Hyper-V Virtual Ethernet Adapter";
+	NetInterface wifi = nif("Wi-Fi", "192.0.2.20", true, "Wireless LAN Card");
+	wifi.wireless = true;
+	EXPECT_EQ(pickLanAddress({ nif("vEthernet (Default Switch)", "198.51.100.1", false, hv), wifi }), "192.0.2.20");
+	EXPECT_EQ(pickLanAddress({ wifi, nif("vEthernet (Default Switch)", "198.51.100.1", false, hv) }), "192.0.2.20");
+	// WSL and VirtualBox host-only too
+	EXPECT_EQ(pickLanAddress({ nif("vEthernet (WSL)", "198.51.100.2", false, hv),
+			nif("VirtualBox Host-Only Network", "198.51.100.3", false, "VirtualBox Host-Only Ethernet Adapter"),
+			wifi }), "192.0.2.20");
+}
+
+// a Hyper-V external switch bridged to the LAN is the real LAN: it holds the gateway
+TEST(TcvrLobbyAddress, WindowsKeepsBridgedHyperVSwitch)
+{
+	const std::string hv = "Hyper-V Virtual Ethernet Adapter";
+	EXPECT_EQ(pickLanAddress({ nif("vEthernet (Default Switch)", "198.51.100.1", false, hv),
+			nif("vEthernet (Bridge)", "203.0.113.3", true, hv + " #2") }), "203.0.113.3");
+	// but a physical adapter with its own gateway is still better
+	NetInterface eth = nif("Ethernet", "192.0.2.7", true, "USB Ethernet");
+	eth.wired = true;
+	EXPECT_EQ(pickLanAddress({ nif("vEthernet (Bridge)", "203.0.113.3", true, hv + " #2"), eth }), "192.0.2.7");
+}
+
+TEST(TcvrLobbyAddress, VpnLoses)
+{
+	NetInterface vpn = nif("WireGuard Tunnel", "203.0.113.8", true, "WireGuard Tunnel");
+	NetInterface wifi = nif("Wi-Fi", "192.0.2.20", true);
+	wifi.wireless = true;
+	EXPECT_EQ(pickLanAddress({ vpn, wifi }), "192.0.2.20");
+	// Android: a full-tunnel VPN holds the default route, Wi-Fi is still the room's network
+	EXPECT_EQ(pickLanAddress({ nif("tun0", "203.0.113.8", true), nif("wlan0", "192.0.2.30") }), "192.0.2.30");
+	// only a VPN: better than nothing
+	EXPECT_EQ(pickLanAddress({ nif("lo", "127.0.0.1"), nif("tun0", "203.0.113.8", true) }), "203.0.113.8");
+}
+
+TEST(TcvrLobbyAddress, AndroidPrefersWifi)
+{
+	EXPECT_EQ(pickLanAddress({ nif("lo", "127.0.0.1"), nif("rmnet_data0", "203.0.113.45"), nif("wlan0", "192.0.2.30", true) }),
+			"192.0.2.30");
+	EXPECT_EQ(pickLanAddress({ nif("p2p0", "198.51.100.49"), nif("wlan0", "192.0.2.30") }), "192.0.2.30");
+	// Linux PC: Docker bridge versus the real adapter
+	EXPECT_EQ(pickLanAddress({ nif("docker0", "198.51.100.17"), nif("enp3s0", "192.0.2.40", true) }), "192.0.2.40");
+}
+
+TEST(TcvrLobbyAddress, TieGoesToLowerMetric)
+{
+	NetInterface a = nif("Ethernet", "192.0.2.10", true);
+	NetInterface b = nif("Wi-Fi", "192.0.2.11", true);
+	a.wired = true;
+	b.wireless = true;
+	a.metric = 35;
+	b.metric = 25;
+	EXPECT_EQ(pickLanAddress({ a, b }), "192.0.2.11");
+	b.metric = 50;
+	EXPECT_EQ(pickLanAddress({ a, b }), "192.0.2.10");
+}
+
+// this computer: whatever it picks is one of its own usable addresses
+TEST(TcvrLobbyAddress, ThisComputer)
+{
+	const std::vector<NetInterface> list = listInterfaces();
+	const std::string picked = pickLanAddress(list);
+	for (const NetInterface& n : list)
+		std::printf("  %-40s %-16s gw=%d score=%d\n", n.name.c_str(), n.address.c_str(), n.gateway, lanScore(n));
+	if (!picked.empty())
+	{
+		bool found = false;
+		for (const NetInterface& n : list)
+			found |= n.address == picked && lanScore(n) >= 0;
+		EXPECT_TRUE(found);
+	}
 }

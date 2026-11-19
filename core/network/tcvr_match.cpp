@@ -15,6 +15,7 @@
 #include "version.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -160,8 +161,22 @@ void setPlayerName(const std::string& name)
 	config::VrMpName.save();
 }
 
+static std::atomic<bool> lostPeer;
+
+void peerLost()
+{
+	if (active)
+		lostPeer = true;
+}
+
 void poll()
 {
+	if (lostPeer.exchange(false) && active)
+	{
+		NOTICE_LOG(NETWORK, "MP match: a player left, the match is over");
+		leaveMatch();
+		return;
+	}
 	std::unique_lock<std::mutex> lock(mutex);
 	if (begun || !theOne)
 		return;
@@ -196,6 +211,24 @@ std::string leaveMatch()
 	return restart();
 }
 
+// The Dreamcast devices of a match: the same on every copy, or GGPO refuses the peers (its
+// verification hashes what is plugged into each port). One controller with a VMU per player,
+// nothing in the other ports; each player's own setup (emu.cfg) is left as it is: overridden
+// options are not saved.
+static void matchDevices()
+{
+	const std::string& peers = config::GGPOPeers.get();
+	const int players = std::clamp((int)std::count(peers.begin(), peers.end(), ',') + 1, 2, 4);
+	for (int port = 0; port < 4; port++)
+	{
+		const bool used = port < players;
+		config::MapleMainDevices[port].override(used ? MDT_SegaController : MDT_None);
+		config::MapleExpansionDevices[port][0].override(used ? MDT_SegaVMU : MDT_None);
+		config::MapleExpansionDevices[port][1].override(MDT_None);
+	}
+	NOTICE_LOG(NETWORK, "MP match: %d controllers with a VMU each", players);
+}
+
 void gate()
 {
 	const int marker = config::VrMpMarker;
@@ -206,6 +239,7 @@ void gate()
 			active = true;
 			saveInt(config::VrMpMarker, -1);		// running: any later load that finds this is a left-over
 			NOTICE_LOG(NETWORK, "MP match: this game start is a match");
+			matchDevices();
 			return;
 		}
 		NOTICE_LOG(NETWORK, "MP: a match start that did not happen, netplay switched off");

@@ -90,6 +90,7 @@ static void getLocalInput(MapleInputState inputState[4])
 #include "hw/pvr/pvr_mem.h"
 #include "hw/aica/aica_if.h"
 #include "rend/vr_reproject.h"
+#include "network/tcvr_match.h"
 #include "hw/sh4/dyna/blockmanager.h"
 #include "hw/arm7/arm7_rec.h"
 
@@ -262,6 +263,9 @@ static bool on_event(GGPOEvent *info)
 		break;
 	case GGPO_EVENTCODE_DISCONNECTED_FROM_PEER:
 		INFO_LOG(NETWORK, "Disconnected from peer %d", info->u.disconnected.player);
+		// tcvr: in a VR match the error below is a 2D popup nobody sees: the match ends instead (the game
+		// starts again in single player, the VR menu says the match is over)
+		tcvr::match::peerLost();
 		throw FlycastException(Ts("Disconnected from peer"));
 		break;
 	case GGPO_EVENTCODE_TIMESYNC:
