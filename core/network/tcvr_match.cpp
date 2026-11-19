@@ -63,6 +63,11 @@ void clearNetplay()
 	saveInt(config::GGPOPlayer, 0);
 	saveInt(config::VrMpMarker, 0);
 }
+// A match that ends while its game runs: netplay is switched off only once the game is unloaded
+// (reloadNow). Emulator::stop() ends the GGPO session only while GGPOEnable is on; switched off
+// first, GGPO went on restarting the SH4 for its frames and the reset that follows failed
+// ("Verify Failed: !ctx->CpuRunning", the host closed when it left a match).
+std::atomic<bool> clearPending;
 
 // The game is loaded again inside the running app (task X2: the app no longer restarts itself, which on
 // some headsets came back behind the Quest's own screens). The render thread does it (reloadNow), between
@@ -240,7 +245,10 @@ static std::string endMatch(const std::string& why)
 		std::lock_guard<std::mutex> lock(mutex);
 		begun = false;
 	}
-	clearNetplay();
+	if (emu.running())
+		clearPending = true;
+	else
+		clearNetplay();
 	endLine = why;
 	saveBool(config::VrMpReturn, true);
 	if (lobbyStarted())
@@ -311,12 +319,24 @@ std::string leaveMatch()
 
 bool reloadNow()
 {
-	return reloadWanted.exchange((int)Reload::None) != (int)Reload::None;
+	if (reloadWanted.exchange((int)Reload::None) == (int)Reload::None)
+		return false;
+	if (clearPending.exchange(false))
+	{
+		// the match's game stops with netplay still on (its GGPO session ends with it), then netplay off
+		// (unloadGame reads emu.cfg again: still the match's options until clearNetplay)
+		emu.unloadGame();
+		clearNetplay();
+	}
+	return true;
 }
 
 bool gameStopped(const std::string& message)
 {
-	const bool match = active || reloading == (int)Reload::IntoMatch || config::GGPOEnable;
+	const bool match = active || reloading == (int)Reload::IntoMatch || (config::GGPOEnable && !clearPending);
+	// (a match already over whose game stopped: netplay off now)
+	if (clearPending.exchange(false))
+		clearNetplay();
 	if (!match)
 	{
 		// already on the way back (a player left: poll() came first): the caller just loads the game

@@ -47,7 +47,7 @@ bool mainui_rend_frame()
 
 	// tcvr: a multiplayer match starts or ends: the game is loaded again in the running app
 	if (tcvr::match::reloadNow())
-		gui_start_game(settings.content.path);
+		gui_start_game(gui_last_game_path());
 	if (tcvr::match::startTimedOut())
 		gui_cancel_network();
 

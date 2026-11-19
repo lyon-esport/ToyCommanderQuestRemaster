@@ -48,7 +48,7 @@ param(
 	[ValidateRange(0, 2)][int]$Mode = 0,	# the match settings the host creates the game with (MP HOST): 0 Deathmatch, 1 Cat and Mice, 2 Capture the Flag
 	[ValidateRange(0, 7)][int]$Room = 3,	# arena 0..7
 	[int]$Points = 15,
-	[ValidateRange(1, 5)][int]$Matches = 1,	# matches in a row from the same lobby
+	[Alias('Matches')][ValidateRange(1, 5)][int]$MatchCount = 1,	# matches in a row from the same lobby
 	[string]$BuildDir = '',
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
@@ -165,7 +165,7 @@ try {
 	Say ("lobby test {0}: {1} copies, match {2} s, network delay {3} ms, loss {4}%" -f $Name, $Players, $Seconds, $NetDelay, $Loss)
 
 	# ---- 1. start the copies (single player), wait for each one's command listener
-	foreach ($peer in $peers) { Start-Copy $peer $false; Start-Sleep -Seconds 1 }
+	foreach ($peer in $peers) { Start-Copy $peer $true; Start-Sleep -Seconds 1 }
 	foreach ($peer in $peers) {
 		$r = Wait-Mp $peer 'STATE' { param($x) $x -like 'MPR idle*' } 120
 		Check ($r -like 'MPR idle*') "$($peer.Name) is running and answers the MP commands ($r)"
@@ -196,14 +196,16 @@ try {
 	$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like 'MPR lobby*ready=1111*' -or ($Players -eq 3 -and $x -like 'MPR lobby*ready=111-*') -or ($Players -eq 2 -and $x -like 'MPR lobby*ready=11--*') } 10
 	Check ($r -like '*ready=11*') "the ready marks reach the host: $r"
 
-	for ($matchNo = 1; $matchNo -le $Matches; $matchNo++) {
-	Say "---- match $matchNo of $Matches"
+	for ($matchNo = 1; $matchNo -le $matchCount; $matchNo++) {
+	Say "---- match $matchNo of $matchCount"
 	if ($matchNo -gt 1) {
 		# back in the lobby after the last match: ready again
 		for ($i = 1; $i -lt $Players; $i++) { [void](Send-Mp $peers[$i] 'READY 1') }
 		$r = Wait-Mp $peers[0] 'STATE' { param($x) $x -like 'MPR lobby*ready=1111*' -or ($Players -eq 3 -and $x -like 'MPR lobby*ready=111-*') -or ($Players -eq 2 -and $x -like 'MPR lobby*ready=11--*') } 10
 		Check ($r -like '*ready=11*') "match ${matchNo}: the ready marks reach the host again: $r"
 	}
+	# (the sync log of each copy: written from the netplay session's start, its file opened again at each match;
+	# the copies are started with HOTD2VR_SYNCLOG set, as they are not started again for a match)
 	foreach ($peer in $peers) { Remove-Item (Join-Path $peer.Dir 'sync.txt') -ErrorAction SilentlyContinue }
 	$logBefore = @{}
 	foreach ($peer in $peers) { $logBefore[$peer.Name] = ([regex]::Matches((Log-Text $peer), 'MP RESTART')).Count }

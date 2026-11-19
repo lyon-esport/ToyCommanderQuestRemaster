@@ -48,6 +48,7 @@ void gui_set_mouse_wheel(float delta);
 void gui_set_insets(int left, int right, int top, int bottom);
 void gui_stop_game(const std::string& message = "");
 void gui_start_game(const std::string& path);
+const std::string& gui_last_game_path();	// tcvr: the last game started (empty: none)
 void gui_error(const std::string& what);
 void gui_setOnScreenKeyboardCallback(void (*callback)(bool show));
 void gui_loadState(bool inRam = false);
