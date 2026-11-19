@@ -671,6 +671,8 @@ const Timed bootRoute[] = {
 	{ 29 * Fps + 30, DC_DPAD_RIGHT }, { 31 * Fps, DC_BTN_A }, { 38 * Fps, DC_DPAD_DOWN }, { 40 * Fps, DC_BTN_A },
 };
 
+constexpr int FastUntilFrame = 40 * Fps;	// the boot route's last press (bootRoute)
+
 enum class Step { Off, Boot, WaitSetup, WaitGuests, Ready, WaitOptions, Options, Confirm, WaitStart,
 	GuestWait, GuestJoin, GuestReady, Done, Failed };
 
@@ -828,10 +830,18 @@ uint32_t setupButtons()
 	}
 	// Behind the panel the setup runs as fast as the headsets go (no sound, no waiting on the audio): the
 	// emulated game is the same at any speed, and the netplay holds a copy that runs ahead of the others.
-	if (settings.input.fastForwardMode != setupShowing)
+	// Only through the start screens (the boot route, the same frames on every copy), so that every copy
+	// switches at the same frame: copies that left it at different frames (each when it saw its arena)
+	// ended with different leftovers on the game's stack.
+	// TCVR_MP_FAST: 0 never (tests), 2 until the arena (as first tried).
+	static const int fastMode = [] { const char *e = std::getenv("TCVR_MP_FAST"); return e != nullptr ? std::atoi(e) : 1; }();
+	const bool fast = fastMode == 0 ? false
+			: fastMode == 2 ? (bool)setupShowing
+			: setupShowing && s.frame <= FastUntilFrame;
+	if (settings.input.fastForwardMode != fast)
 	{
-		settings.input.fastForwardMode = setupShowing;
-		NOTICE_LOG(NETWORK, "MP SETUP: fast %s (frame %d)", setupShowing ? "on" : "off", s.frame);
+		settings.input.fastForwardMode = fast;
+		NOTICE_LOG(NETWORK, "MP SETUP: fast %s (frame %d)", fast ? "on" : "off", s.frame);
 	}
 	if (s.holdLeft > 0)
 	{
