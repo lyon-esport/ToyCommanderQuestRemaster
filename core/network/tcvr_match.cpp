@@ -15,6 +15,7 @@
 #include "hw/sh4/sh4_mem.h"
 #include "input/gamepad.h"
 #include "network/ggpo.h"
+#include "network/tcvr_inet.h"
 #include "version.h"
 
 #include <algorithm>
@@ -38,6 +39,11 @@ namespace
 
 std::mutex mutex;
 std::unique_ptr<lobby::Lobby> theOne;
+std::shared_ptr<inet::InternetClient> theClient;	// internet play (made on first use)
+bool routedNow;										// the lobby runs through theClient
+// a server key met for the first time (the client's thread): saved by poll()
+std::mutex pinMutex;
+std::string pinPending;
 bool begun;			// START handled: the game is being started again
 bool active;		// this run of the game is a match
 std::string cachedSaveName;
@@ -115,8 +121,33 @@ void startMatch(const lobby::View& v)
 	}
 	endLine.clear();
 	const lobby::StartInfo& info = v.start;
-	const std::string hostAddress = v.role == lobby::Role::Host ? "127.0.0.1" : v.hostAddress;
-	const std::string peers = info.peerList(hostAddress);
+	std::string peers;
+	if (internetMode())
+	{
+		// every other player behind a local port of the internet client (direct or through the server)
+		std::shared_ptr<inet::InternetClient> client;
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			client = theClient;
+		}
+		const std::string hostAddress = v.role == lobby::Role::Host ? (client ? client->localAddress() : "") : v.hostAddress;
+		if (client)
+			peers = client->ggpoPeers(info, hostAddress, identity().ggpoPort);
+		if (peers.empty())
+		{
+			WARN_LOG(NETWORK, "MP START: a player is not reachable through the server any more");
+			endLine = "A player could not be reached";
+			theLobby().matchOver();
+			std::lock_guard<std::mutex> lock(mutex);
+			begun = false;
+			return;
+		}
+	}
+	else
+	{
+		const std::string hostAddress = v.role == lobby::Role::Host ? "127.0.0.1" : v.hostAddress;
+		peers = info.peerList(hostAddress);
+	}
 	NOTICE_LOG(NETWORK, "MP START as player %d of %d, delay %d", info.localIndex + 1, (int)info.peers.size(), info.inputDelay);
 	config::GGPOPeers.set(peers);
 	config::GGPOPeers.save();
@@ -148,15 +179,111 @@ void startMatch(const lobby::View& v)
 
 lobby::Lobby& theLobby()
 {
-	std::lock_guard<std::mutex> lock(mutex);
-	if (!theOne)
+	bool made = false;
 	{
-		theOne = std::make_unique<lobby::Lobby>();
-		theOne->setBroadcastHook([](bool on) { enableNetworkBroadcast(on); });
-		if (const char *port = std::getenv("TCVR_MP_DISCOVERY_PORT"))	// tests: two tests on one PC at once
-			theOne->setDiscoveryPort((uint16_t)std::atoi(port));
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!theOne)
+		{
+			theOne = std::make_unique<lobby::Lobby>();
+			theOne->setBroadcastHook([](bool on) { enableNetworkBroadcast(on); });
+			if (const char *port = std::getenv("TCVR_MP_DISCOVERY_PORT"))	// tests: two tests on one PC at once
+				theOne->setDiscoveryPort((uint16_t)std::atoi(port));
+			made = true;
+		}
 	}
+	if (made)
+		applyNetworkMode();
 	return *theOne;
+}
+
+bool internetMode()
+{
+	return config::VrMpInternet;
+}
+
+void applyNetworkMode()
+{
+	std::shared_ptr<inet::InternetClient> client;
+	lobby::Lobby *l;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!theOne)
+			return;		// the lobby applies it when it is made
+		l = theOne.get();
+		if (config::VrMpInternet && !theClient)
+		{
+			theClient = std::make_shared<inet::InternetClient>();
+			theClient->onNewServerKey([](const std::string& server, const std::string& key) {
+				std::lock_guard<std::mutex> lock(pinMutex);
+				pinPending = server + "|" + key;
+			});
+		}
+		client = theClient;
+	}
+	if (config::VrMpInternet)
+	{
+		inet::ClientConfig cfg;
+		cfg.server = config::VrMpServer.get();
+		cfg.name = playerName();
+		cfg.appVersion = GIT_VERSION;
+		// the key pinned for this server name (another name: met anew)
+		const std::string pin = config::VrMpServerKey.get();
+		const size_t bar = pin.rfind('|');
+		if (bar != std::string::npos && pin.substr(0, bar) == cfg.server)
+			cfg.pinnedKey = pin.substr(bar + 1);
+		if (const char *port = std::getenv("TCVR_INET_UDP_PORT"))	// tests: a fixed UDP port
+			cfg.udpPort = (uint16_t)std::atoi(port);
+		client->configure(cfg);
+		if (!routedNow)
+		{
+			l->setRouter(client);
+			routedNow = true;
+		}
+	}
+	else
+	{
+		if (routedNow)
+		{
+			l->setRouter(nullptr);
+			routedNow = false;
+		}
+		if (client)
+			client->stop();
+	}
+}
+
+std::string internetLine()
+{
+	if (!config::VrMpInternet)
+		return std::string();
+	std::shared_ptr<inet::InternetClient> client;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		client = theClient;
+	}
+	if (config::VrMpServer.get().empty())
+		return "Enter the server's address first";
+	if (!client)
+		return "Not connected";
+	std::string line;
+	client->status(&line);
+	return line.empty() ? "Not connected" : line;
+}
+
+std::vector<std::string> internetPaths()
+{
+	std::vector<std::string> list;
+	std::shared_ptr<inet::InternetClient> client;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		client = theClient;
+	}
+	if (!client || !config::VrMpInternet)
+		return list;
+	for (const inet::PeerPath& p : client->paths())
+		list.push_back(p.name + (p.direct ? "  direct" : "  via the server")
+				+ (p.rttMs >= 0 ? "  " + std::to_string(p.rttMs) + " ms" : std::string()));
+	return list;
 }
 
 bool lobbyStarted()
@@ -384,12 +511,32 @@ static std::string endMatch(const std::string& why)
 	config::VrMpEndText.save();
 	saveBool(config::VrMpReturn, true);
 	if (lobbyStarted())
+	{
+		if (internetMode())
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			if (theClient)
+				theClient->matchOver();
+		}
 		theLobby().matchOver(wasAway);
+	}
 	return why;
 }
 
 void poll()
 {
+	{
+		std::string pin;
+		{
+			std::lock_guard<std::mutex> lock(pinMutex);
+			pin.swap(pinPending);
+		}
+		if (!pin.empty())
+		{
+			config::VrMpServerKey.set(pin);
+			config::VrMpServerKey.save();
+		}
+	}
 	if (active)
 		noteOwnLoop();
 	if (lostPeer.exchange(false) && active)

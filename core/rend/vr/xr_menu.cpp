@@ -159,7 +159,7 @@ const std::vector<Choice>& choices()
 enum class Action { Resume, Recenter, OpenSection, Back, Choice, WorldSize, Export, Import, UnlockAll, Quit,
 	// Multiplayer
 	MpCreate, MpJoin, MpName, MpMode, MpRoom, MpPoints, MpStartHosting, MpGame, MpRefresh, MpAddress,
-	MpReady, MpStartMatch, MpLeave, LeaveMatch, Info };
+	MpReady, MpStartMatch, MpLeave, LeaveMatch, Info, MpNetwork, MpServer };
 struct Entry
 {
 	Action action;
@@ -207,6 +207,13 @@ std::vector<Entry> mpEntries()
 	{
 	case MpPage::Top:
 		list.push_back({ Action::Back });
+		// tcvr: internet play goes through a server the players chose (tcvr_inet.h)
+		list.push_back({ Action::MpNetwork });
+		if (match::internetMode())
+		{
+			list.push_back({ Action::MpServer });
+			list.push_back(infoLine(match::internetLine()));
+		}
 		list.push_back({ Action::MpCreate });
 		list.push_back({ Action::MpJoin });
 		list.push_back({ Action::MpName });
@@ -228,6 +235,14 @@ std::vector<Entry> mpEntries()
 			e.id = g.hostId;
 			e.text = gameLine(g);
 			list.push_back(e);
+		}
+		if (match::internetMode())
+		{
+			if (games.empty())
+				list.push_back(infoLine("No game on the server yet"));
+			list.push_back({ Action::MpRefresh });
+			list.push_back(infoLine(match::internetLine()));
+			break;
 		}
 		if (games.empty())
 			list.push_back(infoLine("No game found yet. Is the host on the same Wi-Fi?"));
@@ -267,9 +282,13 @@ std::vector<Entry> mpEntries()
 			}
 			if (!v.message.empty())
 				list.push_back(infoLine(v.message));		// (a host handover)
+			// internet play: how the match's packets reach each player
+			for (const std::string& path : match::internetPaths())
+				list.push_back(infoLine("Link to " + path));
 			if (v.role == lobby::Role::Host)
 			{
-				list.push_back(infoLine("To join by hand: address " + v.hostAddress));
+				if (!match::internetMode())
+					list.push_back(infoLine("To join by hand: address " + v.hostAddress));
 				list.push_back({ Action::MpStartMatch });
 			}
 			else
@@ -579,6 +598,14 @@ void beginEdit(Action a)
 		edit.maxLen = 3;
 		edit.cursor = 0;
 	}
+	else if (a == Action::MpServer)
+	{
+		// an IP address or a DNS name, ":port" if not the default
+		edit.text = config::VrMpServer.get();
+		edit.charset = "abcdefghijklmnopqrstuvwxyz0123456789.-: ";
+		edit.maxLen = 40;
+		edit.cursor = (int)std::min(edit.text.size(), edit.maxLen - 1);
+	}
 	else
 	{
 		edit.text = mpAddress;
@@ -640,6 +667,17 @@ void commitEdit()
 			return;
 		tcvr::match::setPlayerName(t);
 		setStatus("Player name: " + tcvr::match::playerName());
+	}
+	else if (edit.action == (int)Action::MpServer)
+	{
+		// entering the address (again) trusts the key the server shows next time: that's how a player
+		// accepts a server whose key changed
+		config::VrMpServer.set(t);
+		config::VrMpServer.save();
+		config::VrMpServerKey.set(std::string());
+		config::VrMpServerKey.save();
+		tcvr::match::applyNetworkMode();
+		setStatus(t.empty() ? "No server" : "Server: " + t);
 	}
 	else
 	{
@@ -713,8 +751,22 @@ MenuAction accept(const Entry& e)
 		return MenuAction::None;
 	case Action::MpName:
 	case Action::MpAddress:
+	case Action::MpServer:
 		beginEdit(e.action);
 		return MenuAction::None;
+	case Action::MpNetwork:
+	{
+		if (lobbyActive())
+		{
+			setStatus("Leave the game first");
+			return MenuAction::None;
+		}
+		config::VrMpInternet.set(!config::VrMpInternet);
+		config::VrMpInternet.save();
+		match::applyNetworkMode();
+		setStatus(config::VrMpInternet ? "Internet play: through the server below" : "Local network play");
+		return MenuAction::None;
+	}
 	case Action::MpMode:
 	case Action::MpRoom:
 	case Action::MpPoints:
@@ -833,6 +885,11 @@ std::string lineText(const Entry& e)
 	}
 	case Action::MpLeave: return "Leave game";
 	case Action::Info: return e.text;
+	case Action::MpNetwork: return config::VrMpInternet ? "Play over:  Internet" : "Play over:  Local network (Wi-Fi)";
+	case Action::MpServer:
+		if (edit.active && edit.action == (int)Action::MpServer)
+			return "Server:  " + editDisplay();
+		return "Server:  " + (config::VrMpServer.get().empty() ? std::string("enter its address") : config::VrMpServer.get());
 	}
 	return "";
 }

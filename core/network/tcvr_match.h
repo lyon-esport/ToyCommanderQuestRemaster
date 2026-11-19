@@ -33,6 +33,14 @@ extern std::string (*restartHook)();
 extern std::string (*saveNameHook)();
 
 lobby::Lobby& theLobby();
+// Internet play: the lobby runs through the server in vr.MpServer when vr.MpInternet is on, else on the LAN.
+// Call after either option changed (and before the Multiplayer pages use the lobby; theLobby() does it once).
+void applyNetworkMode();
+bool internetMode();
+// The internet server's state for the menu ("" on the LAN): "Online: host   key ab12-...", "Can't reach ...".
+std::string internetLine();
+// The match's paths to the other players (internet play): "BBB direct 45 ms", "CCC via server 80 ms".
+std::vector<std::string> internetPaths();
 // True once the lobby has been made (it is made on first use: the Multiplayer pages).
 bool lobbyStarted();
 lobby::Identity identity();

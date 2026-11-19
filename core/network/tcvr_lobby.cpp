@@ -693,6 +693,7 @@ struct Lobby::Impl
 
 	// the io thread only
 	std::function<void(bool)> broadcastHook;
+	std::shared_ptr<Router> router;		// internet play (else the LAN)
 	std::vector<std::string> extraTargets;
 	uint16_t discoveryPort = DiscoveryPort;
 	std::unique_ptr<udp::socket> disc;
@@ -769,11 +770,22 @@ struct Lobby::Impl
 		f(v);
 	}
 
+	// internet play: the lobby listens on loopback only (the router brings the other players' connections)
+	asio::ip::address_v4 listenAddr() const
+	{
+		return router ? asio::ip::address_v4::loopback() : listenAddress();
+	}
+
+	std::string ownAddress()
+	{
+		return router ? router->localAddress() : localAddress();
+	}
+
 	// ---- discovery
 
 	void openDiscovery()
 	{
-		if (disc)
+		if (disc || router)
 			return;
 		try {
 			auto s = std::make_unique<udp::socket>(io);
@@ -820,6 +832,13 @@ struct Lobby::Impl
 
 	void updateDiscovery()
 	{
+		if (router)
+		{
+			router->search(searching);
+			if (!hosting || started)
+				router->announce(nullptr);
+			return;
+		}
 		if (searching || hosting)
 			openDiscovery();
 		else
@@ -892,6 +911,12 @@ struct Lobby::Impl
 
 	void sendBeacon()
 	{
+		if (router)
+		{
+			const Beacon b = makeBeacon();
+			router->announce(&b);
+			return;
+		}
 		if (!disc)
 			return;
 		auto data = std::make_shared<std::vector<uint8_t>>(encode(makeBeacon()));
@@ -1140,7 +1165,7 @@ struct Lobby::Impl
 			}
 		}
 		lastPing = Clock::now();
-		const std::string addr = localAddress();
+		const std::string addr = ownAddress();
 		const uint16_t port = acceptor->local_endpoint().port();
 		const std::string oldName = last.players[last.hostSlot].name;
 		publishState();		// (the view's state first: the menu never shows the old list under the new role)
@@ -1158,12 +1183,25 @@ struct Lobby::Impl
 		startTick();
 	}
 
-	void connect(const asio::ip::address_v4& addr, uint16_t port)
+	void connect(asio::ip::address_v4 addr, uint16_t port)
 	{
 		auto c = std::make_shared<Conn>(io);
 		hostConn = c;
 		connectStart = Clock::now();
 		lastPing = Clock::now();
+		if (router)
+		{
+			// through the router's local port for that player
+			const uint16_t local = router->route(addr.to_string(), port);
+			addr = asio::ip::address_v4::loopback();
+			port = local;
+			if (local == 0)
+			{
+				asio::post(io, [this, c] { onDisconnect(c); });
+				startTick();
+				return;
+			}
+		}
 		c->sock.async_connect(tcp::endpoint(addr, port), [this, c](const asio::error_code& ec) {
 			if (c->closed)
 				return;
@@ -1407,7 +1445,8 @@ struct Lobby::Impl
 			if (!ec)
 			{
 				asio::error_code e2;
-				c->address = c->sock.remote_endpoint(e2).address().to_string();
+				const auto remote = c->sock.remote_endpoint(e2);
+				c->address = router ? router->peerOf(remote.port()) : remote.address().to_string();
 				c->sock.set_option(tcp::no_delay(true), e2);
 				c->lastRx = Clock::now();
 				conns.push_back(c);
@@ -1515,9 +1554,13 @@ struct Lobby::Impl
 			if (*a)
 			{
 				asio::error_code ec;
+				if (router)
+					router->listening((*a)->local_endpoint(ec).port(), false);
 				(*a)->close(ec);
 				a->reset();
 			}
+		if (router && !keepView)
+			router->idle();
 		hosting = false;
 		started = false;
 		hostSlot = 0;
@@ -1578,6 +1621,31 @@ void Lobby::setBroadcastHook(std::function<void(bool)> hook)
 	impl->run([&] { impl->broadcastHook = std::move(hook); });
 }
 
+void Lobby::setRouter(std::shared_ptr<Router> router)
+{
+	impl->run([&] {
+		if (impl->router == router)
+			return;
+		const bool searching = impl->searching;
+		impl->reset(false);
+		impl->searching = false;
+		impl->updateDiscovery();		// (the old way's search off)
+		impl->closeDiscovery();
+		{
+			std::lock_guard<std::mutex> lock(impl->mutex);
+			impl->found.clear();
+		}
+		impl->router = std::move(router);
+		impl->searching = searching;
+		impl->updateDiscovery();
+	});
+}
+
+bool Lobby::routed()
+{
+	return impl->run([&] { return impl->router != nullptr; });
+}
+
 void Lobby::addBeaconTarget(const std::string& address)
 {
 	impl->run([&] { impl->extraTargets.push_back(address); });
@@ -1597,6 +1665,8 @@ void Lobby::startSearch()
 		}
 		impl->searching = true;
 		impl->openDiscovery();
+		if (impl->router)
+			impl->router->search(true);
 	});
 }
 
@@ -1610,6 +1680,14 @@ void Lobby::stopSearch()
 
 std::vector<FoundGame> Lobby::games()
 {
+	if (std::shared_ptr<Router> r = impl->run([&] { return impl->router; }))
+	{
+		std::vector<FoundGame> list = r->games();
+		const uint32_t mine = impl->run([&] { return impl->hosting ? impl->hostId : 0; });
+		list.erase(std::remove_if(list.begin(), list.end(), [&](const FoundGame& g) { return mine != 0 && g.hostId == mine; }),
+				list.end());
+		return list;
+	}
 	std::lock_guard<std::mutex> lock(impl->mutex);
 	const auto now = Clock::now();
 	std::vector<std::pair<Clock::time_point, FoundGame>> list;
@@ -1633,7 +1711,7 @@ std::vector<FoundGame> Lobby::games()
 void Lobby::query(const std::string& address)
 {
 	impl->run([&] {
-		if (!impl->disc)
+		if (!impl->disc || impl->router)
 			return;
 		asio::error_code ec;
 		const auto addr = asio::ip::make_address_v4(address, ec);
@@ -1649,17 +1727,21 @@ bool Lobby::host(const Identity& me, const Settings& settings, std::string& erro
 {
 	return impl->run([&] {
 		impl->reset(false);
+		if (impl->router && !impl->router->ready(error))
+			return false;
 		try {
 			auto acc = std::make_unique<tcp::acceptor>(impl->io);
 			acc->open(tcp::v4());
 			acc->set_option(asio::socket_base::reuse_address(true));
-			acc->bind(tcp::endpoint(listenAddress(), 0));
+			acc->bind(tcp::endpoint(impl->listenAddr(), 0));
 			acc->listen();
 			impl->acceptor = std::move(acc);
 		} catch (const std::exception& e) {
 			error = "Can't open the game on this network";
 			return false;
 		}
+		if (impl->router)
+			impl->router->listening(impl->acceptor->local_endpoint().port(), true);
 		impl->me = me;
 		impl->me.name = cleanName(me.name);
 		impl->settings = settings;
@@ -1672,7 +1754,7 @@ bool Lobby::host(const Identity& me, const Settings& settings, std::string& erro
 		impl->slotNames = {};
 		impl->slotReady = {};
 		impl->lastPing = Clock::now();
-		const std::string addr = localAddress();
+		const std::string addr = impl->ownAddress();
 		const State s = impl->currentState();
 		const uint16_t port = impl->acceptor->local_endpoint().port();
 		impl->withView([&](View& view) {
@@ -1685,7 +1767,7 @@ bool Lobby::host(const Identity& me, const Settings& settings, std::string& erro
 			view.lobbyPort = port;
 		});
 		impl->updateDiscovery();
-		if (!impl->disc)
+		if (!impl->disc && !impl->router)
 		{
 			// no beacon, so nobody finds this game; still hostable by address? No: the query needs it too
 			impl->reset(false);
@@ -1733,6 +1815,8 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 		for (int i : order)
 			base.peers.push_back({ i == hostSlot ? std::string() : s.players[i].address, s.players[i].ggpoPort });
 		impl->started = true;
+		if (impl->router)
+			impl->router->announce(nullptr);
 		for (size_t k = 0; k < order.size(); k++)
 		{
 			StartInfo mine = base;
@@ -1851,9 +1935,11 @@ void Lobby::join(const Identity& me, const std::string& address, uint16_t lobbyP
 			auto acc = std::make_unique<tcp::acceptor>(impl->io);
 			acc->open(tcp::v4());
 			acc->set_option(asio::socket_base::reuse_address(true));
-			acc->bind(tcp::endpoint(listenAddress(), 0));
+			acc->bind(tcp::endpoint(impl->listenAddr(), 0));
 			acc->listen();
 			impl->standby = std::move(acc);
+			if (impl->router)
+				impl->router->listening(impl->standby->local_endpoint().port(), true);
 		} catch (const std::exception&) {
 			impl->standby.reset();		// no handover to this player; joining still works
 		}

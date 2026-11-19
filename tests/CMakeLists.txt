@@ -18,6 +18,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/MmuTest.cpp
         src/HttpTest.cpp
         src/TcvrLobbyTest.cpp
+        src/TcvrInetTest.cpp
         src/IniFileTest.cpp
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp

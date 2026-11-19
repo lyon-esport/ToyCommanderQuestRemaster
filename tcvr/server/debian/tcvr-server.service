@@ -1,0 +1,26 @@
+# systemd unit for tcvr-server (installed by install.sh). Logs: journalctl -u tcvr-server -f
+[Unit]
+Description=tcvr-server, internet meeting point for Toy Commander VR multiplayer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tcvr
+Group=tcvr
+WorkingDirectory=/var/lib/tcvr-server
+EnvironmentFile=-/etc/default/tcvr-server
+ExecStart=/usr/local/bin/tcvr-server --port ${TCVR_PORT} --key /var/lib/tcvr-server/tcvr-server.key $TCVR_ARGS
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/tcvr-server
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

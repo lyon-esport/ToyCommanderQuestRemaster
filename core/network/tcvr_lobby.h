@@ -259,6 +259,34 @@ std::string pickLanAddress(const std::vector<NetInterface>& interfaces);
 // This computer's interfaces (Windows: GetAdaptersAddresses; elsewhere getifaddrs plus the default route).
 std::vector<NetInterface> listInterfaces();
 
+// ---- internet play ---------------------------------------------------------------------------
+// With a router (tcvr_inet.h) the lobby runs over the internet server: the players' addresses are their
+// numbers on the server (written 10.x.y.z), the lobby listens on 127.0.0.1 only and every connection goes
+// through a local port of the router, which carries it (encrypted) to the other player. The games list
+// comes from the server instead of beacons. Everything else (slots, ready, START, the host handover) is
+// the same code as on a LAN.
+class Router
+{
+public:
+	virtual ~Router() = default;
+	// Online with the server. False and a line for the menu otherwise.
+	virtual bool ready(std::string& why) = 0;
+	// This copy's address in the game ("" when offline).
+	virtual std::string localAddress() = 0;
+	// The lobby wants a connection to (address, port): the port on 127.0.0.1 to connect to instead, or 0.
+	virtual uint16_t route(const std::string& address, uint16_t port) = 0;
+	// The lobby accepted a connection from 127.0.0.1:localPort: the address of the player behind it ("" unknown).
+	virtual std::string peerOf(uint16_t localPort) = 0;
+	// The lobby listens on this port (or no longer): other players' connections may be brought to it.
+	virtual void listening(uint16_t port, bool on) = 0;
+	// Host: list the game (or update it); nullptr: take it off the list.
+	virtual void announce(const Beacon *beacon) = 0;
+	virtual void search(bool on) = 0;
+	virtual std::vector<FoundGame> games() = 0;
+	// The lobby is back to Idle: this copy is in no game any more.
+	virtual void idle() = 0;
+};
+
 class Lobby
 {
 public:
@@ -274,6 +302,11 @@ public:
 	void addBeaconTarget(const std::string& address);
 	// Where beacons and queries go on this computer's port (tests: several copies, one port).
 	void setDiscoveryPort(uint16_t port);
+
+	// Internet play: the router to run through; nullptr: the LAN (beacons, direct connections).
+	// Only while the lobby is Idle (it calls leave() first otherwise).
+	void setRouter(std::shared_ptr<Router> router);
+	bool routed();
 
 	// -- Join page
 	void startSearch();
