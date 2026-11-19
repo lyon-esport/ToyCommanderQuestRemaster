@@ -246,7 +246,12 @@ bool ownViewKeep(rend_context& ctx)
 		views[i] = readView(i);
 	const int clipPlayer = byClip(rectOf(ctx.tileClip), views, count);
 	const int fbPlayer = clipPlayer < 0 ? byClip(rectOf(ctx.fbClip), views, count) : -1;
-	const int vertPlayer = clipPlayer < 0 && fbPlayer < 0 ? byVertices(ctx, views, count) : -1;
+	// A picture the game clips to the whole screen is a page for everybody (the results page: both
+	// players' boxes in its top half once won the vertex vote for player 1, and the other headset
+	// kept its last battle picture): shown as it is. The battle's pictures are clipped to their part.
+	const bool wholeScreen = ctx.fbClip.origin.x <= 0 && ctx.fbClip.origin.y <= 0
+			&& ctx.fbClip.size.x >= 600 && ctx.fbClip.size.y >= 440;
+	const int vertPlayer = clipPlayer < 0 && fbPlayer < 0 && !wholeScreen ? byVertices(ctx, views, count) : -1;
 	noteMatch(ctx, count, views, clipPlayer, fbPlayer, vertPlayer);
 	const int player = clipPlayer >= 0 ? clipPlayer : fbPlayer >= 0 ? fbPlayer : vertPlayer;
 
