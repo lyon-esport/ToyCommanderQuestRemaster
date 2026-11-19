@@ -49,6 +49,8 @@ param(
 	[string]$WorkDir = '',
 	[string]$OutDir = '',
 	[string]$Name = '',
+	[string]$Extra = '',		# more -config entries for every copy, e.g. 'config:vr.MpLocalPlayer=2' (own view in split screen)
+	[string]$LocalDir = 'local',	# -Local: the copy's folder name under -WorkDir (a folder the firewall already allows)
 	[int]$PortOffset = 0	# added to the pad listener ports (27041+) and, with the player list, the GGPO ports (19713+): two tests on one PC at once (use -List for 2 copies)
 )
 $ErrorActionPreference = 'Stop'
@@ -233,7 +235,7 @@ function Pad-Message([int]$p, [double]$t) {
 # Copy p<n> is player n; its pad listener (vr.UdpPort) is 27040 + n. Netplay ports (GGPO):
 # classic two players 19713 (host) / 19712 (guest); with the player list 19713 + n - 1.
 $peers = if ($Local) {
-	@([pscustomobject]@{ Name = 'local'; Port = 27041 + $PortOffset; Net = 'network:GGPO=no' })
+	@([pscustomobject]@{ Name = $LocalDir; Port = 27041 + $PortOffset; Net = 'network:GGPO=no' })
 } elseif ($Players -eq 2 -and -not $List) {
 	@(
 		[pscustomobject]@{ Name = 'p1'; Port = 27041 + $PortOffset; Net = 'network:GGPO=yes,network:ActAsServer=yes' },
@@ -269,7 +271,7 @@ if ($Pages) { $env:HOTD2VR_SYNCPAGES = '1' }
 foreach ($peer in $peers) {
 	if (-not $Local) { $env:HOTD2VR_SYNCLOG = Join-Path $peer.Dir 'sync.txt' }
 	if ($StallGuest -and $peer -eq $peers[-1]) { $env:HOTD2VR_STALLRENDER = $StallGuest } else { Remove-Item Env:HOTD2VR_STALLRENDER -ErrorAction SilentlyContinue }
-	$cfg = "$base,config:vr.UdpPort=$($peer.Port),$($peer.Net)"
+	$cfg = "$base,config:vr.UdpPort=$($peer.Port),$($peer.Net)" + $(if ($Extra) { ",$Extra" } else { '' })
 	$peer | Add-Member Proc (Start-Process -FilePath (Join-Path $peer.Dir 'flycast.exe') `
 		-ArgumentList @('-config', $cfg, "`"$GamePath`"") -WorkingDirectory $peer.Dir -PassThru)
 	Start-Sleep -Seconds 1

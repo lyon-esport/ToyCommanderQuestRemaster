@@ -21,6 +21,7 @@
 #include "cfg/option.h"
 #include "emulator.h"
 #include "log/Log.h"
+#include "rend/transform_matrix.h"
 
 #include <algorithm>
 #include <chrono>
@@ -168,6 +169,50 @@ void noteMatch(const rend_context& ctx, int count, const View *views, int clipPl
 			ctx.fb_W_SOF1 & 0xffffff, (u32)ctx.verts.size(), clipPlayer + 1, fbPlayer + 1, vertPlayer + 1, text);
 }
 
+// The HUD of a view that is not the screen's shape (two players: a band the full width, half the
+// height). The 2D is scaled up by the smaller ratio only (x1 for a band), so its parts would stay in
+// a strip across the middle of the plane: each 2D polygon is moved instead so that its centre takes
+// the same place on the whole screen as in the band (the top of the band to the top of the screen),
+// at its own size. Only this picture's vertices are changed (the renderer's copy, after the frame
+// was made): nothing the game reads.
+void placeHudByEdge(rend_context& ctx, const glm::vec4& view)
+{
+	int width, height;
+	getPvrFramebufferSize(ctx, width, height);
+	const glm::vec2 ratio(width / view.z, height / view.w);
+	const float scale = std::min(ratio.x, ratio.y);	// as vr_reproject's update()
+	if (std::abs(ratio.x - ratio.y) < 0.1f * scale)
+		return;		// a quarter (4 players, 3): scaled up evenly already
+	const glm::vec2 centre(view.x + view.z * 0.5f, view.y + view.w * 0.5f);
+	// shown at (p - centre) * scale: a centre c goes where (c - centre) * ratio is wanted
+	const glm::vec2 move = ratio / scale - 1.f;		// (0, 1) for a band
+	const float hudW = config::VrHudW;
+	auto onPlane = [hudW](const Vertex& v) { return v.z > 0.f && std::abs(1.f / v.z - hudW) < 0.002f; };
+	for (const std::vector<PolyParam> *list : { &ctx.global_param_op, &ctx.global_param_pt, &ctx.global_param_tr })
+		for (const PolyParam& pp : *list)
+		{
+			if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
+				continue;
+			glm::vec2 lo(1e9f), hi(-1e9f);
+			bool flat = true;
+			for (u32 i = pp.first; i < pp.first + pp.count && flat; i++)
+			{
+				const Vertex& v = ctx.verts[i];
+				flat = onPlane(v) && std::isfinite(v.x) && std::isfinite(v.y);
+				lo = glm::min(lo, glm::vec2(v.x, v.y));
+				hi = glm::max(hi, glm::vec2(v.x, v.y));
+			}
+			if (!flat)
+				continue;
+			const glm::vec2 delta = ((lo + hi) * 0.5f - centre) * move;
+			for (u32 i = pp.first; i < pp.first + pp.count; i++)
+			{
+				ctx.verts[i].x += delta.x;
+				ctx.verts[i].y += delta.y;
+			}
+		}
+}
+
 }	// namespace
 
 int ownViewPlayer()
@@ -219,6 +264,7 @@ bool ownViewKeep(rend_context& ctx)
 		const View& v = views[player];
 		ctx.tcvrView = glm::vec4(v.rect);
 		ctx.tcvrViewFocal = v.focal;
+		placeHudByEdge(ctx, ctx.tcvrView);
 	}
 	stats.tick(local, count);
 	return keep;
