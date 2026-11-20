@@ -60,10 +60,7 @@ Items 1 and 2 can be switched off to compare or to rule them out of a bug: `vr.U
 
 ## Still to do (plan items)
 
-- Game pictures: missions draw 30 pictures/s because the game asks for 2 vblanks per picture
-  (menus ask for 1 and draw 60). The game's clock and physics follow real time, so drawing 60 in
-  missions looks feasible with a small patch; to test on the decompile branch (speed against a
-  stopwatch, physics feel, attract demos kept at 30).
+- Game pictures: done 2026-11-18, see "Game pictures in missions: 60/s" below (headset test pending).
 - Measured 2026-11-17 (worn): at 100% the GPU is 65–84% busy in 3D levels with 0–6 stale
   frames/s at 120 Hz; at 130% it is saturated in the heaviest views (see Defaults.md).
 
@@ -72,3 +69,42 @@ Items 1 and 2 can be switched off to compare or to rule them out of a bug: `vr.U
   measure 120 Hz without the shell sharing the GPU; then choose the shipped defaults (e.g. 90 Hz,
   AF 16x, sharper High, MSAA 2x only with foveation High) and a 30-minute thermal run.
 - Why MSAA 2x costs 2x here (a GPU capture with AGI/RenderDoc: look for a mid-pass resolve).
+
+## Game pictures in missions: 60/s (option `vr.Game60`, default on)
+
+Stock Toy Commander draws 60 pictures/s in menus and 30 in missions: a mission load and leaving
+the pause menu call Kamui's "wait vsync count" with 2, menus and pause with 1. Kamui keeps
+vblanks - 1 at 0x8C10FC80 and copies it into every picture's flip. The game's clock, physics
+(8 ms substeps), particles, fades and mission timer follow real time, so a mission keeps its
+speed with 1 vblank per picture and only gets smoother (less judder in the reprojected view).
+
+`core/hw/pvr/spg.cpp` checks that value once per vblank and turns 1 into 0 (no change to the
+game's code). The attract demos replay one recorded frame per picture, so they keep 30 (demo mode
+0x8C0A72FC = 2). VR menu > Performance > "Game pictures in missions": "30/s (original)" or "60/s";
+turning it off takes effect at the next mission or pause. Logcat line when it applies:
+`tcvr: mission at 60 pictures/s`; the existing `tcvr: video ... game frames/s` line shows the rate.
+
+The emulated SH-4 must finish a mission picture in 16.7 ms. At the stock 200 MHz it doesn't, and
+the rate settles at an uneven 37.5/s (a 60/30 mix). With the option on, `core/emulator.cpp`
+(`tcvrApplyGameRate`) raises `Sh4Clock` to 360 MHz for this game (not saved; the player's value
+comes back when the option is turned off; never online). Headset test 2026-11-18, Kitchen
+Training, 130% + MSAA 2x, head camera on:
+
+| Setting | Game pictures/s | Emulator thread (one core) | Head camera lag | Mission clock / wall |
+|---|---|---|---|---|
+| option off, 200 MHz | 30.0 | 45% | 14.4 headset frames | - |
+| on, 200 MHz | 37.5 (60/30 mix) | 49% | 5.7 | 60.06 / 60 s |
+| on, 250 MHz | 47.4 | 56% | 5.0 | - |
+| on, 300 MHz | 56-58 | 63% | 4.5 | 59.73 / 59.7 s |
+| on, 360 MHz | 59.95, also flying | 61% | 7.4 | 59.60 / 59.58 s |
+
+Some rooms are too heavy for the Quest's CPU at 360 MHz and 60 pictures/s: in the children's
+bedrooms the game ran at 51 vblanks/s, its clock at 85% of real time. So `spg.cpp` watches the
+vblanks per real second: under 57 for 2 s (not judged in the first 8 s after the game sets its
+rate, the mission's loading), the mission goes back to 30 pictures/s and the SH-4 to its own clock
+(at 360 MHz and 30 pictures/s the bedrooms still ran at ~98%; at 200 MHz exactly real time). 60 is
+tried again after the next pause or mission. Logcat: `tcvr: emulation behind real time ...`.
+Kitchen Training never falls back (80 s, pause/resume).
+
+Headset frame rate is unchanged by the option (it depends on resolution and MSAA). Still to
+watch: physics feel at smaller steps, audio and cut-scenes at 360 MHz, the other rooms.

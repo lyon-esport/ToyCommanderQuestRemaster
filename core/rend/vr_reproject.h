@@ -28,6 +28,9 @@ struct ReprojectParams
 {
 	// Maps the rebuilt eye-space position (renderer y convention) to clip space.
 	glm::mat4 viewProj { 1.f };
+	// tcvr: the same for the 2D plane (HUD): without the head-driven camera's turn, so the HUD
+	// stays toward the vehicle's forward instead of following the head (xr_headcam.cpp).
+	glm::mat4 hudViewProj { 1.f };
 	// tan of the game camera's half field of view, per axis, from its live focal length.
 	glm::vec2 tanHalf { 1.f, 0.75f };
 	// Overlay plane: tan of the half field of view at the original focal length (x, y),

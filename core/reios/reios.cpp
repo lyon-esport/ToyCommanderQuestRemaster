@@ -711,10 +711,15 @@ static const std::map<u32, hook_fp*> hooks = {
 		{ SYSCALL_ADDR(dc_bios_entrypoint_gd2), gdrom_hle_op },
 };
 
+bool (*reios_game_trap)(Sh4Context *ctx, u32 pc);
+
 void DYNACALL reios_trap(Sh4Context *ctx, u32 op)
 {
 	verify(op == REIOS_OPCODE);
 	u32 pc = ctx->pc - 2;
+	// tcvr: a game code hook (the head-driven camera)
+	if (reios_game_trap != nullptr && reios_game_trap(ctx, pc))
+		return;
 
 	u32 mapd = SYSCALL_ADDR(pc);
 

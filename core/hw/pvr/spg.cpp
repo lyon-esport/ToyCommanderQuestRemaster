@@ -12,6 +12,12 @@
 #ifdef TEST_AUTOMATION
 #include "input/gamepad_device.h"
 #endif
+#ifdef USE_OPENXR
+#include "hw/sh4/sh4_mem.h"
+#include "cfg/option.h"
+#include "emulator.h"
+#include "log/Log.h"
+#endif
 
 //SPG emulation; Scanline/Raster beam registers & interrupts
 
@@ -36,6 +42,92 @@ static std::array<u64, 4> cpu_cycles;
 static u32 cpu_time_idx;
 bool SH4FastEnough;
 u32 fskip;
+
+#ifdef USE_OPENXR
+// tcvr: Toy Commander at 60 pictures/s in missions (option vr.Game60).
+// The game paces its pictures with Kamui's "wait vsync count": a mission load and leaving the
+// pause menu set 2 vblanks per picture (30/s), menus and pause set 1 (60/s). Kamui keeps
+// vblanks - 1 at 0x8C10FC80 (the flip delay its scene end copies into each picture); nothing
+// else in the game writes it. The game's clock, physics, particles, fades and mission timer
+// follow real time, not pictures, so a mission runs at the same speed with 1 vblank per
+// picture, only smoother. Exception: the attract demos replay one recorded frame per picture,
+// so they keep 2 (demo mode at 0x8C0A72FC = 2).
+// Checked once per vblank: when the game has set 2 (value 1), it becomes 1 (value 0). Turning
+// the option off stops forcing; the game's own 2 comes back at the next mission or pause.
+// Falling behind: some rooms are too heavy for the Quest's CPU to emulate the faster SH-4
+// (emulator.cpp) in real time at 60 pictures/s, and then the whole game slows down (headset
+// test 2026-11-18, the children's bedrooms: 51 vblanks/s, mission clock at 85%). When fewer
+// than 57 vblanks run per real second for 2 seconds in a row, the mission goes back to the
+// game's own 30 pictures/s and the SH-4 to its own clock (the first 8 s after the game sets its rate, the mission's loading,
+// aren't judged); 60 is tried again after the next pause or mission load.
+static void tcvrGamePictureRate()
+{
+	constexpr u32 FlipDelay = 0x8C10FC80;	// Kamui context 0x8C10F52C + 0x754
+	constexpr u32 DemoMode = 0x8C0A72FC;	// 2: an attract demo plays
+	static bool forced;		// we turned the game's 2 into 1
+	static bool fellBehind;	// back at 30 until the game sets its rate again
+	static bool logged;
+	static u64 windowStart;
+	static u32 windowVblanks;
+	static int slowWindows;
+	static u64 forcedSince;	// a mission load runs right after the game sets its rate: not judged
+
+	if (settings.content.gameId != TCVR_SUPPORTED_GAME_ID)
+		return;
+	const u32 delay = ReadMem32_nommu(FlipDelay);
+	const bool demo = ReadMem32_nommu(DemoMode) == 2;
+
+	// vblanks per real second while forced (a gap, e.g. the VR menu's pause, restarts it)
+	const u64 now = getTimeMs();
+	if (!forced || windowStart == 0 || now - windowStart > 1500)
+	{
+		windowStart = now;
+		windowVblanks = 0;
+		if (!forced)
+			slowWindows = 0;
+	}
+	else if (++windowVblanks, now - windowStart >= 1000)
+	{
+		const bool slow = windowVblanks * 1000 < 57 * (now - windowStart);
+		slowWindows = slow && now - forcedSince > 8000 ? slowWindows + 1 : 0;
+		windowStart = now;
+		windowVblanks = 0;
+	}
+
+	if (delay == 0 && fellBehind && !forced)
+	{
+		fellBehind = false;		// the game set 1 vblank itself (pause, menus): 60 may be tried again
+		tcvrGameRateFellBehind(false);
+	}
+	if (delay == 1)
+	{
+		forced = false;
+		if (config::VrGame60 && !demo && !fellBehind)
+		{
+			WriteMem32_nommu(FlipDelay, 0);
+			forced = true;
+			forcedSince = now;
+			if (!logged)
+				NOTICE_LOG(PVR, "tcvr: 60 game pictures/s (the game asked for 30)");
+			logged = true;
+		}
+	}
+	else if (delay == 0 && forced && (demo || slowWindows >= 2))
+	{
+		// a demo started after we forced the mission rate, or the emulation fell behind real
+		// time: give the game back its 30
+		if (!demo)
+		{
+			NOTICE_LOG(PVR, "tcvr: emulation behind real time at 60 game pictures/s: back to 30 until the next pause");
+			fellBehind = true;
+			tcvrGameRateFellBehind(true);	// and the SH-4 back to its own clock
+		}
+		WriteMem32_nommu(FlipDelay, 1);
+		forced = false;
+		slowWindows = 0;
+	}
+}
+#endif
 
 static u32 lightgun_line = 0xffff;
 static u32 lightgun_hpos;
@@ -188,6 +280,7 @@ static int spg_line_sched(int tag, int cycles, int jitter, void *arg)
 #endif
 
 #ifdef USE_OPENXR
+			tcvrGamePictureRate();
 			// tcvr: the video mode and rates, every 10 s, in release builds too (logcat, tag
 			// flycast): is the game at 60 Hz (NTSC/VGA) or 50 Hz (PAL), and how many frames it draws
 			{

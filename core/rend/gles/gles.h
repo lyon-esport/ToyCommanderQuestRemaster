@@ -61,6 +61,7 @@ struct PipelineShader
 	GLint fog_clamp_min, fog_clamp_max;
 	GLint ndcMat;
 	GLint vrMat;
+	GLint vrHudMat;
 	GLint vrTan;
 	GLint vrOverlay;
 	GLint vrComfort;
@@ -266,6 +267,7 @@ struct gl_ctx
 		GLint sp_ShaderColor;
 		GLint ndcMat;
 		GLint vrMat;
+		GLint vrHudMat;
 		GLint vrTan;
 		GLint vrOverlay;
 		GLint vrComfort;
@@ -430,6 +432,8 @@ GLuint gl_CompileShader(const char* shader, GLuint type);
 GLuint gl_CompileAndLink(const char *vertexShader, const char *fragmentShader);
 // hotd2-vr: the frame kept for the headset (the one on screen), drawn once per eye
 bool gles_vr_have_frame();
+// tcvr: the head-driven camera's turn (yaw, pitch) of the game picture on show (see xr_headcam.h)
+glm::vec2 gles_vr_frame_cam_turn();
 void gles_vr_note_framebuffer(bool blank);
 // the game shows the last rendered frame now: it goes to the headset
 void gles_vr_present();
@@ -451,6 +455,7 @@ extern struct ShaderUniforms_t
 	float fog_clamp_max[4];
 	glm::mat4 ndcMat;
 	glm::mat4 vrMat;
+	glm::mat4 vrHudMat;
 	glm::vec2 vrTan;
 	glm::vec4 vrOverlay;
 	glm::vec3 vrComfort;	// world scale, comfort start, comfort minimum (metres); 0: off
@@ -490,6 +495,8 @@ extern struct ShaderUniforms_t
 			glUniformMatrix4fv(s->ndcMat, 1, GL_FALSE, &ndcMat[0][0]);
 		if (s->vrMat != -1)
 			glUniformMatrix4fv(s->vrMat, 1, GL_FALSE, &vrMat[0][0]);
+		if (s->vrHudMat != -1)
+			glUniformMatrix4fv(s->vrHudMat, 1, GL_FALSE, &vrHudMat[0][0]);
 		if (s->vrTan != -1)
 			glUniform2fv(s->vrTan, 1, &vrTan[0]);
 		if (s->vrOverlay != -1)
