@@ -95,8 +95,26 @@ void fill(int x0, int y0, int x1, int y1, const glm::vec3& colour, float alpha =
 			blend(x, y, colour, alpha);
 }
 
-// One line, centred, its baseline at y.
-void text(const std::string& s, float px, int y, const glm::vec3& colour)
+// tcvr: a filled ellipse (rx == ry: a disc), its edge smoothed over a pixel; with inner radii
+// above 0, a ring
+void ellipse(float cx, float cy, float rx, float ry, const glm::vec3& colour, float alpha = 1.f, float inner = 0.f)
+{
+	for (int y = (int)std::floor(cy - ry - 1); y <= (int)std::ceil(cy + ry + 1); y++)
+		for (int x = (int)std::floor(cx - rx - 1); x <= (int)std::ceil(cx + rx + 1); x++)
+		{
+			const float dx = (x + 0.5f - cx) / rx, dy = (y + 0.5f - cy) / ry;
+			const float d = std::sqrt(dx * dx + dy * dy);
+			// the distance to the edge in pixels, roughly
+			const float scale = std::min(rx, ry);
+			float cover = std::clamp((1.f - d) * scale + 0.5f, 0.f, 1.f);
+			if (inner > 0.f)
+				cover = std::min(cover, std::clamp((d - inner) * scale + 0.5f, 0.f, 1.f));
+			blend(x, y, colour, cover * alpha);
+		}
+}
+
+// One line, its baseline at y: centred on the picture, or on cx when given.
+void text(const std::string& s, float px, int y, const glm::vec3& colour, float cx = -1.f)
 {
 	const float scale = stbtt_ScaleForPixelHeight(&font, px);
 	float width = 0.f;
@@ -108,7 +126,7 @@ void text(const std::string& s, float px, int y, const glm::vec3& colour)
 		if (i + 1 < s.size())
 			width += scale * stbtt_GetCodepointKernAdvance(&font, (u8)s[i], (u8)s[i + 1]);
 	}
-	float x = (canvasW - width) * 0.5f;
+	float x = cx < 0.f ? (canvasW - width) * 0.5f : cx - width * 0.5f;
 	std::vector<u8> glyph;
 	for (size_t i = 0; i < s.size(); i++)
 	{
@@ -154,6 +172,8 @@ void paint(const Panel& panel, std::vector<u8>& out)
 	float total = 0.f;
 	for (const PanelLine& line : panel.lines)
 		total += line.size * h * 1.45f;
+	const float icon = panel.menuHint ? h * panel.menuHintSize : 0.f;
+	total += icon;
 	const int bar = panel.progress >= 0.f ? h * 46 / 448 : 0;
 	float y = (h - total - bar) * 0.5f;
 	for (size_t i = 0; i < panel.lines.size(); i++)
@@ -169,6 +189,30 @@ void paint(const Panel& panel, std::vector<u8>& out)
 		y += px * 1.45f;
 		if (!line.text.empty())
 			text(line.text, px, (int)(y - px * 0.38f), line.colour);
+	}
+	if (panel.menuHint)
+	{
+		// tcvr: the left Touch controller seen from above, its menu button lit (the VR menu's button)
+		const float sz = icon, cx = w * 0.5f - sz * 0.35f, top = y + sz * 0.06f;
+		const glm::vec3 body(0.30f, 0.30f, 0.33f), dark(0.12f, 0.12f, 0.13f), mid(0.52f, 0.52f, 0.55f),
+				hot(0.96f, 0.24f, 0.18f), glow(1.f, 0.85f, 0.3f);
+		ellipse(cx, top + sz * 0.47f, sz * 0.40f, sz * 0.40f, body);
+		ellipse(cx - sz * 0.06f, top + sz * 0.30f, sz * 0.10f, sz * 0.10f, dark);		// the stick
+		ellipse(cx - sz * 0.06f, top + sz * 0.30f, sz * 0.065f, sz * 0.065f, mid);
+		ellipse(cx + sz * 0.12f, top + sz * 0.36f, sz * 0.055f, sz * 0.055f, mid);		// Y
+		ellipse(cx + sz * 0.16f, top + sz * 0.52f, sz * 0.055f, sz * 0.055f, mid);		// X
+		text("Y", sz * 0.08f, (int)(top + sz * 0.388f), dark, cx + sz * 0.12f);
+		text("X", sz * 0.08f, (int)(top + sz * 0.548f), dark, cx + sz * 0.16f);
+		const float bx = cx - sz * 0.07f, by = top + sz * 0.66f;					// the menu button
+		ellipse(bx, by, sz * 0.105f, sz * 0.105f, glow, 0.9f, 0.78f);
+		ellipse(bx, by, sz * 0.055f, sz * 0.055f, hot);
+		for (int i = -1; i <= 1; i++)												// its three lines
+			fill((int)(bx - sz * 0.028f), (int)(by + i * sz * 0.018f - sz * 0.005f), (int)(bx + sz * 0.028f),
+					(int)(by + i * sz * 0.018f + sz * 0.005f) + 1, glm::vec3(1.f));
+		// its label, to the right
+		fill((int)(bx + sz * 0.12f), (int)(by - 2), (int)(cx + sz * 0.62f), (int)(by + 2), glow);
+		text("hold, or press twice", sz * 0.13f, (int)(by + sz * 0.045f), glow, cx + sz * 1.15f);
+		y += icon;
 	}
 	if (panel.progress >= 0.f)
 	{
@@ -248,7 +292,7 @@ void drawPanel(const glm::mat4& viewProj, const Panel& panel)
 	for (const PanelLine& line : panel.lines)
 		says += line.text + '\n';
 	says += panel.footer + '\n' + std::to_string(panel.progress < 0.f ? -1 : (int)(panel.progress * 200.f))
-			+ '\n' + std::to_string(panel.imageWidth) + 'x' + std::to_string(panel.imageHeight) + ' ' + std::to_string(panel.highlight);
+			+ '\n' + std::to_string(panel.imageWidth) + 'x' + std::to_string(panel.imageHeight) + ' ' + std::to_string(panel.highlight) + (panel.menuHint ? " hint" + std::to_string(panel.menuHintSize) : "");
 	glActiveTexture(GL_TEXTURE0);
 	glcache.BindTexture(GL_TEXTURE_2D, texture);
 	if (says != shown)
