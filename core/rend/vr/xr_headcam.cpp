@@ -224,8 +224,13 @@ void frameEndTrap(Sh4Context *ctx, u32 pc)
 	tcvrSetFrameCamTurn(turn.x, turn.y, gameplayFrame() && turn != glm::vec2(0.f) ? frameSample : 0);
 }
 
+void syncHooks();
+
 bool trap(Sh4Context *ctx, u32 pc)
 {
+	// (a saved state with the hooks in, loaded and run before the next vblank put this run's hooks in)
+	if (!installed)
+		syncHooks();
 	if (!installed)
 		return false;
 	if (pc == SetCamera.pc)
@@ -237,13 +242,73 @@ bool trap(Sh4Context *ctx, u32 pc)
 	return true;
 }
 
-bool codeIsStock()
+// The game's own code at the hooks, stock or with our hooks in. A saved state brings back the code as it was
+// saved: hooks in (a state saved with the head camera on, the player's own game after a multiplayer match)
+// while this run has none installed yet, or the other way round.
+bool codeIsOurs()
 {
 	for (const Hook *h : Hooks)
 		for (size_t i = 0; i < std::size(h->stock); i++)
-			if (ReadMem16_nommu(h->pc + (u32)i * 2) != (i == 0 && installed ? REIOS_OPCODE : h->stock[i]))
+		{
+			const u16 v = ReadMem16_nommu(h->pc + (u32)i * 2);
+			if (v != h->stock[i] && !(i == 0 && v == REIOS_OPCODE))
 				return false;
+		}
 	return true;
+}
+
+void hooksOut()
+{
+	for (const Hook *h : Hooks)
+		if (ReadMem16_nommu(h->pc) == REIOS_OPCODE)
+			WriteMem16_nommu(h->pc, h->stock[0]);
+}
+
+}	// namespace
+
+namespace
+{
+
+bool gameIdMatches() { return settings.content.gameId == GameId; }
+
+// our hooks in or out, as the option and the game's code are now
+void syncHooks()
+{
+	const bool want = settings.content.gameId == GameId && config::VrHeadCamera > 0
+			&& !config::GGPOEnable && !config::NetworkEnable && !config::BattleCableEnable;
+	if (want && !installed)
+	{
+		// (only over the game's own code, so another disc or a code overlay isn't touched)
+		if (codeIsOurs())
+		{
+			reios_game_trap = trap;
+			// (the dynarec drops what it compiled from the page when it's written)
+			for (const Hook *h : Hooks)
+				if (ReadMem16_nommu(h->pc) != REIOS_OPCODE)
+					WriteMem16_nommu(h->pc, REIOS_OPCODE);
+			installed = true;
+			NOTICE_LOG(RENDERER, "VR head camera: hooks in");
+		}
+	}
+	else if (installed && (!want || !codeIsOurs()))
+	{
+		hooksOut();
+		installed = false;
+		NOTICE_LOG(RENDERER, "VR head camera: hooks out");
+	}
+	else if (!want && !installed && gameIdMatches() && codeIsOurs())
+	{
+		// a state saved with the hooks in, loaded with the head camera off (or in a match): nobody would
+		// answer those traps
+		bool any = false;
+		for (const Hook *h : Hooks)
+			any = any || ReadMem16_nommu(h->pc) == REIOS_OPCODE;
+		if (any)
+		{
+			hooksOut();
+			NOTICE_LOG(RENDERER, "VR head camera: hooks from a saved state taken out");
+		}
+	}
 }
 
 }	// namespace
@@ -251,29 +316,7 @@ bool codeIsStock()
 void updateHeadCamera()
 {
 	vblanks++;
-	const bool want = settings.content.gameId == GameId && config::VrHeadCamera > 0
-			&& !config::GGPOEnable && !config::NetworkEnable && !config::BattleCableEnable;
-	if (want && !installed)
-	{
-		// (only over the stock code, so another disc or a code overlay isn't touched)
-		if (codeIsStock())
-		{
-			reios_game_trap = trap;
-			// (the dynarec drops what it compiled from the page when it's written)
-			for (const Hook *h : Hooks)
-				WriteMem16_nommu(h->pc, REIOS_OPCODE);
-			installed = true;
-			NOTICE_LOG(RENDERER, "VR head camera: hooks in");
-		}
-	}
-	else if (installed && (!want || !codeIsStock()))
-	{
-		for (const Hook *h : Hooks)
-			if (ReadMem16_nommu(h->pc) == REIOS_OPCODE)
-				WriteMem16_nommu(h->pc, h->stock[0]);
-		installed = false;
-		NOTICE_LOG(RENDERER, "VR head camera: hooks out");
-	}
+	syncHooks();
 	if (!installed)
 		tcvrSetFrameCamTurn(0.f, 0.f);
 }
