@@ -13,7 +13,16 @@
 		READY   joiner -> host   ready or not
 		LEAVE   either way       leaving cleanly
 		PING    either way       keep-alive every 2 s; a side silent for 6 s is dropped
-		START   host -> all      the players in slot order as address:port, this copy's index, input delay
+		START   host -> all      the players in slot order as address:port, this copy's index, input delay,
+		                         and the id of the state the match starts from ("" for none)
+		SNAP    host -> joiner   a piece of a state a match can start from (by player count, with its id)
+		SNAPOK  joiner -> host   that state arrived whole
+
+	Match start states: a match used to start from the power-on of the game, with the setup pressing through
+	the start screens and the menus behind a panel (about 30 s). The host keeps the game's state at the team and
+	vehicle page from its first match with that many players (tcvr_match.cpp) and offers it here; each joiner
+	gets it while in the lobby (a few MB, in pieces), and a START names it only when every player holds it.
+	Every copy then starts the match from those very bytes, which the netplay checks too.
 
 	Host handover (before the match): every joiner keeps a lobby port open from the moment it joins ("standby"),
 	and the host's STATE lists each player's address and standby port. When the host goes away (LEAVE, a
@@ -42,7 +51,7 @@ namespace tcvr::lobby
 
 constexpr int MaxPlayers = 4;
 constexpr uint16_t DiscoveryPort = 19790;	// UDP; not the GGPO port (19713)
-constexpr uint8_t ProtocolVersion = 2;	// 2: host handover (standby ports, rejoin)
+constexpr uint8_t ProtocolVersion = 3;	// 2: host handover (standby ports, rejoin); 3: match start states (SNAP)
 constexpr size_t NameMax = 8;				// the menu offers 3 letters; a longer name from elsewhere is cut
 
 // The game's multiplayer options page, as the game shows it (measured on PC, 2026-11-18).
@@ -81,7 +90,10 @@ enum class RefuseReason : uint8_t { None = 0, Full = 1, Version = 2, Disc = 3, S
 
 // ---- messages on the wire -------------------------------------------------------------------
 
-enum class MsgType : uint8_t { Hello = 1, Welcome = 2, Refuse = 3, State = 4, Ready = 5, Leave = 6, Ping = 7, Start = 8 };
+enum class MsgType : uint8_t { Hello = 1, Welcome = 2, Refuse = 3, State = 4, Ready = 5, Leave = 6, Ping = 7, Start = 8,
+	Snap = 9, SnapOk = 10 };
+constexpr size_t SnapChunk = 32 * 1024;			// the bytes of a state in one SNAP
+constexpr size_t SnapMax = 48 * 1024 * 1024;	// a state larger than this is refused
 
 struct Beacon
 {
@@ -145,6 +157,7 @@ struct StartInfo
 	uint8_t inputDelay = 2;
 	uint32_t sessionId = 0;
 	Settings settings;
+	std::string snapshot;			// the id of the state the match starts from (Lobby::snapshot), "" none
 	// the list for network:GGPOPeers ("address:port,address:port"); hostAddress fills the host's entry
 	std::string peerList(const std::string& hostAddress) const;
 };
@@ -174,6 +187,18 @@ std::vector<uint8_t> encodeReady(bool ready);
 bool decodeReady(const std::vector<uint8_t>& p, bool& ready);
 std::vector<uint8_t> encode(const StartInfo& m);
 bool decode(const std::vector<uint8_t>& p, StartInfo& m);
+struct SnapPiece
+{
+	uint8_t players = 0;		// the match's player count (2..4)
+	std::string id;				// the state's id (its hash, given by the host's app)
+	uint32_t total = 0;			// the state's size
+	uint32_t offset = 0;		// this piece's place
+	std::vector<uint8_t> bytes;
+};
+std::vector<uint8_t> encode(const SnapPiece& m);
+bool decode(const std::vector<uint8_t>& p, SnapPiece& m);
+std::vector<uint8_t> encodeSnapOk(uint8_t players, const std::string& id);
+bool decodeSnapOk(const std::vector<uint8_t>& p, uint8_t& players, std::string& id);
 
 // UDP datagrams of the discovery port.
 std::vector<uint8_t> encode(const Beacon& m);
@@ -289,6 +314,14 @@ public:
 	bool start(uint8_t inputDelay, std::string& error);
 	// The host can start: at least two players and every joiner ready.
 	bool canStart(std::string& why);
+
+	// A state a match of `players` players can start from (the host's app; any copy may call it, only a host
+	// sends it): every joiner gets it, now and as they join. id: what tells two states apart (a hash). Empty
+	// data takes the offer back.
+	void offerSnapshot(int players, const std::string& id, std::vector<uint8_t> data);
+	// The state with this id for that player count, as this copy holds it (offered, or received whole from the
+	// host); null if none.
+	std::shared_ptr<const std::vector<uint8_t>> snapshot(int players, const std::string& id);
 
 	// -- Join game
 	void join(const Identity& me, const std::string& address, uint16_t lobbyPort);

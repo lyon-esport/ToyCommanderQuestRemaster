@@ -89,6 +89,9 @@ std::string endText();
 
 // Called at each game load, before the netplay starts (emulator.cpp).
 void gate();
+// At the game load after a match (emulator.cpp, where a savestate would load): the player's own game as it was
+// before the match, kept at its start. False: none kept (the game starts from its power-on).
+bool restoreOwnGame();
 // True once after a match has ended: the menu should open on its Multiplayer page.
 bool takeReturn();
 

@@ -16,12 +16,16 @@
 #include "input/gamepad.h"
 #include "network/ggpo.h"
 #include "version.h"
+#include "oslib/oslib.h"
+#include "oslib/storage.h"
+#include <nowide/cstdio.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <memory>
 #include <mutex>
@@ -103,8 +107,144 @@ std::vector<std::string> matchNames;
 std::mutex resultsMutex;
 Results lastResults;		// (resultsMutex: written on the emulator's thread)
 
+// ---- match start states and the player's own game ------------------------------------------------------
+// A match used to start from the power-on: the setup pressed through the start screens behind a panel (about
+// 30 s). The host now keeps the game's state at the team and vehicle page from its first match with that many
+// players ("<game>.state.net.<n>p", with the app version beside it in ".ver"), offers it in the lobby, and a
+// START that names it has every copy write those very bytes as the netplay's start state ("<game>.state.net",
+// which Emulator::loadGame loads, and whose hash the netplay compares). The player's own game is kept while a
+// match runs ("<game>.state.net.back") and comes back after it: no power-on at the end either.
+
+std::atomic<bool> offersDirty { true };		// offer the states on disk to the lobby (again)
+std::string matchStateBase;					// the match's "<game>.state.net" (startMatch)
+std::mutex ownGameMutex;
+std::string ownGamePath;					// the player's own game, kept for the end of the match ("" none)
+std::shared_ptr<std::atomic<bool>> ownGameWritten;	// (written by a thread)
+
+std::string md5Hex(const std::vector<uint8_t>& data)
+{
+	u8 d[16];
+	MD5Sum().add(data.data(), (unsigned long)data.size()).getDigest(d);
+	char hex[33];
+	for (int i = 0; i < 16; i++)
+		snprintf(hex + i * 2, 3, "%02x", d[i]);
+	return hex;
+}
+
+bool readWhole(const std::string& path, std::vector<uint8_t>& out)
+{
+	out.clear();
+	hostfs::File *f = hostfs::storage().openFile(path, "rb");
+	if (f == nullptr)
+		return false;
+	f->seek(0, SEEK_END);
+	const long size = f->tell();
+	f->seek(0, SEEK_SET);
+	bool ok = size > 0 && (size_t)size <= lobby::SnapMax;
+	if (ok)
+	{
+		out.resize((size_t)size);
+		ok = f->read(out.data(), 1, out.size()) == out.size();
+	}
+	delete f;
+	if (!ok)
+		out.clear();
+	return ok;
+}
+
+bool writeWhole(const std::string& path, const void *data, size_t size)
+{
+	hostfs::File *f = hostfs::storage().openFile(path, "wb");
+	if (f == nullptr)
+		return false;
+	const bool ok = f->write(data, 1, size) == size;
+	delete f;
+	return ok;
+}
+
+std::string statePath(const std::string& base, int players) { return base + "." + std::to_string(players) + "p"; }
+
+// The states on disk to the lobby (a thread: a few MB each). Only those of this app version.
+void offerStates(lobby::Lobby *l)
+{
+	if (!offersDirty || settings.content.fileName.empty())
+		return;
+	offersDirty = false;
+	const std::string base = hostfs::getSavestatePath(-1, true);
+	std::thread([l, base] {
+		for (int n = 2; n <= lobby::MaxPlayers; n++)
+		{
+			std::vector<uint8_t> data, ver;
+			const std::string path = statePath(base, n);
+			if (!readWhole(path + ".ver", ver) || std::string(ver.begin(), ver.end()) != GIT_VERSION || !readWhole(path, data))
+				continue;
+			const std::string id = md5Hex(data);
+			NOTICE_LOG(NETWORK, "MP: a match start state for %d players offered in the lobby (%d KB, %s)", n, (int)(data.size() / 1024), id.c_str());
+			l->offerSnapshot(n, id, std::move(data));
+		}
+	}).detach();
+}
+
+// The emulator's thread, between two frames of a match: the game on the team and vehicle page, kept as the
+// start state of the next matches with as many players.
+void keepMatchStart(int players)
+{
+	if (matchStateBase.empty())
+		return;
+	auto state = std::make_shared<std::vector<u8>>();
+	if (!dc_serializeAll(*state))
+		return;
+	const std::string path = statePath(matchStateBase, players);
+	std::thread([state, path, players] {
+		const std::string tmp = path + ".tmp";
+		if (!dc_writeStateFile(tmp, *state))
+		{
+			WARN_LOG(NETWORK, "MP: the match start state could not be written");
+			nowide::remove(tmp.c_str());
+			return;
+		}
+		nowide::remove(path.c_str());
+		if (nowide::rename(tmp.c_str(), path.c_str()) != 0 || !writeWhole(path + ".ver", GIT_VERSION, strlen(GIT_VERSION)))
+		{
+			WARN_LOG(NETWORK, "MP: the match start state could not be kept");
+			return;
+		}
+		NOTICE_LOG(NETWORK, "MP: the match start state for %d players is kept: the next matches start from it", players);
+		offersDirty = true;
+	}).detach();
+}
+
+// The player's own game, before a match takes its place (the render thread; the game stopped first).
+void keepOwnGame()
+{
+	std::lock_guard<std::mutex> lock(ownGameMutex);
+	ownGamePath.clear();
+	ownGameWritten.reset();
+	if (settings.content.path.empty() || config::GGPOEnable || settings.network.online || inMatch())
+		return;
+	if (emu.running())
+		emu.stop();
+	auto state = std::make_shared<std::vector<u8>>();
+	if (!dc_serializeAll(*state))
+		return;
+	const std::string path = hostfs::getSavestatePath(-1, true) + ".back";
+	auto done = std::make_shared<std::atomic<bool>>(false);
+	ownGamePath = path;
+	ownGameWritten = done;
+	std::thread([state, path, done] {
+		if (dc_writeStateFile(path, *state))
+		{
+			*done = true;
+			NOTICE_LOG(NETWORK, "MP: the player's own game is kept during the match");
+		}
+		else
+			WARN_LOG(NETWORK, "MP: the player's own game could not be kept");
+	}).detach();
+}
+
 void startMatch(const lobby::View& v)
 {
+	keepOwnGame();
 	matchNames.clear();
 	for (const lobby::PlayerInfo& p : v.state.players)
 		if (p.present)
@@ -129,7 +269,21 @@ void startMatch(const lobby::View& v)
 	saveBool(config::ActAsServer, false);
 	saveBool(config::GGPOEnable, true);
 	const lobby::Settings& st = v.state.settings;
-	config::VrMpSetup.set(std::to_string(st.mode) + "," + std::to_string(st.room) + "," + std::to_string(st.points));
+	// the start state: the one the START names, written where the game load takes it, else none (the power-on)
+	matchStateBase = hostfs::getSavestatePath(-1, true);
+	bool fromState = false;
+	if (!info.snapshot.empty())
+	{
+		const auto data = theLobby().snapshot((int)info.peers.size(), info.snapshot);
+		fromState = data != nullptr && writeWhole(matchStateBase, data->data(), data->size());
+		if (!fromState)
+			WARN_LOG(NETWORK, "MP START: the match start state %s is missing here", info.snapshot.c_str());
+	}
+	if (!fromState)
+		nowide::remove(matchStateBase.c_str());
+	NOTICE_LOG(NETWORK, "MP START from %s", fromState ? "the match start state" : "the power-on");
+	config::VrMpSetup.set(std::to_string(st.mode) + "," + std::to_string(st.room) + "," + std::to_string(st.points)
+			+ "," + (fromState ? "1" : "0"));
 	config::VrMpSetup.save();
 	// the names in player order (the slots in order, holes closed, as START lists the players)
 	std::string names;
@@ -428,6 +582,8 @@ void poll()
 		return;
 	lobby::Lobby *l = theOne.get();
 	lock.unlock();
+	if (!active && reloading == (int)Reload::None)
+		offerStates(l);
 	const lobby::View v = l->view();
 	if (v.phase != lobby::Phase::Started)
 		return;
@@ -621,6 +777,25 @@ void gate()
 	}
 }
 
+bool restoreOwnGame()
+{
+	std::string path;
+	bool written = false;
+	{
+		std::lock_guard<std::mutex> lock(ownGameMutex);
+		if (reloading != (int)Reload::BackToLobby || ownGamePath.empty())
+			return false;
+		path = ownGamePath;
+		written = ownGameWritten && *ownGameWritten;
+		ownGamePath.clear();
+		ownGameWritten.reset();
+	}
+	const bool ok = written && dc_loadStateFile(path);
+	nowide::remove(path.c_str());
+	NOTICE_LOG(NETWORK, "MP: %s", ok ? "the player's own game is back" : "the player's own game could not come back: the game starts again");
+	return ok;
+}
+
 bool takeReturn()
 {
 	if (!config::VrMpReturn)
@@ -694,6 +869,8 @@ struct Setup
 	int limitIndex = lobby::DefaultLimitIndex;
 	int doneFrame = -1;		// when the setup was done (the arena loads)
 	int catSeen = -1;		// Cat and Mice: the cat message page seen since
+	bool fromState = false;	// the match started from the start state (on the team page): no start screens
+	bool stateKept = false;	// player 1: the start state for the next matches taken
 } su;
 
 constexpr u32 MultiplayerFlag = 0x8C0A5AC4;	// set while a multiplayer arena is loaded
@@ -812,14 +989,16 @@ uint32_t setupButtons()
 	if (!s.started)
 	{
 		s.started = true;
-		unsigned m = 0, r = 0, p = 10;
-		sscanf(config::VrMpSetup.get().c_str(), "%u,%u,%u", &m, &r, &p);
+		unsigned m = 0, r = 0, p = 10, fromState = 0;
+		sscanf(config::VrMpSetup.get().c_str(), "%u,%u,%u,%u", &m, &r, &p, &fromState);
+		s.fromState = fromState != 0;
 		s.mode = (int)std::min(m, 2u);
 		s.room = (int)std::min(r, 7u);
 		s.points = (int)p;
 		s.limitIndex = lobby::limitIndex(s.mode, s.points);
-		go(ggpo::localPlayerIndex() == 0 ? Step::Boot : Step::GuestWait);
-		NOTICE_LOG(NETWORK, "MP SETUP: player %d, mode %d room %d points %d", ggpo::localPlayerIndex() + 1, s.mode, s.room, s.points);
+		go(ggpo::localPlayerIndex() != 0 ? Step::GuestWait : s.fromState ? Step::WaitSetup : Step::Boot);
+		NOTICE_LOG(NETWORK, "MP SETUP: player %d, mode %d room %d points %d, from %s", ggpo::localPlayerIndex() + 1, s.mode, s.room, s.points,
+				s.fromState ? "the start state" : "the power-on");
 	}
 	s.frame++;
 	watchResults(s.frame);
@@ -835,7 +1014,7 @@ uint32_t setupButtons()
 	// ended with different leftovers on the game's stack.
 	// TCVR_MP_FAST: 0 never (tests), 2 until the arena (as first tried).
 	static const int fastMode = [] { const char *e = std::getenv("TCVR_MP_FAST"); return e != nullptr ? std::atoi(e) : 1; }();
-	const bool fast = fastMode == 0 ? false
+	const bool fast = fastMode == 0 || s.fromState ? false
 			: fastMode == 2 ? (bool)setupShowing
 			: setupShowing && s.frame <= FastUntilFrame;
 	if (settings.input.fastForwardMode != fast)
@@ -875,6 +1054,17 @@ uint32_t setupButtons()
 		// the other players join the page and get ready by themselves (GuestJoin, GuestReady); player 1 is
 		// ready last, so the page ends with everybody in (it ends once nobody is still choosing)
 		const int n = std::clamp(ggpo::playerCount(), 1, 4);
+		// the first match with this many players, from the power-on: the game as it is now (the page just
+		// opened, nobody else on it yet) is where the next ones start
+		if (!s.fromState && !s.stateKept && since() == 10 && n >= 2)
+		{
+			bool empty = true;
+			for (int p = 1; p < n; p++)
+				empty = empty && slotState(p) < 2;
+			s.stateKept = true;
+			if (empty)
+				keepMatchStart(n);
+		}
 		bool all = true;
 		for (int p = 1; p < n; p++)
 			all = all && slotState(p) >= 3;
