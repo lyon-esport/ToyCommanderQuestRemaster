@@ -544,12 +544,16 @@ int move(const std::vector<Rect>& rects, int from, int dir)
 		bool overlap;
 		switch (dir)
 		{
-		case 1: along = a.y0 - b.y1; across = std::abs(bx - ax); overlap = b.x0 < a.x1 && b.x1 > a.x0; if (by >= ay - 1.f) continue; break;
-		case 2: along = b.y0 - a.y1; across = std::abs(bx - ax); overlap = b.x0 < a.x1 && b.x1 > a.x0; if (by <= ay + 1.f) continue; break;
-		case 3: along = a.x0 - b.x1; across = std::abs(by - ay); overlap = b.y0 < a.y1 && b.y1 > a.y0; if (bx >= ax - 1.f) continue; break;
-		case 4: along = b.x0 - a.x1; across = std::abs(by - ay); overlap = b.y0 < a.y1 && b.y1 > a.y0; if (bx <= ax + 1.f) continue; break;
+		case 1: along = a.y0 - b.y1; across = std::abs(bx - ax); overlap = b.x0 < a.x1 && b.x1 > a.x0; break;
+		case 2: along = b.y0 - a.y1; across = std::abs(bx - ax); overlap = b.x0 < a.x1 && b.x1 > a.x0; break;
+		case 3: along = a.x0 - b.x1; across = std::abs(by - ay); overlap = b.y0 < a.y1 && b.y1 > a.y0; break;
+		case 4: along = b.x0 - a.x1; across = std::abs(by - ay); overlap = b.y0 < a.y1 && b.y1 > a.y0; break;
 		default: return -1;
 		}
+		// only a button wholly that way (left on Host a game went to Your name, below it, whose
+		// centre is a little to the left)
+		if (along < -1.f)
+			continue;
 		// the nearest that way, the ones facing it first
 		const float score = std::max(along, 0.f) + (overlap ? 0.f : 2000.f) + across * 0.5f;
 		if (score < bestScore)
