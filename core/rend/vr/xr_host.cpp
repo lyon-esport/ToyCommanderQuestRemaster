@@ -614,12 +614,7 @@ bool updateMenuLayer(const Panel& panel)
 	if (!initMenuLayer(panel.imageWidth, panel.imageHeight))
 		return false;
 	menuShot();
-	std::string says;
-	for (const PanelLine& line : panel.lines)
-		says += line.text + '\n';
-	says += std::to_string(panel.highlight);
-	for (const PanelLine& line : panel.lines)
-		says += ' ' + std::to_string((int)(line.colour.r * 255.f)) + ',' + std::to_string((int)(line.colour.g * 255.f));
+	const std::string says = panelKey(panel);
 	if (menuLayer.ready && says == menuLayer.shown)
 		return true;
 	u32 index = 0;
