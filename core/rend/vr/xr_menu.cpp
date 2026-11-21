@@ -1197,7 +1197,7 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 	if (step && page == (int)Section::Multiplayer)
 	{
 		// the cards and buttons: left/right changes a value, else the stick goes to the nearest button
-		// that way; left with nothing there goes back
+		// that way
 		if ((dir == 3 || dir == 4) && hasValue(list[selected]))
 			change(list[selected], dir == 3 ? -1 : 1);
 		else
@@ -1205,8 +1205,8 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 			const int to = mp::move(mpLayout(list), selected, dir);
 			if (to >= 0)
 				selected = to;
-			else if (dir == 3 && mpPage != MpPage::Lobby)	// (never out of a lobby by a stray push: that leaves the game)
-				goBack();
+			else if (dir == 3 && mpPage == MpPage::Top)	// (only from the start page: elsewhere a stray push left the
+				goBack();								// page, or the game; B goes back)
 		}
 		confirming = -1;
 	}
