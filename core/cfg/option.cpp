@@ -260,6 +260,8 @@ Option<int> GGPOPlayer("GGPOPlayer", 0, "network");
 // hotd2-vr test aid: a Quest and a PC may connect although they round differently (the
 // games drift apart: only to measure netplay's cost on the headset). Both sides need it.
 Option<bool> NetplayTestAnyCpu("hotd2vr.TestAnyCpu", false, "network");
+// tcvr test aid: the per-frame memory hash log (as HOTD2VR_SYNCLOG) on a copy without environment variables (a headset)
+OptionString NetplaySyncLog("hotd2vr.SyncLog", "", "network");
 Option<bool> NetworkStats("Stats", true, "network");
 Option<int> GGPOAnalogAxes("GGPOAnalogAxes", 0, "network");
 Option<bool> GGPOChat("GGPOChat", true, "network");

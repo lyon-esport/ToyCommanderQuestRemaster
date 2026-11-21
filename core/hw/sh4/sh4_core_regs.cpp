@@ -69,7 +69,7 @@ static void setHostRoundingMode(u32 roundingMode, u32 denorm2zero)
 				temp|=(3<<13);
 
 			if (denorm2zero == 1)	// denormals are considered 0
-				temp|=(1<<15);
+				temp|=(1<<15) | (1<<6);	// tcvr: flush results (FTZ) and inputs (DAZ), like arm64 FZ and MSVC's _DN_FLUSH
 			asm("ldmxcsr %0" : : "m"(temp));
     #elif HOST_CPU==CPU_ARM
 		static const unsigned int offMask = 0x04086060;

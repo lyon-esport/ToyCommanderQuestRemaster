@@ -44,6 +44,7 @@ using namespace vixl::aarch64;
 #include "hw/mem/addrspace.h"
 #include "oslib/virtmem.h"
 #include "emulator.h"
+#include "cfg/option.h"
 
 struct DynaRBI : RuntimeBlockInfo
 {
@@ -877,7 +878,15 @@ public:
 				break;
 
 			case shop_fmac:
-				Fmadd(regalloc.MapVRegister(op.rd), regalloc.MapVRegister(op.rs3), regalloc.MapVRegister(op.rs2), regalloc.MapVRegister(op.rs1));
+				if (config::GGPOEnable)
+				{
+					// tcvr: online, a multiply then an add (two roundings), as the x64 recompiler
+					// does: a Quest and a PC must compute the same bits (PC-crossplay-analysis.md)
+					Fmul(s0, regalloc.MapVRegister(op.rs3), regalloc.MapVRegister(op.rs2));
+					Fadd(regalloc.MapVRegister(op.rd), regalloc.MapVRegister(op.rs1), s0);
+				}
+				else
+					Fmadd(regalloc.MapVRegister(op.rd), regalloc.MapVRegister(op.rs3), regalloc.MapVRegister(op.rs2), regalloc.MapVRegister(op.rs1));
 				break;
 
 			case shop_fsrra:

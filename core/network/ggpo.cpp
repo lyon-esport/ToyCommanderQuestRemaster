@@ -145,6 +145,7 @@ static bool keyboardGame;
 static bool mouseGame;
 static int inputSize;
 static FILE *syncLog;		// HOTD2VR_SYNCLOG (save_game_state)
+static std::string syncLogPath;	// tcvr: HOTD2VR_SYNCLOG, else the option hotd2vr.SyncLog (the headset has no environment)
 static struct { int frames, saves, rollbacks; } netStats;	// nextFrame's 5 s log
 static struct { s16 x, y; } heldAim;	// the local light gun's position as last sent (nextFrame)
 static void (*chatCallback)(int playerNum, const std::string& msg);
@@ -512,7 +513,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 				{
 					if (out != nullptr)
 						fclose(out);
-					out = fopen((std::string(getenv("HOTD2VR_SYNCLOG")) + ".region").c_str(), "wb");
+					out = fopen((syncLogPath + ".region").c_str(), "wb");
 					outOf = syncLog;
 				}
 				if (out != nullptr)
@@ -534,7 +535,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 		{
 			if (pages != nullptr)
 				fclose(pages);
-			pages = fopen((std::string(getenv("HOTD2VR_SYNCLOG")) + ".pages").c_str(), "w");
+			pages = fopen((syncLogPath + ".pages").c_str(), "w");
 			pagesOf = syncLog;
 		}
 		if (pages != nullptr)
@@ -559,7 +560,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 					break;
 				if (f == frame)
 				{
-					const std::string base = std::string(getenv("HOTD2VR_SYNCLOG")) + "." + std::to_string(frame);
+					const std::string base = syncLogPath + "." + std::to_string(frame);
 					if (FILE *out = fopen((base + ".state").c_str(), "wb")) { fwrite(*buffer, 1, *len, out); fclose(out); }
 					if (FILE *out = fopen((base + ".ram").c_str(), "wb")) { fwrite(&mem_b[0], 1, RAM_SIZE, out); fclose(out); }
 				}
@@ -776,8 +777,27 @@ void startSession(int localPort, int localPlayerNum)
 	cb.log_game_state  = log_game_state;
 	cb.on_message      = on_message;
 
-	if (const char *path = getenv("HOTD2VR_SYNCLOG"); path != nullptr && syncLog == nullptr)
-		syncLog = fopen(path, "w");
+	if (syncLog == nullptr)
+	{
+		// tcvr: on a headset (no environment variables) the option hotd2vr.SyncLog names the
+		// file, relative to the app's data folder: a Quest and a PC compare their logs
+		if (const char *path = getenv("HOTD2VR_SYNCLOG"); path != nullptr)
+			syncLogPath = path;
+		else if (!config::NetplaySyncLog.get().empty())
+		{
+			syncLogPath = config::NetplaySyncLog.get();
+			const bool absolute = syncLogPath[0] == '/' || syncLogPath[0] == '\\' || (syncLogPath.size() > 1 && syncLogPath[1] == ':');
+			if (!absolute)
+				syncLogPath = get_writable_data_path(syncLogPath);
+		}
+		else
+			syncLogPath.clear();
+		if (!syncLogPath.empty())
+		{
+			syncLog = fopen(syncLogPath.c_str(), "w");
+			NOTICE_LOG(NETWORK, "GGPO sync log: %s%s", syncLogPath.c_str(), syncLog == nullptr ? " (could not open)" : "");
+		}
+	}
 	heldAim = {};
 	gonePlayers = 0;
 	for (auto& handle : playerHandles)
