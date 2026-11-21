@@ -224,15 +224,25 @@ void frameEndTrap(Sh4Context *ctx, u32 pc)
 	tcvrSetFrameCamTurn(turn.x, turn.y, gameplayFrame() && turn != glm::vec2(0.f) ? frameSample : 0);
 }
 
-void syncHooks();
-
 bool trap(Sh4Context *ctx, u32 pc)
 {
-	// (a saved state with the hooks in, loaded and run before the next vblank put this run's hooks in)
 	if (!installed)
-		syncHooks();
-	if (!installed)
+	{
+		if (settings.content.gameId != GameId)
+			return false;
+		// A saved state with our hooks in the code, run before the next vblank takes them on (or out):
+		// the replaced instruction only (every hook replaced sts.l pr,@-r15). The code isn't written here,
+		// from inside the running block.
+		for (const Hook *h : Hooks)
+			if (h->pc == pc)
+			{
+				ctx->r[15] -= 4;
+				WriteMem32_nommu(ctx->r[15], ctx->pr);
+				ctx->pc = pc + 2;
+				return true;
+			}
 		return false;
+	}
 	if (pc == SetCamera.pc)
 		setCameraTrap(ctx);
 	else if (pc == FrameEnd.pc || pc == FrameEnd1P.pc)
@@ -329,6 +339,8 @@ glm::vec2 shownCameraTurn()
 static struct HeadCameraRegistration
 {
 	HeadCameraRegistration() {
+		// (from the start: a saved state loaded at the game's start can reach a hook before the first vblank)
+		reios_game_trap = trap;
 		EventManager::listen(Event::VBlank, [](Event, void *) { updateHeadCamera(); });
 	}
 } headCameraRegistration;
