@@ -1,10 +1,16 @@
 name: Nintendo Switch
 
+# CI is paused: GitHub Actions credit is not available for this repository.
+# This workflow now only runs when started by hand (Actions tab > Run workflow).
+# To turn CI back on, remove the two "on:" lines below and uncomment the original triggers.
 on:
-  push:
-    branches-ignore:
-      - 'l10n_**'
-  pull_request:
+  workflow_dispatch:
+# Original triggers:
+# on:
+#   push:
+#     branches-ignore:
+#       - 'l10n_**'
+#   pull_request:
 
 jobs:
   build:
