@@ -93,7 +93,7 @@ constexpr int AICA_TICK = 4535;		// 44.1 KHz
 
 static int AicaUpdate(int tag, int cycles, int jitter, void *arg)
 {
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && !FLY_RELEASE_BUILD
 	// Render-phase timer [5]: ARM7 interpreter slice (fires at 44.1kHz —
 	// get_now pairs add ~1-2% skew; diagnostic-grade, not verdict-grade).
 	double fly_t0 = emscripten_get_now();
@@ -110,7 +110,7 @@ static int AicaUpdate(int tag, int cycles, int jitter, void *arg)
 
 void timeStep()
 {
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && !FLY_RELEASE_BUILD
 	double fly_t0 = emscripten_get_now();
 #endif
 	for (auto& timer : timers)
@@ -124,7 +124,7 @@ void timeStep()
 	//Make sure sh4/arm interrupt system is up to date
 	update_arm_interrupts();
 	UpdateSh4Ints();
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && !FLY_RELEASE_BUILD
 	g_fly_rp[5] += emscripten_get_now() - fly_t0;
 #endif
 }

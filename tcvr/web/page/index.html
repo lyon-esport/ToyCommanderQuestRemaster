@@ -166,8 +166,17 @@ window.EJS_onGameStart = () => {
     report({ ev: 'speed', frame: f, emu, shown: +shown.toFixed(0), phase, hud: extra });
   }, 1000);
 
-  // a picture of the game every 15 s, for checking where the script got to
+  // a picture of the game every 15 s, for checking where the script got to. Not during the
+  // battle (one shot 20 s in): each picture is a PNG made by the core on the game's own thread
+  // and froze it for ~1 s (laptop profile, run 8). ?shots=1 keeps them all.
+  const allShots = params.get('shots') === '1';
+  let battleShot = false;
   setInterval(async () => {
+    const f = gameFrame();
+    if (SCRIPT === 'battle' && f > BATTLE_FROM && !allShots) {
+      if (battleShot || f < BATTLE_FROM + 1200) return;
+      battleShot = true;
+    }
     try {
       const png = await gm.screenshot();
       fetch('/shot?f=' + gameFrame(), { method: 'POST', body: png });

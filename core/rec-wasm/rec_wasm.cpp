@@ -4244,6 +4244,12 @@ static void inline_handle_miss(u32 miss_pc, u32 ctx_ptr, u32 ram_ptr) {
 }
 #endif  // FLY_INLINE_DISPATCH
 
+// tcvr: kept out of line on purpose. Inlined into mainloop it sits inside mainloop's try block,
+// and with Emscripten's JS exceptions every block call there went through a JS invoke_vii
+// wrapper (wasm -> JS -> dynCall_vii -> block): ~40% of the main thread in a 4-player battle
+// (laptop profile, run 8). Here it has no handler or cleanup of its own, so block calls are a
+// plain call_indirect; an SH4 exception thrown by a block still unwinds to mainloop's catch.
+__attribute__((noinline))
 static int c_dispatch_loop(u32 ctx_ptr, u32 ram_base) {
 	typedef void (*block_fn_t)(u32, u32);
 	Sh4Context& ctx = Sh4cntx;

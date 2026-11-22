@@ -46,7 +46,7 @@ emcc -O3 -flto --profiling-funcs \
 	-s EXPORTED_RUNTIME_METHODS='["callMain","ccall","cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8","setValue","getValue","writeArrayToMemory","addRunDependency","removeRunDependency","FS","abort","AL","wasmExports"]' \
 	-s INITIAL_MEMORY=268435456 -s STACK_SIZE=4194304 -s ALLOW_MEMORY_GROWTH=1 -s ALLOW_TABLE_GROWTH \
 	-s ASYNCIFY=1 -s ASYNCIFY_STACK_SIZE=65536 \
-	-s 'ASYNCIFY_REMOVE=["Sh4Interpreter::*","i0*","i1*","addrspace::*","mmu_*","aica::*","Pvr*","pvr*","*ReadMem*","*WriteMem*","sh4_sched_tick*","*TA_*Param*"]' \
+	-s 'ASYNCIFY_REMOVE=["Sh4Interpreter::*","i0*","i1*","addrspace::*","mmu_*","aica::*","Pvr*","pvr*","*ReadMem*","*WriteMem*","sh4_sched_tick*","*TA_*Param*","c_dispatch_loop*"]' \
 	-s EXIT_RUNTIME=0 -s FORCE_FILESYSTEM=1 \
 	-s ERROR_ON_UNDEFINED_SYMBOLS=1 \
 	-s ASSERTIONS=0 -s DISABLE_EXCEPTION_CATCHING=0 -fexceptions \
