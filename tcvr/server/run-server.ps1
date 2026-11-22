@@ -38,12 +38,13 @@ if ($OpenFirewall) {
 		[Security.Principal.WindowsBuiltInRole]::Administrator)
 	if (-not $admin) { Write-Error 'Run PowerShell as administrator for -OpenFirewall' }
 	foreach ($proto in 'TCP', 'UDP') {
+		# Rules allow the port for any program: a rule bound to the exe path can miss when the path
+		# Windows sees differs (shared drives, app folders). Old rules of the same name are replaced.
 		$name = "tcvr-server $proto $Port"
-		if (-not (Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue)) {
-			New-NetFirewallRule -DisplayName $name -Direction Inbound -Action Allow -Protocol $proto `
-				-LocalPort $Port -Program $Exe -Profile Any | Out-Null
-			Write-Host "Firewall: allowed $proto $Port for $Exe"
-		}
+		Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+		New-NetFirewallRule -DisplayName $name -Direction Inbound -Action Allow -Protocol $proto `
+			-LocalPort $Port -Profile Any | Out-Null
+		Write-Host "Firewall: allowed inbound $proto $Port"
 	}
 }
 
