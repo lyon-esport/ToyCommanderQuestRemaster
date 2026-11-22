@@ -7,6 +7,7 @@
 #include "sh4_interrupts.h"
 #if defined(__ANDROID__) && HOST_CPU == CPU_ARM
 #include <fenv.h>
+#include "cfg/option.h"
 #endif
 
 Sh4RCB* p_sh4rcb;
@@ -43,6 +44,11 @@ static u32 old_dn = 0xFF;
 
 static void setHostRoundingMode(u32 roundingMode, u32 denorm2zero)
 {
+	// tcvr: online, subnormal numbers are kept on every host (the SH4 DN bit is ignored): the
+	// float model all players share (Quest, PC, and a WebAssembly build that cannot flush
+	// them). See docs/multiplayer/PC-crossplay-analysis.md.
+	if (config::GGPOEnable)
+		denorm2zero = 0;
 	if (old_rm != roundingMode || old_dn != denorm2zero)
 	{
 		old_rm = roundingMode;

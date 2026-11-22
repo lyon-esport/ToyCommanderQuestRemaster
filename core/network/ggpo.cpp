@@ -892,15 +892,10 @@ void startSession(int localPort, int localPlayerNum)
 		MD5Sum vrMd5;
 		vr::netplayDigest(vrMd5);
 		vrMd5.getDigest(vrWrites);
-		// The CPU: arm64 (the Quest) and x64 don't round the same. The arm64 dynarec does
-		// fmac fused (x64 doesn't online), and its compiler may fuse multiply-adds in the
-		// C code the dynarecs fall back to (fipr, ftrv). Until that's made the same, a
-		// Quest and a PC don't play together.
-#if defined(__aarch64__) || defined(_M_ARM64)
-		const char arch[] = "arm64";
-#else
-		const char arch[] = "other";
-#endif
+		// The float model, not the CPU: online every host computes the SH4's floats the same
+		// way (no fused multiply-add, subnormals kept, see PC-crossplay-analysis.md), so a
+		// Quest (arm64) and a PC (x64) may play together. Bump it whenever that changes.
+		const char arch[] = "tcvr-fp2";
 		if (config::NetplayTestAnyCpu)
 		{
 			// a test: the two sides may differ (and will drift apart)
