@@ -125,7 +125,7 @@ std::atomic<bool> offersDirty { true };		// offer the states on disk to the lobb
 std::string matchStateBase;					// the match's "<game>.state.net" (startMatch)
 std::mutex ownGameMutex;
 std::string ownGamePath;					// the player's own game, kept for the end of the match ("" none)
-std::shared_ptr<std::atomic<bool>> ownGameWritten;	// (written by a thread)
+std::shared_ptr<std::atomic<int>> ownGameWritten;	// (written by a thread: 0 writing, 1 written, -1 failed)
 
 std::string md5Hex(const std::vector<uint8_t>& data)
 {
@@ -234,18 +234,41 @@ void keepOwnGame()
 	if (!dc_serializeAll(*state))
 		return;
 	const std::string path = hostfs::getSavestatePath(-1, true) + ".back";
-	auto done = std::make_shared<std::atomic<bool>>(false);
+	auto done = std::make_shared<std::atomic<int>>(0);
 	ownGamePath = path;
 	ownGameWritten = done;
 	std::thread([state, path, done] {
 		if (dc_writeStateFile(path, *state))
 		{
-			*done = true;
-			NOTICE_LOG(NETWORK, "MP: the player's own game is kept during the match");
+			*done = 1;
+			NOTICE_LOG(NETWORK, "MP: the player's own game is kept");
 		}
 		else
+		{
+			*done = -1;
 			WARN_LOG(NETWORK, "MP: the player's own game could not be kept");
+		}
 	}).detach();
+}
+
+// The kept game loaded (at a game load), and its file removed. False: none kept, or it failed.
+bool loadOwnGame()
+{
+	std::string path;
+	bool written = false;
+	{
+		std::lock_guard<std::mutex> lock(ownGameMutex);
+		if (ownGamePath.empty())
+			return false;
+		path = ownGamePath;
+		written = ownGameWritten && *ownGameWritten == 1;
+		ownGamePath.clear();
+		ownGameWritten.reset();
+	}
+	const bool ok = written && dc_loadStateFile(path);
+	nowide::remove(path.c_str());
+	NOTICE_LOG(NETWORK, "MP: %s", ok ? "the player's own game is back" : "the player's own game could not come back: the game starts again");
+	return ok;
 }
 
 void startMatch(const lobby::View& v)
@@ -964,21 +987,29 @@ void gate()
 
 bool restoreOwnGame()
 {
-	std::string path;
-	bool written = false;
-	{
-		std::lock_guard<std::mutex> lock(ownGameMutex);
-		if (reloading != (int)Reload::BackToLobby || ownGamePath.empty())
-			return false;
-		path = ownGamePath;
-		written = ownGameWritten && *ownGameWritten;
-		ownGamePath.clear();
-		ownGameWritten.reset();
-	}
-	const bool ok = written && dc_loadStateFile(path);
-	nowide::remove(path.c_str());
-	NOTICE_LOG(NETWORK, "MP: %s", ok ? "the player's own game is back" : "the player's own game could not come back: the game starts again");
-	return ok;
+	if (reloading != (int)Reload::BackToLobby)
+		return false;
+	return loadOwnGame();
+}
+
+bool keepPlayerGame()
+{
+	keepOwnGame();
+	std::lock_guard<std::mutex> lock(ownGameMutex);
+	return !ownGamePath.empty();
+}
+
+int playerGameKept()
+{
+	std::lock_guard<std::mutex> lock(ownGameMutex);
+	if (ownGamePath.empty() || !ownGameWritten)
+		return -1;
+	return *ownGameWritten;
+}
+
+bool restorePlayerGame()
+{
+	return loadOwnGame();
 }
 
 bool takeReturn()

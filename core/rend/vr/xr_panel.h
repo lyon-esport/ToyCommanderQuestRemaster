@@ -7,6 +7,7 @@
 #pragma once
 #include "types.h"
 #include <glm/glm.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,14 +24,20 @@ struct PanelLine
 // tcvr: a drawn shape (the multiplayer pages' cards and buttons), in the picture's pixels, top row 0
 struct PanelShape
 {
-	enum Kind : u8 { Box, Triangle } kind = Box;
-	float x0 = 0, y0 = 0, x1 = 0, y1 = 0;	// Box: its corners; Triangle: two of its points
+	enum Kind : u8 { Box, Triangle, Image } kind = Box;
+	float x0 = 0, y0 = 0, x1 = 0, y1 = 0;	// Box, Image: its corners; Triangle: two of its points
 	float x2 = 0, y2 = 0;					// Triangle: the third
 	float radius = 0;						// Box: rounded corners
 	glm::vec4 fill { 0.f };					// alpha 0: not filled
 	glm::vec4 border { 0.f };
 	float borderPx = 0;
 	bool dashed = false;
+	// Image: a picture (RGBA, top row first) scaled into the box, rounded like it; pictureId names the
+	// picture (the panel is painted again when it changes), keep holds it while the panel is painted
+	const u8 *pixels = nullptr;
+	int pixelsW = 0, pixelsH = 0;
+	u32 pictureId = 0;
+	std::shared_ptr<const void> keep;
 };
 
 // tcvr: text placed anywhere (UTF-8): x is its left edge, centre or right edge (align 0, 1, 2), y its

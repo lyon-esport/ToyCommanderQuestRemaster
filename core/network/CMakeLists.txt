@@ -16,6 +16,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         tcvr_inet_proto.cpp
         tcvr_inet_proto.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../deps/monocypher/monocypher.c
+        tcvr_arena_pics.cpp
+        tcvr_arena_pics.h
         tcvr_lobby.cpp
         tcvr_lobby.h
         tcvr_match.cpp

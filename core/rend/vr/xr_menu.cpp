@@ -25,6 +25,7 @@
 #include "network/tcvr_match.h"
 #include "network/tcvr_inet_proto.h"
 #include <random>
+#include "network/tcvr_arena_pics.h"
 #include "input/gamepad.h"
 #include "stdclass.h"
 
@@ -214,6 +215,11 @@ std::vector<Entry> mpEntries()
 			list.push_back({ Action::MpServer });
 		break;
 	case MpPage::Create:
+		if (arena::busy())
+		{
+			list.push_back({ Action::Back });		// (the arena pictures are being made: Back stops it)
+			break;
+		}
 		list.push_back({ Action::MpMode });
 		list.push_back({ Action::MpRoom });
 		list.push_back({ Action::MpPoints });
@@ -372,6 +378,9 @@ void mpShow(MpPage p)
 	mpPage = p;
 	confirming = -1;
 	edit.active = false;
+	// the arena pictures, made once from the player's own disc (a short tour of the game's room select page)
+	if (p == MpPage::Create)
+		tcvr::arena::startIfMissing();
 	if (p == MpPage::Join)
 	{
 		auto& l = tcvr::match::theLobby();
@@ -439,6 +448,8 @@ void goBack()
 {
 	if (page == (int)Section::Multiplayer && mpPage != MpPage::Top)
 	{
+		if (mpPage == MpPage::Create)
+			tcvr::arena::cancel();		// (the arena pictures stop: the player's game comes back)
 		if (mpPage == MpPage::Lobby)
 		{
 			tcvr::match::theLobby().leave();
@@ -1002,8 +1013,22 @@ mp::Screen mpScreen(const std::vector<Entry>& list)
 				: config::VrMpServer.get().empty() ? std::string("Press A to enter its address") : config::VrMpServer.get();
 		break;
 	case MpPage::Create:
-		sc.page = mp::Page::Create;
 		sc.crumb = "Multiplayer" + sep + "Host a game";
+		if (arena::busy())
+		{
+			sc.page = mp::Page::Message;
+			sc.message = arena::progressText() + "\nOnce only, about 20 seconds: your game comes back after.";
+			break;
+		}
+		sc.page = mp::Page::Create;
+		if (const auto pic = arena::picture(mpSettings.room % RoomCount))
+		{
+			sc.picture = pic->rgba.data();
+			sc.pictureW = pic->width;
+			sc.pictureH = pic->height;
+			sc.pictureId = pic->id;
+			sc.pictureKeep = pic;
+		}
 		sc.mode = ModeNames[mpSettings.mode % 3];
 		sc.room = roomName(mpSettings.room % RoomCount);
 		sc.roomIndex = mpSettings.room % RoomCount;
@@ -1143,6 +1168,7 @@ void closeMenu()
 	page = -1;
 	edit.active = false;
 	mpStopSearch();
+	tcvr::arena::cancel();		// (arena pictures being made: they stop, the player's game comes back and runs)
 	resumeGame();
 	NOTICE_LOG(RENDERER, "XR menu: closed");
 }
@@ -1303,6 +1329,9 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 	lastHeadYaw = headYaw;
 	// (also with the menu closed: START from the host arrives whenever it likes)
 	tcvr::match::poll();
+	// the arena pictures made, the player's own game back: frozen behind the menu again
+	if (tcvr::arena::takeFinished() && open && !inMatch())
+		pauseGame();
 	// a match began (the game was loaded again with the netplay on): the menu that started it closes
 	{
 		static bool wasMatch;
