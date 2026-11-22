@@ -1098,3 +1098,200 @@ TEST(TcvrLobby, MatchOverOutsideAMatchDoesNothing)
 	EXPECT_EQ(guest.view().phase, Phase::InLobby);
 	EXPECT_TRUE(host.view().state.players[1].ready);
 }
+
+// ---- match start states (SNAP, SNAPOK) -------------------------------------------------------
+
+TEST(TcvrLobbyCodec, SnapshotCodec)
+{
+	StartInfo s;
+	s.peers = { { "", 19713 }, { "192.0.2.7", 19714 } };
+	s.snapshot = "0123456789abcdef0123456789abcdef";
+	StartInfo out;
+	ASSERT_TRUE(decode(encode(s), out));
+	EXPECT_EQ(out.snapshot, s.snapshot);
+
+	SnapPiece p;
+	p.players = 2;
+	p.id = "abc";
+	p.total = 100;
+	p.offset = 60;
+	p.bytes.assign(40, 7);
+	SnapPiece q;
+	ASSERT_TRUE(decode(encode(p), q));
+	EXPECT_EQ(q.players, 2);
+	EXPECT_EQ(q.id, "abc");
+	EXPECT_EQ(q.total, 100u);
+	EXPECT_EQ(q.offset, 60u);
+	EXPECT_EQ(q.bytes, p.bytes);
+	// past its end, too large, no id, a player count that is no match
+	p.bytes.assign(41, 7);
+	EXPECT_FALSE(decode(encode(p), q));
+	p.bytes.assign(40, 7);
+	p.total = (uint32_t)SnapMax + 1;
+	EXPECT_FALSE(decode(encode(p), q));
+	p.total = 100;
+	p.id.clear();
+	EXPECT_FALSE(decode(encode(p), q));
+	p.id = "abc";
+	p.players = 1;
+	EXPECT_FALSE(decode(encode(p), q));
+
+	uint8_t n;
+	std::string id;
+	ASSERT_TRUE(decodeSnapOk(encodeSnapOk(3, "xyz"), n, id));
+	EXPECT_EQ(n, 3);
+	EXPECT_EQ(id, "xyz");
+}
+
+TEST(TcvrLobbyCodec, OnlyAStatePieceIsLong)
+{
+	SnapPiece p;
+	p.players = 2;
+	p.id = "abc";
+	p.total = (uint32_t)SnapChunk;
+	p.bytes.assign(SnapChunk, 1);
+	const auto frame = encodeFrame(MsgType::Snap, encode(p));
+	FrameParser parser;
+	std::vector<FrameParser::Frame> frames;
+	ASSERT_TRUE(parser.feed(frame.data(), frame.size(), frames));
+	ASSERT_EQ(frames.size(), 1u);
+	EXPECT_EQ(frames[0].type, MsgType::Snap);
+	// any other message that long breaks the stream
+	FrameParser parser2;
+	const auto ping = encodeFrame(MsgType::Ping, std::vector<uint8_t>(4000, 0));
+	EXPECT_FALSE(parser2.feed(ping.data(), ping.size(), frames));
+}
+
+namespace
+{
+
+std::vector<uint8_t> someState(size_t size, uint8_t seed)
+{
+	std::vector<uint8_t> v(size);
+	uint32_t x = seed * 2654435761u + 1;
+	for (auto& b : v)
+	{
+		x = x * 1103515245u + 12345u;
+		b = (uint8_t)(x >> 16);
+	}
+	return v;
+}
+
+}
+
+TEST(TcvrLobby, MatchStartsFromTheHostsState)
+{
+	Net net;
+	Lobby host(fast()), a(fast());
+	net.prepare(host);
+	net.prepare(a);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	// offered before anybody joins: sent as they join (several pieces)
+	const auto two = someState(3 * SnapChunk + 123, 2);
+	host.offerSnapshot(2, "two", two);
+	a.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return a.snapshot(2, "two") != nullptr; }));
+	EXPECT_EQ(*a.snapshot(2, "two"), two);
+	EXPECT_EQ(a.snapshot(2, "other"), nullptr);
+	EXPECT_EQ(a.snapshot(3, "two"), nullptr);
+	EXPECT_EQ(*host.snapshot(2, "two"), two);
+	a.setReady(true);
+	// (no start before the joiner holds the state: canStart waits for its SNAPOK)
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err)) << err;
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::Started; }));
+	EXPECT_EQ(a.view().start.snapshot, "two");
+	EXPECT_EQ(host.view().start.snapshot, "two");
+
+	// a new state offered later reaches the players already there; the next match starts from it
+	a.matchOver();
+	host.matchOver();
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::InLobby && host.view().phase == Phase::InLobby; }));
+	const auto newer = someState(SnapChunk / 2, 9);
+	host.offerSnapshot(2, "newer", newer);
+	a.setReady(true);
+	ASSERT_TRUE(waitFor([&] { return a.snapshot(2, "newer") != nullptr; }));
+	EXPECT_EQ(*a.snapshot(2, "newer"), newer);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err)) << err;
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::Started; }));
+	EXPECT_EQ(a.view().start.snapshot, "newer");
+}
+
+TEST(TcvrLobby, StartWaitsForTheStateToArrive)
+{
+	Net net;
+	Lobby host(fast()), a(fast());
+	net.prepare(host);
+	net.prepare(a);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	a.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	a.setReady(true);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	// a large state offered now: no start until it is there, then the match starts from it
+	const auto big = someState(8 * 1024 * 1024, 5);
+	host.offerSnapshot(2, "big", big);
+	std::string why;
+	const bool rightAway = host.canStart(why);
+	if (!rightAway)
+		EXPECT_EQ(why, "Sending the match to the players");
+	ASSERT_TRUE(waitFor([&] { return host.canStart(why); }, 10000)) << why;
+	ASSERT_TRUE(a.snapshot(2, "big") != nullptr);
+	EXPECT_EQ(*a.snapshot(2, "big"), big);
+	ASSERT_TRUE(host.start(2, err)) << err;
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::Started; }));
+	EXPECT_EQ(a.view().start.snapshot, "big");
+}
+
+TEST(TcvrLobby, NoStateForThatManyPlayers)
+{
+	Net net;
+	Lobby host(fast()), a(fast()), b(fast());
+	net.prepare(host);
+	net.prepare(a);
+	net.prepare(b);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	host.offerSnapshot(2, "two", someState(1000, 2));
+	a.startSearch();
+	b.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return host.view().state.count() == 2; }));
+	ASSERT_TRUE(joinFirst(b, ident("BBB", 19715)));
+	ASSERT_TRUE(waitFor([&] { return a.snapshot(2, "two") != nullptr && b.snapshot(2, "two") != nullptr; }));
+	a.setReady(true);
+	b.setReady(true);
+	ASSERT_TRUE(waitFor([&] { std::string w; return host.canStart(w); }));
+	ASSERT_TRUE(host.start(2, err)) << err;
+	ASSERT_TRUE(waitFor([&] { return a.view().phase == Phase::Started && b.view().phase == Phase::Started; }));
+	// three players: the two-player state is no use, the match starts from the power-on
+	EXPECT_EQ(a.view().start.snapshot, "");
+	EXPECT_EQ(b.view().start.snapshot, "");
+}
+
+TEST(TcvrLobby, NewHostOffersTheStateItGot)
+{
+	Net net;
+	Lobby host(fast()), a(fast());
+	net.prepare(host);
+	net.prepare(a);
+	std::string err;
+	ASSERT_TRUE(host.host(ident("HOS", 19713), {}, err));
+	const auto two = someState(5000, 4);
+	host.offerSnapshot(2, "two", two);
+	a.startSearch();
+	ASSERT_TRUE(joinFirst(a, ident("AAA", 19714)));
+	ASSERT_TRUE(waitFor([&] { return a.snapshot(2, "two") != nullptr; }));
+	host.leave();
+	ASSERT_TRUE(waitFor([&] { return a.view().role == Role::Host && a.view().phase == Phase::InLobby; }));
+	Lobby c(fast());
+	net.prepare(c);
+	c.startSearch();
+	ASSERT_TRUE(joinFirst(c, ident("CCC", 19716)));
+	ASSERT_TRUE(waitFor([&] { return c.snapshot(2, "two") != nullptr; }));
+	EXPECT_EQ(*c.snapshot(2, "two"), two);
+}

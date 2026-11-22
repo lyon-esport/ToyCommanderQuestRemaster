@@ -614,12 +614,7 @@ bool updateMenuLayer(const Panel& panel)
 	if (!initMenuLayer(panel.imageWidth, panel.imageHeight))
 		return false;
 	menuShot();
-	std::string says;
-	for (const PanelLine& line : panel.lines)
-		says += line.text + '\n';
-	says += std::to_string(panel.highlight);
-	for (const PanelLine& line : panel.lines)
-		says += ' ' + std::to_string((int)(line.colour.r * 255.f)) + ',' + std::to_string((int)(line.colour.g * 255.f));
+	const std::string says = panelKey(panel);
 	if (menuLayer.ready && says == menuLayer.shown)
 		return true;
 	u32 index = 0;
@@ -2080,6 +2075,8 @@ void updateGamepad(XrTime time)
 			else
 				swallow = false;
 		}
+		// the menu's own presses on the game's pad (B to leave the game's Multiplayer page)
+		buttons |= gameButtons();
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
