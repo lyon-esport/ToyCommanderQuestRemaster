@@ -1,0 +1,18 @@
+--- a/data/src/cache.js	2026-11-22 02:08:20.100863545 +0000
++++ b/data/src/cache.js	2026-11-22 03:47:59.203957722 +0000
+@@ -217,9 +217,12 @@
+                             }
+                         }
+                         
+-                        const blob = new Blob(chunks);
+-                        const ab = await blob.arrayBuffer();
+-                        data = new Uint8Array(ab);
++                        // tcvr: copy chunks into one Uint8Array (a 500+ MB Blob read back
++                        // from Chromium's disk-backed blob store fails at random with NotReadableError)
++                        data = new Uint8Array(received);
++                        let off = 0;
++                        for (const c of chunks) { data.set(c, off); off += c.length; }
++                        chunks = null;
+                     } else {
+                         data = await resp[responseType]();
+                     }

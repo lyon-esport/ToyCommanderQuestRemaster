@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toy Commander browser speed test</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #111; color: #ddd; font: 14px system-ui, sans-serif; }
+  #wrap { width: 960px; max-width: 100vw; margin: 0 auto; }
+  #game { width: 960px; max-width: 100vw; height: 720px; }
+  #hud { padding: 8px 12px; font-family: ui-monospace, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="game"></div>
+  <div id="hud">Loading...</div>
+</div>
+<script>
+// Test plan (query string): ?script=battle (default) drives 4 pads to a 4-player battle;
+// ?script=none leaves the pads to you. Results go to the local server (/report) and the HUD.
+const params = new URLSearchParams(location.search);
+// the emulator's own speed counter (emulated Dreamcast frames per second) is only on with hud=1
+if (!params.has('hud')) { params.set('hud', '1'); location.replace(location.pathname + '?' + params.toString()); }
+const SCRIPT = params.get('script') || 'battle';
+
+window.EJS_player = '#game';
+if (params.get('debug')) window.EJS_DEBUG_XX = true;
+// ?core=fork: our Toy Commander fork (60 game pictures/s, unlock all); default: stock Flycast WASM
+const CORE = params.get('core') === 'fork' ? 'tcvr' : 'flycast';
+window.EJS_core = CORE;
+window.EJS_gameName = 'Toy Commander (Europe)';
+// ?elf=1: a tiny test program instead of the disc (cloud checks without the game)
+window.EJS_gameUrl = params.get('elf') ? '/disc/test.elf' : '/disc/ToyCommander.chd';
+window.EJS_pathtodata = 'data/';
+window.EJS_startOnLoaded = true;
+window.EJS_threads = false;
+window.EJS_disableLocalStorage = true;
+window.EJS_defaultOptions = {
+  'reicast_hle_bios': 'enabled',
+  'reicast_broadcast': 'NTSC',
+  'reicast_internal_resolution': '640x480',
+  'reicast_threaded_rendering': 'disabled',
+  'reicast_alpha_sorting': 'per-strip (fast, least accurate)',
+  'reicast_frame_skipping': 'disabled',
+  'reicast_gdrom_fast_loading': 'enabled',
+};
+
+const FPS = 60;
+// Dreamcast button -> EmulatorJS input index (libretro joypad): DC A = B(0), START = 3, d-pad 4..7.
+const I = { A: 0, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
+// Boot route from tcvr_match.cpp (frames at 60 Hz): logos, title, card, New Game, name, main menu, Multiplayer.
+const s = (sec, extra = 0) => Math.round(sec * FPS + extra);
+const ROUTE = [
+  [s(3), 0, I.START], [s(7), 0, I.START], [s(11), 0, I.START], [s(15), 0, I.START],
+  [s(19), 0, I.START], [s(24), 0, I.START], [s(25, 30), 0, I.UP],
+  [s(26, 30), 0, I.RIGHT], [s(27, 30), 0, I.RIGHT], [s(28, 30), 0, I.RIGHT], [s(29, 30), 0, I.RIGHT],
+  [s(31), 0, I.A], [s(38), 0, I.DOWN], [s(40), 0, I.A],
+  // team and vehicle page: players 2-4 join (Start) and get ready (A), then player 1 ready
+  [s(44), 1, I.START], [s(44.3), 2, I.START], [s(44.6), 3, I.START],
+  [s(46), 1, I.A], [s(46.3), 2, I.A], [s(46.6), 3, I.A],
+  [s(48), 0, I.A],
+  // options page: keep the defaults, A starts the match (one retry)
+  [s(51), 0, I.A], [s(54), 0, I.A],
+];
+const BATTLE_FROM = s(62);   // the arena should be on screen by then
+
+const hud = document.getElementById('hud');
+const report = (obj) => {
+  obj.t = Math.round(performance.now() / 1000);
+  fetch('/report', { method: 'POST', body: JSON.stringify(obj) }).catch(() => {});
+};
+
+// Forward the emulator's important log lines to results.log (first 200)
+(function () {
+  const KEEP = /libretro ERROR|libretro WARN|SHUTDOWN|SET_MESSAGE|REIOS|Unloading|Exception|Fatal|Game ID|No content|\[ERROR\]/;
+  let sent = 0;
+  for (const k of ['log', 'warn', 'error', 'info']) {
+    const orig = console[k].bind(console);
+    console[k] = (...a) => {
+      orig(...a);
+      try {
+        const line = a.map(String).join(' ');
+        if (sent < 200 && KEEP.test(line)) { sent++; report({ ev: 'log', line: line.slice(0, 400) }); }
+      } catch (e) {}
+    };
+  }
+})();
+
+function gpuName() {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  } catch (e) { return 'unknown'; }
+}
+
+window.EJS_onGameStart = () => {
+  const gm = window.EJS_emulator.gameManager;
+  report({ ev: 'start', ua: navigator.userAgent, isolated: self.crossOriginIsolated, gpu: gpuName(),
+           cores: navigator.hardwareConcurrency, script: SCRIPT, core: CORE });
+  // Game time = emulated Dreamcast frames, from the emulator's own counter (window._flyHudPart, once a
+  // second: "fps" = frames emulated in the last second). RetroArch's frame number follows the screen
+  // (144 Hz here), so it is NOT game time. Between two updates the count is extrapolated.
+  let guestF = 0, lastFps = 0, lastHudT = 0, lastUpd = performance.now(), hudSeen = false;
+  const pollHud = () => {
+    const part = window._flyHudPart;
+    if (!part) return null;
+    try {
+      const h = JSON.parse(part + '}');
+      if (h.t !== lastHudT) {
+        lastHudT = h.t; hudSeen = true;
+        guestF += h.fps; lastFps = h.fps; lastUpd = performance.now();
+        return h;
+      }
+    } catch (e) {}
+    return null;
+  };
+  const gameFrame = () => Math.round(guestF + lastFps * (performance.now() - lastUpd) / 1000);
+  let raf = 0;
+  const samples = { menu: [], battle: [] };
+  const tickRaf = () => { raf++; requestAnimationFrame(tickRaf); };
+  requestAnimationFrame(tickRaf);
+
+  let next = 0, held = [];
+  setInterval(() => {
+    pollHud();
+    const f = gameFrame();
+    held = held.filter(([until, p, i]) => { if (f >= until) { gm.simulateInput(p, i, 0); return false; } return true; });
+    if (SCRIPT !== 'battle' || !hudSeen) return;
+    while (next < ROUTE.length && f >= ROUTE[next][0]) {
+      const [, p, i] = ROUTE[next++];
+      gm.simulateInput(p, i, 1);
+      held.push([f + 9, p, i]);
+    }
+    // in the battle: every player drives and steers left/right in turn, every 2 s of game time
+    if (f > BATTLE_FROM) {
+      const slot = Math.floor(f / 120);
+      if (slot !== window._tcSlot) {
+        window._tcSlot = slot;
+        for (let p = 0; p < 4; p++) {
+          const dir = ((slot + p) % 2) ? I.LEFT : I.RIGHT;
+          gm.simulateInput(p, dir, 1); held.push([f + 40, p, dir]);
+        }
+      }
+    }
+  }, 16);
+
+  // speed: emulated frames per real second (60 = full speed), and pictures shown per second
+  let lastT = performance.now();
+  setInterval(() => {
+    const t = performance.now(), shown = raf * 1000 / (t - lastT);
+    lastT = t; raf = 0;
+    const f = gameFrame();
+    const emu = lastFps;
+    const phase = SCRIPT === 'battle' && f > BATTLE_FROM ? 'battle' : 'menu';
+    if (hudSeen) samples[phase].push(emu);
+    const avg = (a) => a.length ? (a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : '-';
+    const min = (a) => a.length ? Math.min(...a).toFixed(1) : '-';
+    hud.textContent = `game frame ${f}  game speed ${emu} fps (60 = full)  screen ${shown.toFixed(0)} Hz  phase ${phase}` +
+      (hudSeen ? '' : '  (no emulator counter yet)') + `\n` +
+      `menus/title: avg ${avg(samples.menu)} min ${min(samples.menu)}   4-player battle: avg ${avg(samples.battle)} min ${min(samples.battle)}`;
+    let extra = {};
+    try { extra = JSON.parse(window._flyHudPart + '}'); } catch (e) {}
+    report({ ev: 'speed', frame: f, emu, shown: +shown.toFixed(0), phase, hud: extra });
+  }, 1000);
+
+  // a picture of the game every 15 s, for checking where the script got to
+  setInterval(async () => {
+    try {
+      const png = await gm.screenshot();
+      fetch('/shot?f=' + gameFrame(), { method: 'POST', body: png });
+    } catch (e) {}
+  }, 15000);
+};
+</script>
+<script src="data/loader.js"></script>
+</body>
+</html>

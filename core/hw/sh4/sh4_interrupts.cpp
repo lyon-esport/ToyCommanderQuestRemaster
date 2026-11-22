@@ -230,7 +230,11 @@ void Do_Exception(u32 epc, Sh4ExceptionCode expEvn)
 	}
 #endif
 	if (Sh4cntx.sr.BL != 0)
-		throw FlycastException("Fatal: SH4 exception when blocked");
+	{
+		char msg[128];
+		snprintf(msg, sizeof(msg), "Fatal: SH4 exception when blocked (evn %03x epc %08x)", (u32)expEvn, epc);
+		throw FlycastException(msg);
+	}
 	CCN_EXPEVT = expEvn;
 
 	Sh4cntx.ssr = Sh4cntx.sr.getFull();

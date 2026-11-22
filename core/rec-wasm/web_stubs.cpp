@@ -22,4 +22,7 @@ void lightgunSet(int player, int x, int y, u32 buttons)
 {
 	(void)player; (void)x; (void)y; (void)buttons;
 }
+
+// the UDP command channel (core/input/udp_lightgun.cpp) is not in this build
+std::string (*udpCommandHook)(const char *command);
 #endif

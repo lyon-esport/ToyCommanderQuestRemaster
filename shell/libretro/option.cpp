@@ -171,4 +171,76 @@ std::array<std::array<Option<int>, 2>, 4> NetworkExpansionDevices{{
 }};
 Option<bool> UsePhysicalVmuMemory(CORE_OPTION_NAME "_linked_vmu_storage", false);
 
+// tcvr: our options used by the portable core. The browser build is a libretro core, which
+// takes its options from this file: same defaults as the native builds (generated from
+// core/cfg/option.cpp); the headset-only ones are not used but must exist.
+Option<bool> VrReproject("", false);
+Option<float> VrFocal("", 640.f);	// the game's stock focal length, in DC pixels
+Option<int> VrProjAddr("", 0);
+Option<int> VrViewportAddr("", 0);
+Option<float> VrFovScale("", 1.f);	// widen the game's view by this factor (tan of the half angle)
+Option<float> VrHudW("", 1.f);		// the W the game draws its 2D overlay at (sprites, text, letterbox)
+Option<bool> VrHideLetterbox("", true);	// drop opaque black overlay (cinematic bars)
+Option<float> VrHudDepth("", 40.f);	// game units in front of the game camera
+Option<float> VrYaw("", 0.f);			// degrees
+Option<float> VrPitch("", 0.f);		// degrees
+Option<float> VrOffsetX("", 0.f);	// game units
+Option<float> VrOffsetY("", 0.f);
+Option<float> VrOffsetZ("", 0.f);
+Option<bool> VrAnimate("", false);		// sway the free camera by the amplitudes above
+Option<int> VrUdpPort("", 0);	// lightgun input over UDP on 127.0.0.1, 0 = off
+#ifdef __ANDROID__
+Option<bool> VrXr("", true);			// immersive view in the headset
+#else
+Option<bool> VrXr("", false);			// PCVR (OpenXR), when asked: the PCVR zip's emu.cfg does
+#endif
+Option<bool> VrXrGun("", true);		// the controllers drive the light gun (the one that fires holds it)
+Option<bool> VrWiden("", true);		// let the game profile widen the view (vr.FovScale)
+Option<float> VrWorldScale("", 0.2f);	// tcvr default 0.2 (VR menu world size 182%, its maximum); metres per game unit (HOTD2's camera rides 15 units over the street: eye height)
+Option<float> VrXrResolution("", 1.3f);	// eye buffer size, times the recommended size (tcvr default 1.3, chosen on the headset 2026-11-17)
+Option<int> VrMsaa("", 2);		// smooth edges: multisampling, e.g. 4 (the Quest only; 1: off)
+Option<int> VrXrRefreshRate("", 120);	// Hz (tcvr default: 120)
+Option<bool> VrLaser("", true);		// aim line and dot from the gun
+Option<bool> VrShowGun("", true);	// a gun in the shooting hand
+Option<float> VrGunScale("", 0.68f);	// its size, times the model's (24.7 cm long); 0.68: 17 cm, a compact pistol
+Option<bool> VrGameHands("", true);	// the agent's own hands and pistol from the game, when files/hands.bin is there
+Option<float> VrHandScale("", 1.f);	// their size, times the ripped model's (a 20 cm pistol)
+Option<bool> VrSlideReload("", true);	// with them, the other hand racks the slide to reload
+Option<bool> VrStaffHand("", false);	// the hero's glove around his staff (The Maze of the Kings)
+Option<int> VrDebugShots("", 0);	// PC test aid: a screenshot every N seconds of game time (0: off)
+Option<bool> VrDualWield("", true);	// the left controller's Start: player 2 joins, a gun in each hand
+Option<bool> VrHideP2Prompt("", true);	// no "PRESS START BUTTON" for player 2 floating in the room
+Option<bool> VrHandsPrep("", false);	// PC: with no hands model, run the game to its game over scene for one (the headset always does)
+Option<float> VrComfortStart("", 0.8f);	// metres; closer things get pulled back (0: off)
+Option<float> VrComfortMin("", 0.4f);	// metres; ...but never closer than this
+Option<bool> VrAimWidened("", false);	// aim on the widened view (the game's hit test uses its stock view)
+Option<bool> VrWidenFov("", true);	// widen through the game's field of view when its profile knows where
+Option<bool> VrDropShotMarker("", true);	// hide the game's own 2D shot marker after shots into 3D
+Option<bool> VrDropShotFlash("", true);	// hide a bright full-screen flash right after any shot
+Option<bool> VrForce60Hz("", true);	// tcvr: run Toy Commander (Europe) at 60 Hz (NTSC broadcast), not 50 Hz PAL
+Option<bool> VrGame60("", true);	// tcvr: Toy Commander draws 60 pictures/s in missions too (stock: 30); attract demos stay at 30
+Option<bool> VrShowFps("", true);	// tcvr: frame-rate counter (default on since 2026-11-17) at the bottom right of the view
+Option<float> VrTexLodBias("", 0.f);	// tcvr: texture mipmap bias, negative = sharper far textures (e.g. -0.5; 0: stock)
+Option<bool> VrUploadOnce("", true);	// tcvr: the kept game frame's vertices go to the GPU once per game picture, not per eye
+Option<bool> VrDiscardDepth("", true);	// tcvr: drop each eye's depth/stencil after drawing (not written out to memory)
+Option<int> VrFoveation("", 1);	// tcvr: fixed foveated rendering, fewer pixels at the lens edges: 0 off, 1 on (the runtime's high level; the Quest only)
+Option<float> VrComfortVignette("", 1.f);	// tcvr: darken the view's edges while it turns on its own: 0 off, 1 low, 2 medium, 3 high (0..1 scales low)
+Option<int> VrHeadCameraLead("", -1);	// tcvr: head camera: how far ahead (ms) to aim the game camera at the head's turn; -1 measured, 0 none
+Option<int> VrHeadCamera("", 2);	// tcvr: the head turns the game camera (Toy Commander): 0 off, 1 yaw, 2 yaw and pitch (default, chosen after the worn test 2026-11-18)
+Option<int> VrMpLocalPlayer("", 0);	// tcvr: split screen shows only this player's view (1..4, test without netplay); 0 auto: the netplay local player; -1 off: every view, as stock
+OptionString VrMpName("", "");
+Option<int> VrMpMarker("", 0);
+Option<bool> VrMpReturn("", false);
+OptionString VrMpNames("", "");	// tcvr: the match's player names in player order, "AAA,BBB" (for "BBB left")
+OptionString VrMpEndText("", "");	// tcvr: why the last match ended, for the VR menu after the restart
+Option<int> VrMpTestEnd("", 0);	// tcvr: TEST ONLY (never set by the menu): at this netplay frame team 1 reaches the match limit, the game ends the match (results page); 0 off
+OptionString VrMpSetup("", "");	// tcvr: the match's settings from the lobby, "mode,room,points" (the automatic setup enters them)
+#ifdef USE_OPENXR
+Option<int> VrUpscaleCache("", 2);
+#else
+Option<int> VrUpscaleCache("", 0);
+#endif
+OptionString GGPOPeers("", "");
+Option<int> GGPOPlayer("", 0);
+
 } // namespace config

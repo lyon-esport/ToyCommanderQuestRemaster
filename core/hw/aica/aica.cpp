@@ -11,6 +11,10 @@
 #include <emscripten.h>
 #endif
 
+#ifdef __EMSCRIPTEN__
+extern double g_fly_rp[10];	// render-phase timers (rend/gles/gles.cpp), global namespace
+#endif
+
 namespace aica
 {
 
@@ -92,7 +96,6 @@ static int AicaUpdate(int tag, int cycles, int jitter, void *arg)
 #ifdef __EMSCRIPTEN__
 	// Render-phase timer [5]: ARM7 interpreter slice (fires at 44.1kHz —
 	// get_now pairs add ~1-2% skew; diagnostic-grade, not verdict-grade).
-	extern double g_fly_rp[10];
 	double fly_t0 = emscripten_get_now();
 	arm::run(1);
 	g_fly_rp[5] += emscripten_get_now() - fly_t0;
@@ -108,7 +111,6 @@ static int AicaUpdate(int tag, int cycles, int jitter, void *arg)
 void timeStep()
 {
 #ifdef __EMSCRIPTEN__
-	extern double g_fly_rp[10];
 	double fly_t0 = emscripten_get_now();
 #endif
 	for (auto& timer : timers)

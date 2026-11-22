@@ -72,3 +72,4 @@ AGENTS.md
 *.jks
 *.keystore
 keystore.properties
+build-web/
