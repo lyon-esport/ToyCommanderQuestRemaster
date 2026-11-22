@@ -169,6 +169,9 @@ void noteMatch(const rend_context& ctx, int count, const View *views, int clipPl
 			ctx.fb_W_SOF1 & 0xffffff, (u32)ctx.verts.size(), clipPlayer + 1, fbPlayer + 1, vertPlayer + 1, text);
 }
 
+// the game's safe-area inset of a HUD row from the screen's edge, in lines of a 480-line screen (measured)
+constexpr float SafeInset = 34.f;
+
 // The HUD of a view that is not the screen's shape (two players: a band the full width, half the
 // height). The 2D is scaled up by the smaller ratio only (x1 for a band), so its parts would stay in
 // a strip across the middle of the plane: each 2D polygon is moved instead so that its centre takes
@@ -216,11 +219,40 @@ void placeHudByEdge(rend_context& ctx, const glm::vec4& view, const RenderPass& 
 			}
 			if (!flat)
 				continue;
-			const glm::vec2 offset = (lo + hi) * 0.5f - centre;
-			// 0 in the middle 40% of the band, 1 from 70% out, smooth between (per axis)
-			const glm::vec2 out = glm::clamp((glm::abs(offset) / half - 0.4f) / 0.3f, 0.f, 1.f);
-			const glm::vec2 weight = out * out * (3.f - 2.f * out);
-			const glm::vec2 delta = offset * move * weight;
+			const glm::vec2 c = (lo + hi) * 0.5f;
+			const glm::vec2 offset = c - centre;
+			glm::vec2 delta(0.f);
+			for (int a = 0; a < 2; a++)
+			{
+				if (move[a] < 0.1f)
+				{
+					// not the band's long axis: 0 in the middle 40%, 1 from 70% out, smooth between
+					const float out = std::clamp((std::abs(offset[a]) / half[a] - 0.4f) / 0.3f, 0.f, 1.f);
+					delta[a] = offset[a] * move[a] * out * out * (3.f - 2.f * out);
+					continue;
+				}
+				// The band's long axis. The game insets each band's HUD from the screen's edges (the TV's safe
+				// area), not from the band: on the band edge that is a screen edge its rows sit SafeInset in,
+				// on the inner edge (between the two bands) flush with it. Each row goes to the nearer edge
+				// of the whole screen, at the same distance from it as a one-player HUD: the screen-edge rows
+				// where they are drawn, the inner-edge rows SafeInset further in. The same place for player 1
+				// and player 2 (before, by the distance from the band's centre: player 2's HUD about 100 px
+				// off player 1's).
+				const float full = a == 0 ? (float)width : (float)height;
+				const float safe = SafeInset * full / 480.f;
+				const float b0 = view[a], b1 = view[a] + view[a + 2];
+				const bool nearStart = c[a] - b0 < b1 - c[a];
+				const bool screenEdge = nearStart ? b0 <= 2.f : b1 >= full - 2.f;
+				const float d = nearStart ? c[a] - b0 : b1 - c[a];		// from its band edge
+				const float target = nearStart ? (screenEdge ? d : safe + d) : full - (screenEdge ? d : safe + d);
+				// only rows near the edges (gauges, icons, counters): the sight and the lock-on marks over
+				// the 3D stay; 1 up to 40% of the half band from the edge (the safe inset left out), 0 from 60%
+				const float inner = (d - (screenEdge ? safe : 0.f)) / half[a];
+				const float out = std::clamp((0.6f - inner) / 0.2f, 0.f, 1.f);
+				// shown at (p - centre) * scale + full / 2
+				const float wanted = centre[a] + (target - full * 0.5f) / scale;
+				delta[a] = (wanted - c[a]) * out * out * (3.f - 2.f * out);
+			}
 			if (delta.x == 0.f && delta.y == 0.f)
 				continue;
 			for (u32 i = pp.first; i < pp.first + pp.count; i++)

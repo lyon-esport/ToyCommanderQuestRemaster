@@ -303,7 +303,10 @@ if(MSVC)
 else()
 	target_compile_options(${PROJECT_NAME} PRIVATE
 		$<$<COMPILE_LANGUAGE:CXX>:-fno-strict-aliasing>
-		$<$<COMPILE_LANGUAGE:CXX>:-Wall>)
+		$<$<COMPILE_LANGUAGE:CXX>:-Wall>
+		# tcvr: no fused multiply-add from the compiler (clang fuses by default on arm64):
+		# online, a Quest and a PC must round the same (MSVC never fuses without /fp:contract)
+		-ffp-contract=off)
 endif()
 
 if(APPLE AND NOT IOS)
