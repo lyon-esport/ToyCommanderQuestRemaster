@@ -45,6 +45,20 @@ struct Painter
 		s.dashed = dashed;
 		panel.shapes.push_back(s);
 	}
+	// a picture scaled into a box with rounded corners
+	void picture(float x0, float y0, float x1, float y1, float r, const u8 *pixels, int w, int h, u32 id, std::shared_ptr<const void> keep)
+	{
+		PanelShape s;
+		s.kind = PanelShape::Image;
+		s.x0 = x0; s.y0 = y0; s.x1 = x1; s.y1 = y1;
+		s.radius = r;
+		s.pixels = pixels;
+		s.pixelsW = w;
+		s.pixelsH = h;
+		s.pictureId = id;
+		s.keep = std::move(keep);
+		panel.shapes.push_back(s);
+	}
 	void triangle(float ax, float ay, float bx, float by, float cx, float cy, glm::vec3 colour)
 	{
 		PanelShape s;
@@ -309,6 +323,21 @@ void createPage(Painter& p, const Screen& s, std::vector<Rect>& rects)
 	}
 	// the arena's card
 	const Rect c { 880.f, 140.f, W - Margin, 540.f };
+	if (s.picture != nullptr && s.pictureW > 0 && s.pictureH > 0)
+	{
+		// the game's whole room select screen (the house, the room's name in yellow), shrunk to fit the card
+		p.box(c.x0, c.y0, c.x1, c.y1, 22.f, rgb(0x0e1116), CardEdge, 4.f);
+		const float cw = c.x1 - c.x0 - 8.f, ch = c.y1 - c.y0 - 8.f;
+		const float scale = std::min(cw / s.pictureW, ch / s.pictureH);
+		const float w = s.pictureW * scale, h = s.pictureH * scale;
+		const float x0 = (c.x0 + c.x1 - w) * 0.5f, y0 = (c.y0 + c.y1 - h) * 0.5f;
+		p.picture(x0, y0, x0 + w, y0 + h, 18.f, s.picture, s.pictureW, s.pictureH, s.pictureId, s.pictureKeep);
+		p.chip("Arena " + std::to_string(s.roomIndex + 1) + " / " + std::to_string(s.roomCount), c.x1 - 20.f, c.y0 + 40.f,
+				rgb(0x5a1f1a), LeaveText, 26.f, 2);
+		p.text("Friends on the same Wi-Fi find your game in Join a game. You start the match from the lobby when everyone is ready.",
+				c.x0, 600.f, 28.f, Soft, 0, c.x1 - c.x0);
+		return;
+	}
 	p.box(c.x0, c.y0, c.x1, c.y1, 22.f, rgb(0x6b4b2a));
 	for (int k = 0; k < 8; k++)	// (planks, a floor of the toy house)
 		if (k % 2 == 0)

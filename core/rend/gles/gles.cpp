@@ -1647,6 +1647,27 @@ const rend_context *gles_vr_frame() {
 	return vrFrameValid ? &vrFrame : nullptr;
 }
 
+// tcvr: the arena picture tour (tcvr_arena_pics.h): what the headset shows of the game, drawn flat (no eye:
+// the stock view) into a 640 x 480 picture and read back. RGB, top row first. The render thread, between
+// two headset frames.
+bool gles_vr_grab_flat(std::vector<u8>& rgb, int& width, int& height)
+{
+	if (!vrFrameValid || vrShowFramebuffer || renderer == nullptr || !isOpenGL(config::RendererType)
+			|| vr::xr::currentEye() != nullptr)
+		return false;
+	return static_cast<OpenGLRenderer *>(renderer)->GrabVrFrameFlat(rgb, width, height);
+}
+
+bool OpenGLRenderer::GrabVrFrameFlat(std::vector<u8>& rgb, int& width, int& height)
+{
+	rend_context *was = gl.rendContext;
+	gl.rendContext = &vrFrame;
+	const bool ok = renderFrame(640, 480);		// (the next eye uploads the frame's vertices again)
+	gl.rendContext = was;
+	width = height = 0;
+	return ok && GetLastFrame(rgb, width, height);
+}
+
 void gles_vr_draw_eye(int width, int height)
 {
 	if (renderer != nullptr && isOpenGL(config::RendererType))
