@@ -110,3 +110,17 @@ the mission table's target (+0x4C), else to 2, then runs the unlock rules `0x8C0
 | `0x8C024080` | script statement 151: writes team scores, cat team and kill table |
 | `0x8C04BE04` | split-screen sound update: listeners `0x8C0D58F4` (player +0x184 matrices), count `0x8C0A72DC`; sources 128 x 0x9C at `0x8C0DA3B4` keep per-listener distance (+0x14 + 4i) and position (+0x3C + 0x0Ci) |
 | `0x8C04AED2` | sound random pitch uses the game rand `0x8C068220`: per-headset sound changes inside the game would desync netplay |
+
+## One-player room select page (2026-11-22, live on PC; the arena picture tour, `core/network/tcvr_arena_pics.cpp`)
+
+| Address | Meaning |
+|---|---|
+| `0x8C0A5A6C` | menu request word: `0x00200023` title, `0x0002002x` main menu (bit `0x20000`, "One player" picked first), bit `0x40` room select page (`0x63`) |
+| `0x8C0A5A78` | room select page cursor = room 0..7 (the arenas' order); writing it changes the room the next frame |
+| `0x8C0A6040` | the previous cursor (the page notices a change by comparing both) |
+| `0x8C0A603C` | the house's turn offset (eased, plus a slow idle turn); 0 written every frame holds each room's own angle |
+| `0x8C0A5A5C` | rooms unlocked (u16); `0x00FF` shows every name and stills the house; a locked room shows "Coming Soon!" and a pulsing red highlight |
+
+Route with no memory card in either slot (no save written, no name or profile page): START every 1.5 s from 2 s
+(logos, title, "insert a memory card" warning), START once the main menu has been there 0.6 s, room page at
+about 11.7 s of game time. A room's view is still 0.4 s after the cursor write.

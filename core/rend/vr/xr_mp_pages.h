@@ -61,6 +61,12 @@ struct Screen
 	// the host page
 	std::string mode, room, limitLabel, limit;
 	int roomIndex = 0, roomCount = 1;
+	// the arena's picture (the game's own room select page, tcvr_arena_pics.h): RGBA, top row first;
+	// none: the drawn card. pictureId names it, pictureKeep holds it while the page is painted.
+	const u8 *picture = nullptr;
+	int pictureW = 0, pictureH = 0;
+	u32 pictureId = 0;
+	std::shared_ptr<const void> pictureKeep;
 	// the games found
 	std::vector<GameCard> games;
 	std::string address;			// "Join by address", or the text being edited

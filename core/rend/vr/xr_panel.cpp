@@ -239,8 +239,50 @@ float boxDistance(float px, float py, float x0, float y0, float x1, float y1, fl
 	return std::sqrt(ox * ox + oy * oy) + std::min(std::max(qx, qy), 0.f) - r;
 }
 
+// tcvr: a picture scaled into a rounded box (bilinear)
+void image(const PanelShape& s)
+{
+	if (s.pixels == nullptr || s.pixelsW <= 0 || s.pixelsH <= 0 || s.x1 <= s.x0 || s.y1 <= s.y0)
+		return;
+	const int bx0 = (int)std::floor(s.x0) - 1, bx1 = (int)std::ceil(s.x1) + 1;
+	const int by0 = (int)std::floor(s.y0) - 1, by1 = (int)std::ceil(s.y1) + 1;
+	const float sx = s.pixelsW / (s.x1 - s.x0), sy = s.pixelsH / (s.y1 - s.y0);
+	for (int y = by0; y <= by1; y++)
+		for (int x = bx0; x <= bx1; x++)
+		{
+			const float px = x + 0.5f, py = y + 0.5f;
+			const float cover = std::clamp(0.5f - boxDistance(px, py, s.x0, s.y0, s.x1, s.y1, s.radius), 0.f, 1.f);
+			if (cover <= 0.f)
+				continue;
+			const float u = std::clamp((px - s.x0) * sx - 0.5f, 0.f, s.pixelsW - 1.f);
+			const float v = std::clamp((py - s.y0) * sy - 0.5f, 0.f, s.pixelsH - 1.f);
+			const int u0 = (int)u, v0 = (int)v;
+			const int u1 = std::min(u0 + 1, s.pixelsW - 1), v1 = std::min(v0 + 1, s.pixelsH - 1);
+			const float fu = u - u0, fv = v - v0;
+			auto at = [&](int uu, int vv) { return &s.pixels[((size_t)vv * s.pixelsW + uu) * 4]; };
+			const u8 *a = at(u0, v0), *b = at(u1, v0), *c = at(u0, v1), *d = at(u1, v1);
+			glm::vec3 colour;
+			float alpha = 0.f;
+			for (int k = 0; k < 4; k++)
+			{
+				const float top = a[k] + (b[k] - a[k]) * fu, bottom = c[k] + (d[k] - c[k]) * fu;
+				const float val = (top + (bottom - top) * fv) / 255.f;
+				if (k < 3)
+					colour[k] = val;
+				else
+					alpha = val;
+			}
+			blend(x, y, colour, alpha * cover);
+		}
+}
+
 void shape(const PanelShape& s)
 {
+	if (s.kind == PanelShape::Image)
+	{
+		image(s);
+		return;
+	}
 	if (s.kind == PanelShape::Triangle)
 	{
 		if (s.fill.a <= 0.f)
@@ -530,6 +572,11 @@ std::string panelKey(const Panel& panel)
 		snprintf(buf, sizeof(buf), "%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.1f %d", s.fill.r, s.fill.g, s.fill.b, s.fill.a,
 				s.border.r, s.border.g, s.border.b, s.border.a, s.borderPx, (int)s.dashed);
 		key += buf;
+		if (s.kind == PanelShape::Image)
+		{
+			snprintf(buf, sizeof(buf), " I%u %dx%d", s.pictureId, s.pixelsW, s.pixelsH);
+			key += buf;
+		}
 	}
 	for (const PanelText& t : panel.texts)
 	{

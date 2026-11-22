@@ -37,6 +37,12 @@
 	answers "PEEKR <address> <bytes as hex>" to the sender: main RAM as the game sees it (the
 	netplay test steers a hunting player from both vehicles' positions).
 
+		TOUR
+
+	starts the arena picture tour now (tcvr_arena_pics.h), even with the pictures there; answers
+	"TOURR <started|refused>" to the sender. TOUR STATE answers "TOURR <busy|idle> <progress>";
+	TOUR CANCEL stops it (as leaving the page does).
+
 	Copyright 2026 mikermak. This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #include "udp_lightgun.h"
@@ -50,6 +56,7 @@
 #include "rend/vr_reproject.h"
 #include "ui/gui.h"
 #include "hw/sh4/sh4_mem.h"
+#include "network/tcvr_arena_pics.h"
 
 #include <algorithm>
 #include <atomic>
@@ -104,6 +111,18 @@ std::string handle(const char *msg)
 	int l, r;
 	if (strncmp(msg, "MP ", 3) == 0)
 		return udpCommandHook != nullptr ? udpCommandHook(msg + 3) : std::string("MPR none");
+	if (strcmp(msg, "TOUR STATE") == 0)
+		return std::string("TOURR ") + (tcvr::arena::busy() ? "busy " : "idle ") + tcvr::arena::progressText();
+	if (strcmp(msg, "TOUR CANCEL") == 0)
+	{
+		tcvr::arena::cancel();
+		return "TOURR cancel";
+	}
+	if (strcmp(msg, "TOUR") == 0)
+	{
+		// (the render thread starts it at its next loop)
+		return std::string("TOURR ") + (tcvr::arena::forceStart() ? "started" : "refused");
+	}
 	if (strncmp(msg, "SHOT ", 5) == 0)
 	{
 		gui_saveScreenshotTo(msg + 5);
