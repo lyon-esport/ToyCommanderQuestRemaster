@@ -1635,7 +1635,18 @@ void retro_run()
 			fly_owed += elapsed / period_ms;
 		else
 			fly_owed = 1;
-		if (fly_owed > 3)
+		// tcvr: the shed limit is in vblanks. A 30-pictures/s game repays 2 vblanks per render,
+		// so with renders that take more than one display period the debt can pass 3 in normal
+		// play and was thrown away (measured: 4-player battle stuck near 44 renders/s with a
+		// third of the main thread idle). Test override: ?shed=N in the page URL.
+		static const double fly_shed = []() {
+			int v = EM_ASM_INT({
+				var m = /[?&]shed=([0-9]+)/.exec(location.search);
+				return m ? (m[1] | 0) : 0;
+			});
+			return v >= 2 && v <= 30 ? (double)v : 3.0;
+		}();
+		if (fly_owed > fly_shed)
 			fly_owed = 1;                       // shed unpayable debt
 		fly_frames_to_run = (int)fly_owed;
 		if (fly_frames_to_run > 2)
@@ -1747,9 +1758,10 @@ void retro_run()
 					+ ',"rp_er":' + (+$13.toFixed(2))
 					+ ',"rp_aica":' + (+$14.toFixed(2))
 					+ ',"owed":' + (+$15.toFixed(2))
-					+ ',"wq":' + wq + ',"un":' + un + ',"dr":' + dr;
+					+ ',"wq":' + wq + ',"un":' + un + ',"dr":' + dr
+					+ ',"vbl":' + (+$8.toFixed(1));
 			}, frame_count, base_fps, frame_time_min, avg_ft, frame_time_max,
-			   (int)abuf, aud_prod_rate, g_aud_overflow_events, g_aud_shortfall_frames,
+			   (int)abuf, aud_prod_rate, g_aud_overflow_events, g_fly_rp[6],	// tcvr: $8 = vblanks emulated this second (true game speed, 59.94 = full)
 			   fly_core_ticks > 0 ? fly_core_ms_sum / fly_core_ticks : 0.0,
 			   g_fly_rp[3] > 0 ? (g_fly_rp[0] - g_fly_rp[1]) / g_fly_rp[3] : 0.0,
 			   g_fly_rp[3] > 0 ? g_fly_rp[1] / g_fly_rp[3] : 0.0,

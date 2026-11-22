@@ -111,12 +111,15 @@ window.EJS_onGameStart = () => {
       const h = JSON.parse(part + '}');
       if (h.t !== lastHudT) {
         lastHudT = h.t; hudSeen = true;
-        guestF += h.fps; lastFps = h.fps; lastUpd = performance.now();
+        guestF += h.fps; lastFps = h.fps; lastVbl = h.vbl; lastUpd = performance.now();
         return h;
       }
     } catch (e) {}
     return null;
   };
+  // speed = vblanks emulated per second when the core reports them (59.94 = full speed; a game
+  // drawing 30 pictures/s shows 30 in "fps" at full speed), else pictures per second
+  let lastVbl;
   const gameFrame = () => Math.round(guestF + lastFps * (performance.now() - lastUpd) / 1000);
   let raf = 0;
   const samples = { menu: [], battle: [] };
@@ -153,7 +156,7 @@ window.EJS_onGameStart = () => {
     const t = performance.now(), shown = raf * 1000 / (t - lastT);
     lastT = t; raf = 0;
     const f = gameFrame();
-    const emu = lastFps;
+    const emu = lastVbl !== undefined ? Math.round(lastVbl) : lastFps;
     const phase = SCRIPT === 'battle' && f > BATTLE_FROM ? 'battle' : 'menu';
     if (hudSeen) samples[phase].push(emu);
     const avg = (a) => a.length ? (a.reduce((x, y) => x + y, 0) / a.length).toFixed(1) : '-';
