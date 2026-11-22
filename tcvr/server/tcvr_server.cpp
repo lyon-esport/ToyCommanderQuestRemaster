@@ -169,6 +169,21 @@ public:
 	Server(asio::io_context& io, const Options& opt, const KeyPair& key)
 		: io(io), opt(opt), key(key), acceptor(io), udpSock(io), tick(io) {}
 
+	// One server per port. On Windows SO_REUSEADDR lets a second copy bind the same port and steal
+	// connections, so ask for exclusive use there; elsewhere SO_REUSEADDR only allows a quick restart.
+	template<typename Sock>
+	static void portOptions(Sock& sock, bool tcp, asio::error_code& ec)
+	{
+#ifdef _WIN32
+		BOOL on = TRUE;
+		::setsockopt(sock.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&on, sizeof(on));
+		(void)tcp;
+#else
+		if (tcp)
+			sock.set_option(asio::socket_base::reuse_address(true), ec);
+#endif
+	}
+
 	bool start()
 	{
 		asio::error_code ec;
@@ -177,7 +192,7 @@ public:
 		if (!ec)
 		{
 			acceptor.set_option(asio::ip::v6_only(false), ec);
-			acceptor.set_option(asio::socket_base::reuse_address(true), ec);
+			portOptions(acceptor, true, ec);
 			acceptor.bind(tcp::endpoint(tcp::v6(), opt.port), ec);
 		}
 		if (ec)
@@ -185,20 +200,21 @@ public:
 			acceptor.close();
 			ec.clear();
 			acceptor.open(tcp::v4(), ec);
-			acceptor.set_option(asio::socket_base::reuse_address(true), ec);
+			portOptions(acceptor, true, ec);
 			acceptor.bind(tcp::endpoint(tcp::v4(), opt.port), ec);
 		}
 		if (!ec)
 			acceptor.listen(asio::socket_base::max_listen_connections, ec);
 		if (ec)
 		{
-			logLine("Can't listen on TCP port %u: %s", opt.port, ec.message().c_str());
+			logLine("Can't listen on TCP port %u (is another tcvr-server already running?): %s", opt.port, ec.message().c_str());
 			return false;
 		}
 		udpSock.open(udp::v6(), ec);
 		if (!ec)
 		{
 			udpSock.set_option(asio::ip::v6_only(false), ec);
+			portOptions(udpSock, false, ec);
 			udpSock.bind(udp::endpoint(udp::v6(), opt.port), ec);
 		}
 		if (ec)
@@ -206,11 +222,12 @@ public:
 			udpSock.close();
 			ec.clear();
 			udpSock.open(udp::v4(), ec);
+			portOptions(udpSock, false, ec);
 			udpSock.bind(udp::endpoint(udp::v4(), opt.port), ec);
 		}
 		if (ec)
 		{
-			logLine("Can't listen on UDP port %u: %s", opt.port, ec.message().c_str());
+			logLine("Can't listen on UDP port %u (is another tcvr-server already running?): %s", opt.port, ec.message().c_str());
 			return false;
 		}
 		accept();
