@@ -33,6 +33,7 @@
 #include "profiler/fc_profiler.h"
 #include "oslib/i18n.h"
 #include "network/tcvr_match.h"
+#include "network/tcvr_arena_pics.h"
 
 #include <chrono>
 #include <thread>
@@ -61,6 +62,8 @@ bool mainui_rend_frame()
 		gui_cancel_network();
 	// tcvr: the desktop drives the match loop when no headset runs the VR menu
 	gui_tcvr_poll(vr::xr::enabled() && vr::xr::hasSession());
+	// tcvr: the arena picture tour (its game loads, its frames are grabbed, the player's game comes back)
+	tcvr::arena::poll();
 
 	if (gui_is_open())
 	{

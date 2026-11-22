@@ -41,6 +41,7 @@
 #include "hw/arm7/arm7_rec.h"
 #include "network/ggpo.h"
 #include "network/tcvr_match.h"
+#include "network/tcvr_arena_pics.h"
 #include "network/ice.h"
 #include "hw/mem/mem_watch.h"
 #include "network/net_handshake.h"
@@ -612,6 +613,7 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 		config::Settings::instance().load(false);
 		// tcvr: a multiplayer match starts here (or a left-over one is switched off)
 		tcvr::match::gate();
+		tcvr::arena::gate();	// tcvr: the arena picture tour's game: no memory card
 		dc_reset(true);
 		memset(&settings.network.md5, 0, sizeof(settings.network.md5));
 
@@ -701,6 +703,8 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			if (config::GGPOEnable)
 				dc_loadstate(-1);
 			else if (tcvr::match::restoreOwnGame())	// tcvr: back from a match, in the player's own game
+				;
+			else if (tcvr::arena::loadHandled())	// tcvr: the arena picture tour (its game, then the player's back)
 				;
 			else if (config::AutoLoadState && !naomiNetworkSupported() && !settings.naomi.multiboard)
 				dc_loadstate(config::SavestateSlot);
