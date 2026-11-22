@@ -3,12 +3,18 @@
 name: Crowdin Source Texts Upload
 
 # on change to the English texts
+# CI is paused: GitHub Actions credit is not available for this repository.
+# This workflow now only runs when started by hand (Actions tab > Run workflow).
+# To turn CI back on, remove the two "on:" lines below and uncomment the original triggers.
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - 'shell/libretro/libretro_core_options.h'
+  workflow_dispatch:
+# Original triggers:
+# on:
+#   push:
+#     branches:
+#       - master
+#     paths:
+#       - 'shell/libretro/libretro_core_options.h'
 
 jobs:
   upload_source_file:
