@@ -7,8 +7,8 @@
 #include "sh4_interrupts.h"
 #if defined(__ANDROID__) && HOST_CPU == CPU_ARM
 #include <fenv.h>
-#include "cfg/option.h"
 #endif
+#include "cfg/option.h"
 
 Sh4RCB* p_sh4rcb;
 
