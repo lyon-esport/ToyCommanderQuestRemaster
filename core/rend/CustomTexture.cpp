@@ -420,6 +420,8 @@ bool CustomTexture::init()
 			// The first source added has highest priority.
 			// Add your source after the default `CustomTextureSource`(data/textures/<game id> folder), so end-users can override your textures.
 			addSource(std::make_unique<CustomTextureSource>(game_id));
+#ifndef __EMSCRIPTEN__
+			// (not in the browser build: no threads there, and these folders are the headset's)
 			// tcvr: after it, so a texture pack the player adds wins: the reviewed textures, then
 			// the upscale cache
 			addSource(std::make_unique<TunedTextureSource>(game_id));
@@ -427,6 +429,7 @@ bool CustomTexture::init()
 			auto cache = std::make_unique<UpscaleCacheSource>(game_id, factor >= 4 ? 4 : factor >= 2 ? 2 : 0);
 			upscaleCache = cache.get();
 			addSource(std::move(cache));
+#endif
 		}
 	}
 

@@ -32,7 +32,7 @@ const CORE = params.get('core') === 'fork' ? 'tcvr' : 'flycast';
 window.EJS_core = CORE;
 window.EJS_gameName = 'Toy Commander (Europe)';
 // ?elf=1: a tiny test program instead of the disc (cloud checks without the game)
-window.EJS_gameUrl = params.get('elf') ? '/disc/test.elf' : '/disc/ToyCommander.chd';
+window.EJS_gameUrl = params.get('elf') ? '/disc/test.elf' : params.get('fake') ? '/disc/test.zip' : '/disc/ToyCommander.chd';
 window.EJS_pathtodata = 'data/';
 window.EJS_startOnLoaded = true;
 window.EJS_threads = false;
