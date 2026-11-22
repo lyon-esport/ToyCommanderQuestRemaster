@@ -420,6 +420,12 @@ void goBack()
 {
 	if (page == (int)Section::Multiplayer && mpPage != MpPage::Top)
 	{
+		// back on the start page: on the tile the player came from (Join for the games found or a
+		// joined game's lobby, else Host)
+		Action tile = Action::MpCreate;
+		if (mpPage == MpPage::Join
+				|| (mpPage == MpPage::Lobby && tcvr::match::theLobby().view().role != tcvr::lobby::Role::Host))
+			tile = Action::MpJoin;
 		if (mpPage == MpPage::Create)
 			tcvr::arena::cancel();		// (the arena pictures stop: the player's game comes back)
 		if (mpPage == MpPage::Lobby)
@@ -428,6 +434,10 @@ void goBack()
 			mpReady = false;
 		}
 		mpShow(MpPage::Top);
+		const auto list = entries();
+		for (int i = 0; i < (int)list.size(); i++)
+			if (list[i].action == tile)
+				selected = i;
 		return;
 	}
 	showPage(-1);
