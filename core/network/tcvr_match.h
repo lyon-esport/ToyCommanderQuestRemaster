@@ -92,6 +92,13 @@ void gate();
 // At the game load after a match (emulator.cpp, where a savestate would load): the player's own game as it was
 // before the match, kept at its start. False: none kept (the game starts from its power-on).
 bool restoreOwnGame();
+// The same for other uses of the game (the arena picture tour, tcvr_arena_pics.h). keepPlayerGame: the render
+// thread, the game stops and its state is written by a thread; false: nothing kept (no game, netplay on).
+// playerGameKept: 1 written, 0 still writing, -1 none or failed. restorePlayerGame: at a game load, the kept
+// game loaded and its file removed; false: none (the game starts from its power-on).
+bool keepPlayerGame();
+int playerGameKept();
+bool restorePlayerGame();
 // True once after a match has ended: the menu should open on its Multiplayer page.
 bool takeReturn();
 

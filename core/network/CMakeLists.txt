@@ -11,6 +11,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         net_handshake.cpp
         net_handshake.h
         net_platform.h
+        tcvr_arena_pics.cpp
+        tcvr_arena_pics.h
         tcvr_lobby.cpp
         tcvr_lobby.h
         tcvr_match.cpp
