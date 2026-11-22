@@ -180,6 +180,9 @@ static std::unordered_map<int, MemPages> deltaStates;
 static int lastSavedFrame = -1;
 
 static int timesyncOccurred;
+#ifdef __EMSCRIPTEN__
+static int rbTestFrame;
+#endif
 
 #pragma pack(push, 1)
 struct Inputs
@@ -378,9 +381,40 @@ static std::unordered_map<int, std::vector<u8>> ramCopies;
 static std::unordered_map<int, u32> armFlushes;	// per saved frame: the ARM7 recompiler's flushCount
 #endif
 
+// The browser page's ?syncall=1 (window._tcvrSyncAll): the full sync log, and the rollback check
+static bool browserSyncAll()
+{
+#ifdef __EMSCRIPTEN__
+	static int syncAll = -1;
+	if (syncAll < 0)
+		syncAll = EM_ASM_INT({ return window._tcvrSyncAll ? 1 : 0; });
+	return syncAll != 0;
+#else
+	return false;
+#endif
+}
+
+// The page's ?rbtest=1: a test aid that makes rollbacks happen (see sendLocalInput and browserTick)
+static bool browserRbTest()
+{
+#ifdef __EMSCRIPTEN__
+	static int rbTest = -1;
+	if (rbTest < 0)
+		rbTest = EM_ASM_INT({ return new URLSearchParams(location.search).get('rbtest') === '1' ? 1 : 0; });
+	return rbTest != 0;
+#else
+	return false;
+#endif
+}
+
+static bool rollbackCheck()
+{
+	return getenv("HOTD2VR_ROLLBACKCHECK") != nullptr || browserSyncAll();
+}
+
 static void keepRamCopy(int frame)
 {
-	if (getenv("HOTD2VR_ROLLBACKCHECK") == nullptr)
+	if (!rollbackCheck())
 		return;
 	std::vector<u8>& copy = ramCopies[frame];
 	copy.assign(&mem_b[0], &mem_b[0] + RAM_SIZE);
@@ -390,7 +424,7 @@ static void keepRamCopy(int frame)
 
 static void checkRestoredRam(int frame)
 {
-	if (getenv("HOTD2VR_ROLLBACKCHECK") == nullptr)
+	if (!rollbackCheck())
 		return;
 	auto it = ramCopies.find(frame);
 	if (it == ramCopies.end())
@@ -414,6 +448,8 @@ static void checkRestoredRam(int frame)
 		}
 	if (bad > 0)
 		ERROR_LOG(NETWORK, "Rollback check: frame %d, %d pages restored wrong", frame, bad);
+	else
+		NOTICE_LOG(NETWORK, "Rollback check: frame %d (last saved %d) RAM restored exactly", frame, lastSavedFrame);
 }
 
 static bool load_game_state(unsigned char *buffer, int len)
@@ -507,9 +543,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	// (window._tcvrSync, [frame, hash hex]); a frame saved again after a rollback comes again, the last counts
 	// With ?syncall=1 on the page: every frame up to 1800, and also the saved state's hash and video
 	// with sound RAM's ([frame, ram, state, vram^aram]), to find where two copies split
-	static int syncAll = -1;
-	if (syncAll < 0)
-		syncAll = EM_ASM_INT({ return window._tcvrSyncAll ? 1 : 0; });
+	const int syncAll = browserSyncAll() ? 1 : 0;
 	if (frame % 30 == 0 || (syncAll && frame <= 1800))
 	{
 		const u64 ramHash = XXH3_64bits(&mem_b[0], RAM_SIZE);
@@ -1125,6 +1159,17 @@ static int sendLocalInput(u32 setupPresses)
 		}
 		inputs.mouseButtons = 0;
 		inputs.kbModifiers = 0;
+#ifdef __EMSCRIPTEN__
+		// test aid, page ?rbtest=1: player 2 presses A for 3 frames in every 7, so the other
+		// copies guess its input wrong and roll back often (checks that rollbacks restore exactly)
+		{
+			const bool rbTest = browserRbTest();
+			if (rbTest && localPlayerNum == 1 && (rbTestFrame++ % 7) < 3)
+				inputs.kcode |= DC_BTN_A;
+			if (rbTest && rbTestFrame % 120 == 1)
+				NOTICE_LOG(NETWORK, "rbtest: player %d kcode %x size %d", localPlayerNum + 1, inputs.kcode, inputSize);
+		}
+#endif
 		if (dcPad)
 			;	// all above
 		else if (analogAxes > 0)
@@ -1336,6 +1381,13 @@ bool browserTick()
 		inputStalled = false;
 		if (sent > 0)
 			emu.getSh4Executor()->Start();
+	}
+	if (browserRbTest())
+	{
+		// (a test program that never reads the pads: read them here, so that GGPO guesses
+		// the other players' input and rolls back when the guess was wrong)
+		MapleInputState state[4];
+		getInput(state);
 	}
 	return true;
 }

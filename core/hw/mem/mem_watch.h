@@ -27,6 +27,9 @@
 #include "rend/TexCache.h"
 #include <unordered_map>
 #include <memory>
+#include <vector>
+#include <algorithm>
+#include <cstring>
 
 namespace memwatch
 {
@@ -43,19 +46,56 @@ class Watcher
 	bool started;
 	PageMap pages;
 
+#ifdef __EMSCRIPTEN__
+	// tcvr: the browser build has no memory protection (no mprotect, no fault handler), so
+	// nothing would tell which pages the game wrote and a rollback restored none of them.
+	// Instead a copy of the memory is kept as it was at the last save, and at each save the
+	// pages that differ go into the delta with their old content, as hit() does natively.
+	std::vector<u8> shadow;
+
+	void snapshot()
+	{
+		const u32 size = static_cast<T&>(*this).memSize();
+		const u8 *mem = size != 0 ? (const u8 *)static_cast<T&>(*this).getMemPage(0) : nullptr;
+		shadow.assign(mem, mem + size);
+	}
+
+	void scan()
+	{
+		const u32 size = std::min<u32>(static_cast<T&>(*this).memSize(), (u32)shadow.size()) & ~PAGE_MASK;
+		for (u32 offset = 0; offset < size; offset += PAGE_SIZE)
+		{
+			const u8 *now = (const u8 *)static_cast<T&>(*this).getMemPage(offset);
+			u8 *old = &shadow[offset];
+			if (memcmp(now, old, PAGE_SIZE) == 0)
+				continue;
+			auto rv = pages.try_emplace(offset);
+			if (rv.second)
+				memcpy(&rv.first->second.data[0], old, PAGE_SIZE);
+			memcpy(old, now, PAGE_SIZE);
+		}
+	}
+#endif
+
 public:
 	void protect()
 	{
 		if (!started)
 		{
+#ifdef __EMSCRIPTEN__
+			snapshot();
+#else
 			static_cast<T&>(*this).protectMem(0, 0xffffffff);
+#endif
 			started = true;
 		}
+#ifndef __EMSCRIPTEN__
 		else
 		{
 			for (const auto& pair : pages)
 				static_cast<T&>(*this).protectMem(pair.first, PAGE_SIZE);
 		}
+#endif
 	}
 
 	void unprotect()
@@ -87,6 +127,10 @@ public:
 
 	void getPages(PageMap& other)
 	{
+#ifdef __EMSCRIPTEN__
+		if (started)
+			scan();
+#endif
 		std::swap(pages, other);
 		pages = PageMap();
 	}
@@ -113,6 +157,7 @@ protected:
 	}
 
 public:
+	u32 memSize() const { return VRAM_SIZE; }
 	void *getMemPage(u32 addr)
 	{
 		return &vram[addr];
@@ -140,6 +185,7 @@ protected:
 	}
 
 public:
+	u32 memSize() const { return RAM_SIZE; }
 	void *getMemPage(u32 addr)
 	{
 		return &mem_b[addr];
@@ -156,6 +202,7 @@ protected:
 	u32 getMemOffset(void *p);
 
 public:
+	u32 memSize() const { return ARAM_SIZE; }
 	void *getMemPage(u32 addr)
 	{
 		return &aica::aica_ram[addr];
@@ -172,6 +219,7 @@ protected:
 
 public:
 	void unprotectMem(u32 addr, u32 size);
+	u32 memSize() const { return settings.platform.isNaomi2() ? elan::ERAM_SIZE : 0; }
 	void *getMemPage(u32 addr)
 	{
 		return &elan::RAM[addr];

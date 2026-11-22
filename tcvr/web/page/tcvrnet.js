@@ -4,6 +4,7 @@
 // The core (core/deps/ggpo/lib/ggpo/network/udp.cpp) calls bind(port) and send(message), and reads q.
 // Each entry of q: 4 bytes of sender address, 2 of port (network order), then the datagram.
 (function () {
+  const lag = +(new URLSearchParams(location.search).get('netlag') || 0);
   const net = {
     q: [],
     port: 0,		// this page's UDP port on the LAN, once the server opened it (0 before, or if it failed)
@@ -30,8 +31,10 @@
       ws.onopen = () => { for (const m of this.pending) ws.send(m); this.pending = []; };
       ws.onmessage = (e) => {
         const m = new Uint8Array(e.data);
-        if (m[0] === 0x82)
-          this.q.push(m.subarray(1));
+        if (m[0] === 0x82) {
+          if (lag > 0) setTimeout(() => this.q.push(m.subarray(1)), lag);	// test aid: ?netlag=ms
+          else this.q.push(m.subarray(1));
+        }
         else if (m[0] === 0x81) {
           this.port = (m[1] << 8) | m[2];
           this.address = m[3] + '.' + m[4] + '.' + m[5] + '.' + m[6];

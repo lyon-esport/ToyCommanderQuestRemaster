@@ -83,7 +83,10 @@ def main():
     if not os.path.isfile(a.disc):
         sys.exit("disc image not found: " + a.disc)
     Handler.disc = os.path.abspath(a.disc)
-    srv = http.server.ThreadingHTTPServer((a.host, a.port), Handler)
+    class Server(http.server.ThreadingHTTPServer):
+        # several players' pages load at once: the default queue (5) refused some connections
+        request_queue_size = 128
+    srv = Server((a.host, a.port), Handler)
     srv.daemon_threads = True
     print("Open http://localhost:%d/ in Chrome or Edge (Ctrl+C to stop)" % a.port, flush=True)
     srv.serve_forever()
