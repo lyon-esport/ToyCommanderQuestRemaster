@@ -505,12 +505,21 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 #ifdef __EMSCRIPTEN__
 	// tcvr: the browser build's sync log (no files): every 30th frame, main RAM's hash goes to the page
 	// (window._tcvrSync, [frame, hash hex]); a frame saved again after a rollback comes again, the last counts
-	if (frame % 30 == 0)
+	// With ?syncall=1 on the page: every frame up to 1800, and also the saved state's hash and video
+	// with sound RAM's ([frame, ram, state, vram^aram]), to find where two copies split
+	static int syncAll = -1;
+	if (syncAll < 0)
+		syncAll = EM_ASM_INT({ return window._tcvrSyncAll ? 1 : 0; });
+	if (frame % 30 == 0 || (syncAll && frame <= 1800))
 	{
 		const u64 ramHash = XXH3_64bits(&mem_b[0], RAM_SIZE);
+		const u64 stateHash = syncAll ? XXH3_64bits(*buffer, *len) : 0;
+		const u64 vaHash = syncAll ? XXH3_64bits(&vram[0], VRAM_SIZE) ^ (XXH3_64bits(&aica::aica_ram[0], ARAM_SIZE) * 31) : 0;
 		EM_ASM({
-			(window._tcvrSync = window._tcvrSync || []).push([$0, ($1 >>> 0).toString(16).padStart(8, '0') + ($2 >>> 0).toString(16).padStart(8, '0')]);
-		}, frame, (u32)(ramHash >> 32), (u32)ramHash);
+			(window._tcvrSync = window._tcvrSync || []).push(((h) => ($7 ? [$0, h($1, $2), h($3, $4), h($5, $6)] : [$0, h($1, $2)]))(
+				(a, b) => (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0')));
+		}, frame, (u32)(ramHash >> 32), (u32)ramHash, (u32)(stateHash >> 32), (u32)stateHash,
+			(u32)(vaHash >> 32), (u32)vaHash, syncAll);
 	}
 #endif
 	// hotd2-vr netplay test aid: with HOTD2VR_SYNCLOG set to a file name, each frame's state

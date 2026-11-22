@@ -30,6 +30,7 @@
 #include "hw/sh4/sh4_mem.h"
 #include "hw/sh4/sh4_sched.h"
 #include "oslib/virtmem.h"
+#include "cfg/option.h"
 
 // ============================================================
 // BUILD MODE — single switch (prevents the flag-drift that shipped a
@@ -654,7 +655,12 @@ static inline void primeDispatchEntry(u32 vaddr, u32 sh4_code_size, u32 table_id
 // Verdict history: v4 (trap-mediated bridge) broke JGR immediately;
 // v5 (no int-check) broke JGR after soak. Each build gets user-eyes verdict.
 #define FLY_DEFER_ON 1
-static const bool g_defer_runtime = FLY_DEFER_ON;
+// tcvr: netplay needs every copy to run the same guest code the same way. Deferred compiles,
+// the SHIL bridge and chain modules are picked by wall-clock time (frame budget, async
+// promises), so in a netplay session they are off: every block compiles before it runs.
+// Set at each mainloop entry from config::GGPOEnable.
+static bool g_fly_netplay = false;
+static bool g_defer_runtime = FLY_DEFER_ON;
 #define FLY_FRAME_BUDGET_MS 24.0
 static double g_frame_start_ms = 0;   // stamped at mainloop entry
 #ifndef JIT_PROD_BUILD
@@ -7321,6 +7327,8 @@ public:
 		// Sh4Interpreter::Instance is now set in Sh4Recompiler's constructor
 		// (ngen.h) — the redundant top-of-mainloop workaround was removed.
 		fly_init();
+		g_fly_netplay = config::GGPOEnable;
+		g_defer_runtime = FLY_DEFER_ON && !g_fly_netplay;
 		g_frame_start_ms = emscripten_get_now();
 #ifndef JIT_PROD_BUILD
 		{
@@ -7404,7 +7412,9 @@ public:
 			static size_t cs_pos = 0;
 			static u32 cs_frame = 0;
 			static bool cs_burst = false;
-			if ((cs_frame++ & 0x1F) == 0 && cs_pos >= cs_sweep.size()) {
+			if (g_fly_netplay)	// tcvr: no chains in netplay (see g_fly_netplay)
+				cs_sweep.clear(), cs_pos = 0;
+			else if ((cs_frame++ & 0x1F) == 0 && cs_pos >= cs_sweep.size()) {
 				cs_sweep.clear();
 				cs_sweep.reserve(blockByVaddr.size());
 				for (auto& kv : blockByVaddr)

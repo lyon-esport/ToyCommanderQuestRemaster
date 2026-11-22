@@ -1223,8 +1223,9 @@ void Emulator::vblank()
 	runner.execTasks();
 	// Time out if a frame hasn't been rendered for 50 ms
 #ifdef __EMSCRIPTEN__
-	// Flycast WASM pacer: stop a render-less run at the second vblank (see nasomers/flycast-wasm)
-	if (sh4_sched_now64() - startTime <= 25_sh4ms)
+	// Flycast WASM pacer: stop a render-less run at the second vblank (see nasomers/flycast-wasm).
+	// tcvr: online, a netplay frame must end where it ends on the other copies (PC, Quest): 50 ms.
+	if (sh4_sched_now64() - startTime <= (ggpo::active() ? 50_sh4ms : 25_sh4ms))
 #else
 	if (sh4_sched_now64() - startTime <= 50_sh4ms)
 #endif
