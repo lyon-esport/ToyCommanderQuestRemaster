@@ -59,6 +59,8 @@ bool mainui_rend_frame()
 	}
 	if (tcvr::match::startTimedOut())
 		gui_cancel_network();
+	// tcvr: the desktop drives the match loop when no headset runs the VR menu
+	gui_tcvr_poll(vr::xr::enabled() && vr::xr::hasSession());
 
 	if (gui_is_open())
 	{

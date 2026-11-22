@@ -411,6 +411,9 @@ void gui_open_settings()
 	const LockGuard lock(guiMutex);
 	if (gui_state == GuiState::Closed && !settings.naomi.slave)
 	{
+		// tcvr: in a multiplayer match the menu key leaves the match (pressed twice)
+		if (gui_tcvr_menu_key())
+			return;
 		if (!ggpo::active())
 		{
 			if (achievements::canPause())
@@ -666,6 +669,9 @@ static void gui_display_commands()
 		// Settings
 		if (IconButton(ICON_FA_GEAR, T("Settings"), ScaledVec2(buttonWidth, 50)).realize())
 			gui_setState(GuiState::Settings);
+		// tcvr: Multiplayer (the lobby a headset or another PC joins)
+		if (IconButton(ICON_FA_USERS, "Multiplayer", ScaledVec2(buttonWidth, 50)).realize())
+			gui_setState(GuiState::Multiplayer);
 
 		// Exit
 		if (IconButton(ICON_FA_POWER_OFF, commandLineStart ?  T("Exit") : T("Close Game"), ScaledVec2(buttonWidth, 50)).realize())
@@ -1437,6 +1443,9 @@ void gui_display_ui()
 		break;
 	case GuiState::Cheats:
 		gui_cheats();
+		break;
+	case GuiState::Multiplayer:
+		gui_tcvr_multiplayer();
 		break;
 	case GuiState::Achievements:
 #ifdef USE_RACHIEVEMENTS
