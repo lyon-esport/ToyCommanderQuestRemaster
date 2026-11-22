@@ -570,6 +570,17 @@ static std::string endMatch(const std::string& why)
 	return why;
 }
 
+// The game runs again after a reload: the reload is done.
+static void reloadDoneIfRunning()
+{
+	if (reloading != (int)Reload::None && reloadWanted == (int)Reload::None && emu.running())
+	{
+		NOTICE_LOG(NETWORK, "MP: the game runs again (%.1f s)",
+				std::chrono::duration<float>(std::chrono::steady_clock::now() - reloadSince).count());
+		reloading = (int)Reload::None;
+	}
+}
+
 void poll()
 {
 	if (active)
@@ -590,16 +601,7 @@ void poll()
 		restart(Reload::BackToLobby);
 		return;
 	}
-	if (reloading != (int)Reload::None)
-	{
-		// the game runs again: the reload is done
-		if (reloadWanted == (int)Reload::None && emu.running())
-		{
-			NOTICE_LOG(NETWORK, "MP: the game runs again (%.1f s)",
-					std::chrono::duration<float>(std::chrono::steady_clock::now() - reloadSince).count());
-			reloading = (int)Reload::None;
-		}
-	}
+	reloadDoneIfRunning();
 	std::unique_lock<std::mutex> lock(mutex);
 	if (begun || !theOne)
 		return;
@@ -610,6 +612,21 @@ void poll()
 	const lobby::View v = l->view();
 	if (v.phase != lobby::Phase::Started)
 		return;
+	// A START that comes while this copy is still on its way back from the last match (a late "leave match"
+	// just before the host started the next one) waits until the game runs again. Taken at once, the unload
+	// of the match that ended switched the new match's netplay off again (clearNetplay): this copy started
+	// from the power-on, alone, while the others loaded the match start state, and waited for them forever.
+	if (reloading != (int)Reload::None || reloadWanted != (int)Reload::None || clearPending)
+	{
+		static std::chrono::steady_clock::time_point told;
+		const auto now = std::chrono::steady_clock::now();
+		if (now - told > std::chrono::seconds(2))
+		{
+			NOTICE_LOG(NETWORK, "MP START: waits until the game is back from the last match");
+			told = now;
+		}
+		return;
+	}
 	{
 		std::lock_guard<std::mutex> g(mutex);
 		if (begun)
@@ -829,6 +846,9 @@ bool restorePlayerGame()
 
 bool takeReturn()
 {
+	// (called with the game running, just before the menu opens on the lobby and pauses it: the reload is
+	// done, even if poll() looked a moment before the game ran; paused, it never would be, and a START waits)
+	reloadDoneIfRunning();
 	if (!config::VrMpReturn)
 		return false;
 	saveBool(config::VrMpReturn, false);
