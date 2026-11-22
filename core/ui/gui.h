@@ -36,6 +36,10 @@ void gui_cancel_load();
 void gui_cancel_network();
 void gui_refresh_files();
 void gui_cheats();
+// tcvr: the desktop Multiplayer page and its share of the match loop (gui_tcvr_mp.cpp)
+void gui_tcvr_multiplayer();
+void gui_tcvr_poll(bool vrMenuDrives);
+bool gui_tcvr_menu_key();
 void gui_keyboard_input(u32 wc);
 void gui_keyboard_inputUTF8(const std::string& s);
 void gui_keyboard_key(u8 keyCode, bool pressed);
@@ -74,6 +78,7 @@ enum class GuiState {
 	NetworkStart,
 	Cheats,
 	Achievements,
+	Multiplayer,	// tcvr: the desktop Multiplayer page (gui_tcvr_mp.cpp)
 };
 extern GuiState gui_state;
 

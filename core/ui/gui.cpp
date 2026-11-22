@@ -411,6 +411,9 @@ void gui_open_settings()
 	const LockGuard lock(guiMutex);
 	if (gui_state == GuiState::Closed && !settings.naomi.slave)
 	{
+		// tcvr: in a multiplayer match the menu key leaves the match (pressed twice)
+		if (gui_tcvr_menu_key())
+			return;
 		if (!ggpo::active())
 		{
 			if (achievements::canPause())
@@ -465,7 +468,7 @@ void gui_start_game(const std::string& pathArg)
 {
 	const LockGuard lock(guiMutex);
 	if (gui_state != GuiState::Main && gui_state != GuiState::Closed && gui_state != GuiState::Commands
-			&& gui_state != GuiState::Pause)
+			&& gui_state != GuiState::Pause && gui_state != GuiState::Multiplayer)	// tcvr: a match starts from that page
 		return;
 	// tcvr: a copy, the path is often settings.content.path, which unloadGame clears (the in-app
 	// reload of a match then booted with no game: "No BIOS file found")
@@ -666,6 +669,9 @@ static void gui_display_commands()
 		// Settings
 		if (IconButton(ICON_FA_GEAR, T("Settings"), ScaledVec2(buttonWidth, 50)).realize())
 			gui_setState(GuiState::Settings);
+		// tcvr: Multiplayer (the lobby a headset or another PC joins)
+		if (IconButton(ICON_FA_USERS, T("Multiplayer"), ScaledVec2(buttonWidth, 50)).realize())
+			gui_setState(GuiState::Multiplayer);
 
 		// Exit
 		if (IconButton(ICON_FA_POWER_OFF, commandLineStart ?  T("Exit") : T("Close Game"), ScaledVec2(buttonWidth, 50)).realize())
@@ -1437,6 +1443,9 @@ void gui_display_ui()
 		break;
 	case GuiState::Cheats:
 		gui_cheats();
+		break;
+	case GuiState::Multiplayer:
+		gui_tcvr_multiplayer();
 		break;
 	case GuiState::Achievements:
 #ifdef USE_RACHIEVEMENTS

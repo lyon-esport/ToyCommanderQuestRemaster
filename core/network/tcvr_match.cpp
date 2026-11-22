@@ -632,6 +632,11 @@ std::string leaveMatch(const std::string& why)
 	return restart(Reload::BackToLobby);
 }
 
+bool reloadBusy()
+{
+	return reloading != (int)Reload::None || reloadWanted != (int)Reload::None;
+}
+
 bool reloadNow()
 {
 	if (reloadWanted.exchange((int)Reload::None) == (int)Reload::None)
