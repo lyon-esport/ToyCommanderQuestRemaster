@@ -62,6 +62,8 @@ std::string leaveMatch(const std::string& why = "");
 // Matches start and end inside the running app: the game is loaded again with the netplay options on
 // (or off). True once when the render thread should do that now (gui_start_game, mainui.cpp).
 bool reloadNow();
+// True while a match's game load (start or end) is asked for or not yet running again.
+bool reloadBusy();
 // The game stopped with an error (gui_stop_game): in a match, or while one starts, this ends the match,
 // and true says the caller must load the game again in single player (not show an error nobody sees in
 // the headset). False: not a match, the caller goes on as usual.

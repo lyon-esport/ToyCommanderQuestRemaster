@@ -468,7 +468,7 @@ void gui_start_game(const std::string& pathArg)
 {
 	const LockGuard lock(guiMutex);
 	if (gui_state != GuiState::Main && gui_state != GuiState::Closed && gui_state != GuiState::Commands
-			&& gui_state != GuiState::Pause)
+			&& gui_state != GuiState::Pause && gui_state != GuiState::Multiplayer)	// tcvr: a match starts from that page
 		return;
 	// tcvr: a copy, the path is often settings.content.path, which unloadGame clears (the in-app
 	// reload of a match then booted with no game: "No BIOS file found")
@@ -670,7 +670,7 @@ static void gui_display_commands()
 		if (IconButton(ICON_FA_GEAR, T("Settings"), ScaledVec2(buttonWidth, 50)).realize())
 			gui_setState(GuiState::Settings);
 		// tcvr: Multiplayer (the lobby a headset or another PC joins)
-		if (IconButton(ICON_FA_USERS, "Multiplayer", ScaledVec2(buttonWidth, 50)).realize())
+		if (IconButton(ICON_FA_USERS, T("Multiplayer"), ScaledVec2(buttonWidth, 50)).realize())
 			gui_setState(GuiState::Multiplayer);
 
 		// Exit

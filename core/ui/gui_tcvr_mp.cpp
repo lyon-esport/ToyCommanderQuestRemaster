@@ -367,7 +367,8 @@ void gui_tcvr_poll(bool vrMenuDrives)
 	if (!match::lobbyStarted() && !match::inMatch())
 		return;
 	match::poll();
-	if (emu.running() && match::takeReturn())
+	// (only once the game of the way back runs: a reload still to come would close the page)
+	if (emu.running() && !match::reloadBusy() && match::takeReturn())
 	{
 		const std::string why = match::lastEnd();
 		status = why.empty() ? "The match is over" : why;
