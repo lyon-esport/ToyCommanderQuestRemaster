@@ -1222,7 +1222,12 @@ void Emulator::vblank()
 	EventManager::event(Event::VBlank);
 	runner.execTasks();
 	// Time out if a frame hasn't been rendered for 50 ms
+#ifdef __EMSCRIPTEN__
+	// Flycast WASM pacer: stop a render-less run at the second vblank (see nasomers/flycast-wasm)
+	if (sh4_sched_now64() - startTime <= 25_sh4ms)
+#else
 	if (sh4_sched_now64() - startTime <= 50_sh4ms)
+#endif
 		return;
 	if (ggpo::active())
 		ggpo::endOfFrame();

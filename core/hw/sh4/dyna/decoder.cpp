@@ -7,6 +7,12 @@
 
 #if FEAT_SHREC != DYNAREC_NONE
 
+#include <unordered_set>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "decoder.h"
 #include "shil.h"
 #include "ngen.h"
@@ -218,6 +224,16 @@ sh4dec(i0000_0000_0001_1011)
 void dec_illegalOp(u32 op)
 {
 	INFO_LOG(DYNAREC, "illegal instuction %04x at pc %x", op, state.cpu.rpc);
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	// One-shot log per unique (opcode, pc) combo so VT / JGR fallback spirals
+	// don't flood the console.
+	static std::unordered_set<u64> seen;
+	u64 key = ((u64)op << 32) | (u64)state.cpu.rpc;
+	if (seen.insert(key).second && seen.size() <= 50) {
+		EM_ASM({ console.warn('[dec_illegal] op=0x' + ($0 & 0xffff).toString(16) + ' pc=0x' + ($1>>>0).toString(16) + ' delaySlot=' + $2); },
+			(int)op, state.cpu.rpc, state.cpu.is_delayslot ? 1 : 0);
+	}
+#endif
 	Emit(shop_illegal, shil_param(), mk_imm(state.cpu.rpc), mk_imm(state.cpu.is_delayslot));
 	dec_DynamicSet(reg_nextpc);
 	dec_End(NullAddress, BET_DynamicJump, false);
@@ -997,7 +1013,7 @@ bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles)
 
 					if (state.cpu.is_delayslot && OpDesc[op]->SetPC())
 						throw FlycastException("Fatal: SH4 branch instruction in delay slot");
-					if (!OpDesc[op]->rec_oph)
+						if (!OpDesc[op]->rec_oph)
 					{
 						if (!dec_generic(op))
 						{

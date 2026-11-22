@@ -3,6 +3,9 @@
 #include "gles.h"
 #include "quad.h"
 #include "hw/pvr/ta.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #ifndef LIBRETRO
 #include "ui/gui.h"
 #else
@@ -1172,6 +1175,9 @@ static void gles_vr_frame_changed() {
 	vrFrameGeneration++;
 }
 
+// Flycast WASM render-phase timers (reported by the web front end's HUD)
+double g_fly_rp[10];
+
 void OpenGLRenderer::Process(TA_context* ctx)
 {
 	if (gl.gl_major < 3 && settings.platform.isNaomi2())
@@ -1201,7 +1207,15 @@ void OpenGLRenderer::Process(TA_context* ctx)
 	}
 	if (!ctx->rend.isRTT && ctx->rend.swapInterval > 0)
 		GraphicsContext::Instance()->setSwapInterval(ctx->rend.swapInterval);
+#ifdef __EMSCRIPTEN__
+	{
+		double t0 = emscripten_get_now();
+		ta_parse(ctx, gl.prim_restart_fixed_supported || gl.prim_restart_supported);
+		g_fly_rp[0] += emscripten_get_now() - t0;
+	}
+#else
 	ta_parse(ctx, gl.prim_restart_fixed_supported || gl.prim_restart_supported);
+#endif
 }
 
 static void upload_vertex_indices()
@@ -1222,6 +1236,14 @@ static void upload_vertex_indices()
 
 bool OpenGLRenderer::renderFrame(int width, int height)
 {
+#ifdef __EMSCRIPTEN__
+	// RAII: renderFrame has multiple exits; [2]=GL submit ms, [3]=renders
+	struct FlyRpTimer {
+		double t0;
+		FlyRpTimer() : t0(emscripten_get_now()) {}
+		~FlyRpTimer() { g_fly_rp[2] += emscripten_get_now() - t0; g_fly_rp[3] += 1; }
+	} fly_rp_timer;
+#endif
 	if (!config::EmulateFramebuffer)
 		initVideoRoutingFrameBuffer();
 	

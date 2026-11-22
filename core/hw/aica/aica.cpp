@@ -7,6 +7,9 @@
 #include "hw/sh4/sh4_sched.h"
 #include "hw/arm7/arm7.h"
 #include "hw/arm7/arm_mem.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace aica
 {
@@ -86,7 +89,16 @@ constexpr int AICA_TICK = 4535;		// 44.1 KHz
 
 static int AicaUpdate(int tag, int cycles, int jitter, void *arg)
 {
+#ifdef __EMSCRIPTEN__
+	// Render-phase timer [5]: ARM7 interpreter slice (fires at 44.1kHz —
+	// get_now pairs add ~1-2% skew; diagnostic-grade, not verdict-grade).
+	extern double g_fly_rp[10];
+	double fly_t0 = emscripten_get_now();
 	arm::run(1);
+	g_fly_rp[5] += emscripten_get_now() - fly_t0;
+#else
+	arm::run(1);
+#endif
 
 	return AICA_TICK;
 }
@@ -95,6 +107,10 @@ static int AicaUpdate(int tag, int cycles, int jitter, void *arg)
 
 void timeStep()
 {
+#ifdef __EMSCRIPTEN__
+	extern double g_fly_rp[10];
+	double fly_t0 = emscripten_get_now();
+#endif
 	for (auto& timer : timers)
 		timer.StepTimer(1);
 
@@ -105,7 +121,10 @@ void timeStep()
 
 	//Make sure sh4/arm interrupt system is up to date
 	update_arm_interrupts();
-	UpdateSh4Ints();	
+	UpdateSh4Ints();
+#ifdef __EMSCRIPTEN__
+	g_fly_rp[5] += emscripten_get_now() - fly_t0;
+#endif
 }
 
 static void AicaInternalDMA()

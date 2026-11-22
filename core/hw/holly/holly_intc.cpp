@@ -38,8 +38,48 @@ static void asic_RL2Pending()
 	InterruptPend(sh4_IRL_13, t1 || t2 || t3 || t4);
 }
 
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+#include <emscripten.h>
+extern "C" {
+u32 g_fly_asic_total = 0;        // every asic_RaiseInterrupt call
+u32 g_fly_asic_vblank_in = 0;    // holly_SCANINT1 = 0x0003
+u32 g_fly_asic_vblank_out = 0;   // holly_SCANINT2 = 0x0004
+u32 g_fly_asic_hblank = 0;       // holly_HBLank = 0x0005
+u32 g_fly_asic_maple = 0;        // holly_MAPLE_DMA = 0x0012
+// Full per-ID histogram: index = (type << 5) | bit, type 0=NRM 1=EXT 2=ERR.
+// For the JGR interrupt-storm hunt: production raises ASIC interrupts at up
+// to ~360/vblank (clean: 10-14) — this identifies WHICH interrupt storms.
+u32 g_fly_asic_by_id[96];
+u32 EMSCRIPTEN_KEEPALIVE fly_asic_hist_ptr() { return (u32)(uintptr_t)g_fly_asic_by_id; }
+u32 EMSCRIPTEN_KEEPALIVE fly_asic_hist_len() { return 96; }
+// Raise-vs-ack accounting (dropped-delivery hunt, 2026-06-12): if the game's
+// ISR misses a CH2-DMA-end delivery, its display-list append pointer never
+// resets and lists accumulate — the observed storm shape. An "ack" = the game
+// write-clearing an ISTNRM bit that was SET (it saw + handled the interrupt).
+// "clears(unset)" = write-clearing an already-clear bit (double delivery).
+// [0] CH2 raises [1] CH2 acks(set) [2] CH2 clears(unset)
+// [3] OPQ raises [4] OPQ acks(set) [5] OPQ clears(unset)
+// [6] ISTNRM reads seeing CH2 set [7] reads seeing OPQ set
+u32 g_fly_ack[8];
+u32 EMSCRIPTEN_KEEPALIVE fly_ack_ptr() { return (u32)(uintptr_t)g_fly_ack; }
+u32 EMSCRIPTEN_KEEPALIVE fly_ack_len() { return 8; }
+}
+#endif
+
 void asic_RaiseInterrupt(HollyInterruptID inter)
 {
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	g_fly_asic_total++;
+	g_fly_asic_by_id[(((u32)inter >> 8) << 5) | ((u32)inter & 31)]++;
+	if ((u32)inter == 0x0013) g_fly_ack[0]++;       // CH2-DMA-end raise
+	else if ((u32)inter == 0x0007) g_fly_ack[3]++;  // opaque-EOL raise
+	switch ((u32)inter) {
+	case 0x0003: g_fly_asic_vblank_in++;  break;
+	case 0x0004: g_fly_asic_vblank_out++; break;
+	case 0x0005: g_fly_asic_hblank++;     break;
+	case 0x0012: g_fly_asic_maple++;      break;
+	}
+#endif
 	u8 type = inter >> 8;
 	u32 mask = 1 << (u8)inter;
 	switch(type)
@@ -89,6 +129,13 @@ static u32 Read_SB_ISTNRM(u32 addr)
 	 * SB_ISTEXT and SB_ISTERR, respectively,
 	 * and writes to these two bits are ignored. */
 	u32 tmp = (Naomi2 && (addr & 0x02000000) != 0 ? SB_ISTNRM1 : SB_ISTNRM) & 0x3FFFFFFF;
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	{
+		extern u32 g_fly_ack[8];
+		if (tmp & (1u << 19)) g_fly_ack[6]++;
+		if (tmp & (1u << 7))  g_fly_ack[7]++;
+	}
+#endif
 
 	if (SB_ISTEXT)
 		tmp|=0x40000000;
@@ -102,6 +149,13 @@ static u32 Read_SB_ISTNRM(u32 addr)
 template<bool Naomi2>
 static void Write_SB_ISTNRM(u32 addr, u32 data)
 {
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	{
+		extern u32 g_fly_ack[8];
+		if (data & (1u << 19)) ((SB_ISTNRM & (1u << 19)) ? g_fly_ack[1] : g_fly_ack[2])++;
+		if (data & (1u << 7))  ((SB_ISTNRM & (1u << 7))  ? g_fly_ack[4] : g_fly_ack[5])++;
+	}
+#endif
 	/* writing a 1 clears the interrupt */
 	if (Naomi2 && (addr & 0x02000000) != 0)
 		SB_ISTNRM1 &= ~data;

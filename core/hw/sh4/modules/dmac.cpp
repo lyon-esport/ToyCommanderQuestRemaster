@@ -27,6 +27,21 @@ void DMAC_Ch2St()
 	if (0x8201 != (dmaor & DMAOR_MASK))
 	{
 		INFO_LOG(SH4, "DMAC: DMAOR has invalid settings (%X) !", dmaor);
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+		// CH2-DMA STORM PROBE (2026-06-12): this silent return swallows the
+		// kick — no completion int, no TE, no C2DST clear → the game's TA-DMA
+		// submit loop (JGR: 0x8c21faac) retries forever. Log it loudly.
+		{
+			static u32 bador = 0;
+			bador++;
+			if (bador <= 20 || (bador & 0x3FF) == 0)
+				EM_ASM({
+					if (!window._flyLog) window._flyLog = [];
+					window._flyLog.push('[CH2-BADOR] #' + $0 + ' DMAOR=0x' + ($1>>>0).toString(16)
+						+ ' pc=0x' + ($2>>>0).toString(16) + ' CHCR2=0x' + ($3>>>0).toString(16));
+				}, bador, dmaor, Sh4cntx.pc, DMAC_CHCR(2).full);
+		}
+#endif
 		return;
 	}
 	if ((src >> 26) != 3)

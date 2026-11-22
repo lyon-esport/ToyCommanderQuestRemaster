@@ -4,6 +4,17 @@
 #include "ta.h"
 #include "spg.h"
 #include <map>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include "hw/sh4/sh4_core.h"  // for Sh4cntx (sh4ctx->pc)
+extern u32 g_wasm_block_count;
+#endif
+
+// Render-pipeline diagnostic logs (STARTRENDER / FB_R_CTRL writes).
+// Noisy — only useful for BLANK-cluster investigation. Default off.
+#ifndef FLY_PVR_DIAG
+#define FLY_PVR_DIAG 0
+#endif
 
 bool pal_needs_update=true;
 
@@ -129,6 +140,16 @@ void pvr_WriteReg(u32 paddr,u32 data)
 		return; // read only
 
 	case STARTRENDER_addr:
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD) && FLY_PVR_DIAG
+		{
+			static int startrender_count = 0;
+			startrender_count++;
+			EM_ASM({ console.log('[STARTRENDER] #' + $0 +
+				' blk=' + $1 +
+				' pc=0x' + ($2>>>0).toString(16)); },
+				startrender_count, g_wasm_block_count, p_sh4rcb->cntx.pc);
+		}
+#endif
 		rend_start_render();
 		YUV_init();
 		return;
@@ -163,6 +184,21 @@ void pvr_WriteReg(u32 paddr,u32 data)
 
 	case FB_R_CTRL_addr:
 		{
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD) && FLY_PVR_DIAG
+			static int fb_r_ctrl_write_count = 0;
+			fb_r_ctrl_write_count++;
+			u32 old_val = PvrReg(addr, u32);
+			u32 sh4_pc = p_sh4rcb->cntx.pc;
+			// Log ALL writes to FB_R_CTRL with block count and SH4 PC
+			EM_ASM({ console.log('[FB_R_CTRL-WR] #' + $0 +
+				' blk=' + $1 +
+				' pc=0x' + ($2>>>0).toString(16) +
+				' old=0x' + ($3>>>0).toString(16) +
+				' new=0x' + ($4>>>0).toString(16) +
+				' fb_enable: ' + ($3 & 1) + '->' + ($4 & 1)); },
+				fb_r_ctrl_write_count, g_wasm_block_count, sh4_pc,
+				old_val, data);
+#endif
 			bool vclk_div_changed = (PvrReg(addr, u32) ^ data) & (1 << 23);
 			PvrReg(addr, u32) = data;
 			if (vclk_div_changed)

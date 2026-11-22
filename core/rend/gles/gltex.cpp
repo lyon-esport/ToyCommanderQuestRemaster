@@ -276,17 +276,43 @@ void ReadRTTBuffer()
 	glBindFramebuffer(GL_FRAMEBUFFER, gl.ofbo.origFbo);
 }
 
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+// Spike-composition instrument (2026-07-16): per-frame texture time,
+// split into staleness checks (checksum) and decode+upload (Update).
+// Reset + read each frame by the rec_wasm mainloop breakdown logger.
+#include <emscripten.h>
+extern "C" {
+double g_fly_tex_check_ms = 0;
+double g_fly_tex_update_ms = 0;
+u32 g_fly_tex_update_count = 0;
+}
+#endif
+
 BaseTextureCacheData *OpenGLRenderer::GetTexture(TSP tsp, TCW tcw, int area)
 {
 	//lookup texture
 	TextureCacheData* tf = TexCache.getTextureCacheData(tsp, tcw, area);
 
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	double t0 = emscripten_get_now();
+	bool needs = tf->NeedsUpdate();
+	double t1 = emscripten_get_now();
+	g_fly_tex_check_ms += t1 - t0;
+	if (needs)
+	{
+		if (!tf->Update())
+			tf = nullptr;
+		g_fly_tex_update_ms += emscripten_get_now() - t1;
+		g_fly_tex_update_count++;
+	}
+#else
 	//update if needed
 	if (tf->NeedsUpdate())
 	{
 		if (!tf->Update())
 			tf = nullptr;
 	}
+#endif
 	else if (tf->IsCustomTextureAvailable())
 	{
 		TexCache.DeleteLater(tf->texID);

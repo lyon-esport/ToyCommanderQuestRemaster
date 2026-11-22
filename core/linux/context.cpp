@@ -130,6 +130,10 @@ static void context_segfault(host_context_t* hostctx, void* segfault_ctx)
     #else
         #error "Unsupported OS"
 	#endif
+#elif HOST_CPU == CPU_GENERIC
+	// No segfault context handling for generic/WASM platform (interpreter only)
+	(void)hostctx;
+	(void)segfault_ctx;
 #else
 	#error Unsupported HOST_CPU
 #endif

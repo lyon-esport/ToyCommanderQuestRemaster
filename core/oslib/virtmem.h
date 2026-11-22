@@ -1,7 +1,10 @@
 #pragma once
 #include "types.h"
 
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(__EMSCRIPTEN__)
+// Emscripten: no native code execution. Use a pointer (allocated via malloc in prepare_jit_block).
+#define DECLARE_CODE_CACHE(Name, Size) static u8 *Name;
+#elif defined(_WIN32) || defined(__APPLE__)
 #define DECLARE_CODE_CACHE(Name, Size) static u8 *Name;
 #elif defined(__ANDROID__)
 #define DECLARE_CODE_CACHE(Name, Size) alignas(4096) static u8 Name[Size];

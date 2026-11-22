@@ -489,6 +489,11 @@ void SSAOptimizer::ConstPropPass()
 				// and if those pages are read-only, then we can directly read the memory at compile time
 				// and propagate the read value as a constant.
 				if (op.op == shop_readm  && block->read_only
+#ifdef __EMSCRIPTEN__
+						&& false  // WASM: mprotect is a no-op, so read-only pages
+						          // aren't actually protected. Compile-time reads
+						          // become stale when the page is written to.
+#endif
 						&& (op.rs1._imm >> 12) >= (block->vaddr >> 12)
 						&& (op.rs1._imm >> 12) <= ((block->vaddr + block->sh4_code_size - 1) >> 12)
 						&& op.size <= 4)

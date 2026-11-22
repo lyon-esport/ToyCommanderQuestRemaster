@@ -747,6 +747,22 @@ u32,f1,(f32 f1),
 	}
 	return res;
 )
+#else
+// CPU_GENERIC (Emscripten/WASM) — same behavior as ARM (NaN → 0x80000000)
+shil_canonical
+(
+u32,f1,(f32 f1),
+	s32 res;
+	if (f1 > 2147483520.0f) {
+		res = 0x7fffffff;
+	}
+	else {
+		res = (s32)f1;
+		if (std::isnan(f1))
+			res = 0x80000000;
+	}
+	return res;
+)
 #endif
 
 shil_compile

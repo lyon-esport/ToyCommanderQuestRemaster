@@ -19,6 +19,9 @@
 #include "ta_ctx.h"
 #include "pvr_mem.h"
 #include <algorithm>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -69,6 +72,16 @@ void sortTriangles(rend_context& ctx, RenderPass& pass, const RenderPass& previo
 	int count = pass.tr_count - first;
 	if (count == 0)
 		return;
+#ifdef __EMSCRIPTEN__
+	// Render-phase timer [1]: CPU translucency sort (render campaign).
+	// RAII — the function has several exits below.
+	extern double g_fly_rp[10];
+	struct FlyRpSortTimer {
+		double t0;
+		FlyRpSortTimer() : t0(emscripten_get_now()) {}
+		~FlyRpSortTimer() { g_fly_rp[1] += emscripten_get_now() - t0; }
+	} fly_rp_sort_timer;
+#endif
 
 	const PolyParam * const pp_base = &ctx.global_param_tr[first];
 	const PolyParam * const pp_end = pp_base + count;

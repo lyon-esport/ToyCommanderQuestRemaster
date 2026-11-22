@@ -106,6 +106,14 @@ public:
 	u32 texture_hash;			// xxhash of texture data, used for custom textures
 	u32 old_vqtexture_hash;		// legacy hash for vq textures
 	u32 old_texture_hash;		// legacy hash
+#ifdef __EMSCRIPTEN__
+	// Checksum-on-use invalidation (WASM has no mprotect, so VramLockedWrite
+	// never fires): xxhash of the texture's full VRAM protect range, refreshed
+	// at Update() and re-checked at most once per frame in NeedsUpdate().
+	u32 wasm_vram_hash = 0;
+	u32 wasm_hash_frame = ~0u;	// FrameCount of the last hash check
+	u32 liveVramHash() const;
+#endif
 	u8* custom_image_data;		// loaded custom image data
 	u32 custom_width;
 	u32 custom_height;

@@ -10,6 +10,8 @@
 #include "hw/holly/sb.h"
 #include "hw/holly/holly_intc.h"
 #include "serialize.h"
+#include "rend/TexCache.h"  // VramLockedWriteOffset — manual tex-cache inval
+                             // on the WASM build, which has no mprotect
 
 static u32 pvr_map32(u32 offset32);
 
@@ -101,6 +103,23 @@ static void YUV_ConvertMacroBlock(const u8 *datap)
 	TA_YUV_TEX_CNT++;
 
 	YUV_Block384(datap, &vram[YUV_dest]);
+
+#ifdef __EMSCRIPTEN__
+	// WASM: mprotect is a no-op, so texture cache page-fault invalidation
+	// never fires. Manually invalidate cached textures for the VRAM pages
+	// this macroblock wrote to. Fixes FMV playback (Dave Mirra, SoF).
+	{
+		const u32 PAGE = 4096;
+		const u32 row_bytes = YUV_x_size * 2;
+		for (u32 row = 0; row < 16; row++) {
+			u32 row_start = YUV_dest + row * row_bytes;
+			u32 row_end   = row_start + 32;
+			for (u32 off = row_start & ~(PAGE - 1); off < row_end; off += PAGE) {
+				VramLockedWriteOffset(off);
+			}
+		}
+	}
+#endif
 
 	YUV_dest+=32;
 

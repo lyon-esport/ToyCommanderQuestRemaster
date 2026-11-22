@@ -826,8 +826,14 @@ sh4op(i0000_nnnn_0000_0011)
 
 
  //rte
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+extern "C" { u32 g_fly_rte_count = 0; }
+#endif
 sh4op(i0000_0000_0010_1011)
 {
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	g_fly_rte_count++;
+#endif
 	u32 newpc = ctx->spc;
 	Sh4Interpreter::Instance->ExecuteDelayslot_RTE();
 	ctx->pc = newpc;

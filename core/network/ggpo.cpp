@@ -1440,6 +1440,10 @@ int playerCount() {
 	return 1;
 }
 
+int currentFrame() {
+	return -1;
+}
+
 std::future<bool> startNetwork() {
 	return std::async(std::launch::deferred, []{ return false; });
 }

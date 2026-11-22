@@ -48,8 +48,13 @@ static X76F100SerialFlash romSerialId;
 static int dmaSchedId = -1;
 static int dmaXferDelay = 10;	// cart dma xfer speed, in cycles/byte (default 20 MB/s)
 
+// Diagnostic counters for serial EEPROM access tracking
+u32 g_naomi_board_write_count = 0;
+u32 g_naomi_board_read_count = 0;
+
 void NaomiBoardIDWrite(const u16 data)
 {
+	g_naomi_board_write_count++;
 	// bit 2: clock
 	// bit 3: data
 	// bit 4: reset (x76f100 only)
@@ -62,6 +67,7 @@ void NaomiBoardIDWrite(const u16 data)
 
 u16 NaomiBoardIDRead()
 {
+	g_naomi_board_read_count++;
 	// bit 0 indicates the eeprom is a X76F100, otherwise the BIOS expects an AT93C46
 	// bit 3 is xf76f100 SDA
 	// bit 4 is at93c46 DO

@@ -196,10 +196,39 @@ static void Do_Interrupt(Sh4ExceptionCode intEvn)
 	debugger::subroutineCall();
 }
 
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+// Exception histogram for freeze-watchdog diagnostics.
+// Sh4ExceptionCode fits in the lower 16 bits; bucket by the raw value.
+extern "C" {
+u32 g_fly_exc_count[1024] = {0};          // counter per expEvn (indexed by expEvn & 0x3FF)
+u32 g_fly_exc_total = 0;                  // total Do_Exception calls
+#define FLY_EXC_TRACE_LEN 32
+u32 g_fly_exc_trace_epc[FLY_EXC_TRACE_LEN] = {0};
+u32 g_fly_exc_trace_evn[FLY_EXC_TRACE_LEN] = {0};
+u32 g_fly_exc_trace_head = 0;             // monotonic; last written = (head-1) & mask
+// Snapshot-on-first-illegal hook (defined in rec_wasm.cpp)
+void fly_snapshot_first_exc(u32 epc, u32 evn);
+}
+#endif
+
 void Do_Exception(u32 epc, Sh4ExceptionCode expEvn)
 {
 	assert((expEvn >= Sh4Ex_TlbMissRead && expEvn <= Sh4Ex_SlotIllegalInstr)
 			|| expEvn == Sh4Ex_FpuDisabled || expEvn == Sh4Ex_SlotFpuDisabled || expEvn == Sh4Ex_UserBreak);
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	g_fly_exc_total++;
+	g_fly_exc_count[((u32)expEvn) & 0x3FF]++;
+	u32 ti = g_fly_exc_trace_head & (FLY_EXC_TRACE_LEN - 1);
+	g_fly_exc_trace_epc[ti] = epc;
+	g_fly_exc_trace_evn[ti] = (u32)expEvn;
+	g_fly_exc_trace_head++;
+	// Snapshot the PC trace on the very first illegal-instruction fault.
+	// The handler immediately starts overwriting the live ring, so we need
+	// a preserved copy to find which block made the initial bad jump.
+	if (expEvn == Sh4Ex_IllegalInstr || expEvn == Sh4Ex_SlotIllegalInstr) {
+		fly_snapshot_first_exc(epc, (u32)expEvn);
+	}
+#endif
 	if (Sh4cntx.sr.BL != 0)
 		throw FlycastException("Fatal: SH4 exception when blocked");
 	CCN_EXPEVT = expEvn;

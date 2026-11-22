@@ -7,6 +7,9 @@
 #include "oslib/oslib.h"
 #include "oslib/virtmem.h"
 #include <cassert>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace addrspace
 {
@@ -149,6 +152,30 @@ template<typename T>
 void DYNACALL writet(u32 addr, T data)
 {
 	constexpr u32 sz = sizeof(T);
+
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	// Diagnostic: log writes to DOA2 freeze-relevant addresses. These pass
+	// through writet<T> from SH4 interpreter (OpPtr), DMA, MMIO-callback
+	// chains — anything NOT the JIT's direct-fast-path WASM store.
+	{
+		u32 aligned = addr & ~3;
+		if (aligned == 0x8c0d9324 || aligned == 0x8c1b89b0 || aligned == 0x8c1c47c8
+		    || aligned == 0x0c0d9324 || aligned == 0x0c1b89b0 || aligned == 0x0c1c47c8
+		    || aligned == 0xac0d9324 || aligned == 0xac1b89b0 || aligned == 0xac1c47c8) {
+			static u32 writet_log_count = 0;
+			if (writet_log_count < 30) {
+				writet_log_count++;
+				EM_ASM({
+					if (!window._flyLog) window._flyLog = [];
+					window._flyLog.push('[WRITET] #' + $0
+						+ ' addr=0x' + ($1>>>0).toString(16)
+						+ ' data=0x' + ($2>>>0).toString(16)
+						+ ' sz=' + $3);
+				}, writet_log_count, addr, (u32)data, (u32)sz);
+			}
+		}
+	}
+#endif
 
 	u32 page = addr>>24;
 	uintptr_t iirf = (uintptr_t)memInfo_ptr[page];

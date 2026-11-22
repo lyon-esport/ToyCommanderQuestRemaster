@@ -1,6 +1,10 @@
 #include "types.h"
 #include <unordered_set>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include "hw/sh4/sh4_interpreter.h"
 #include "hw/sh4/sh4_core.h"
 #include "hw/sh4/sh4_interrupts.h"
@@ -14,6 +18,10 @@
 #include "oslib/virtmem.h"
 
 #if FEAT_SHREC != DYNAREC_NONE
+
+#if defined(__EMSCRIPTEN__) && HOST_CPU == CPU_GENERIC
+extern "C" void wasm_dynarec_init();
+#endif
 
 constexpr u32 CODE_SIZE = 10_MB;
 constexpr u32 TEMP_CODE_SIZE = 1_MB;
@@ -158,8 +166,21 @@ static DynarecCodeEntryPtr compilePC(u32 blockcheck_failures)
 {
 	const u32 pc = Sh4cntx.pc;
 
+#if defined(__EMSCRIPTEN__) && HOST_CPU == CPU_GENERIC
+	// WASM backend: the "magic PC" triggers (0x8c0000e0 / 0xac010000 /
+	// 0xac008300) cause a full cache flush on native JITs where reset is
+	// cheap. On our backend, a reset discards every compiled WebAssembly
+	// module and forces a multi-frame interpreter spiral to recover —
+	// measured at ~2.6k blocks / 4–5 s of wall time per reset. SMC is
+	// already handled per-block by the inline hash check in c_dispatch_loop,
+	// so the reset is redundant for correctness. Also skip the 32 KB free-
+	// space check — the WASM backend only advances codeBuffer by 4 bytes
+	// per block (dummy host_code_size marker), so pressure never hits.
+	(void)pc;
+#else
 	if (codeBuffer.getFreeSpace() < 32_KB || pc == 0x8c0000e0 || pc == 0xac010000 || pc == 0xac008300)
 		Sh4Recompiler::Instance->ResetCache();
+#endif
 
 	RuntimeBlockInfo* rbi = sh4Dynarec->allocateBlock();
 
@@ -342,12 +363,21 @@ void Sh4Recompiler::Reset(bool hard)
 void Sh4Recompiler::Init()
 {
 	INFO_LOG(DYNAREC, "Sh4Recompiler::Init");
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	EM_ASM({ console.log('[rec_wasm] Sh4Recompiler::Init() — step 1: super::Init()'); });
+#endif
 	super::Init();
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	EM_ASM({ console.log('[rec_wasm] Sh4Recompiler::Init() — step 2: bm_Init()'); });
+#endif
 	bm_Init();
-	
+
 	if (addrspace::virtmemEnabled())
 		verify(&mem_b[0] == ((u8*)getContext()->sq_buffer + sizeof(Sh4Context) + 0x0C000000));
 
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	EM_ASM({ console.log('[rec_wasm] Sh4Recompiler::Init() — step 3: prepare_jit_block()'); });
+#endif
 	// Call the platform-specific magic to make the pages RWX
 	CodeCache = nullptr;
 #ifdef FEAT_NO_RWX_PAGES
@@ -355,13 +385,32 @@ void Sh4Recompiler::Init()
 #else
 	bool rc = virtmem::prepare_jit_block(SH4_TCB, FULL_SIZE, (void**)&CodeCache);
 #endif
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	EM_ASM({ console.log('[rec_wasm] Sh4Recompiler::Init() — step 3 result: rc=' + $0 + ' CodeCache=' + $1); }, (int)rc, (int)(uintptr_t)CodeCache);
+#endif
 	verify(rc);
 	// Ensure the pointer returned is non-null
 	verify(CodeCache != nullptr);
 
 	TempCodeCache = CodeCache + CODE_SIZE;
+#if defined(__EMSCRIPTEN__) && HOST_CPU == CPU_GENERIC
+	// Ensure WASM dynarec is initialized — the static constructor may not have
+	// run if the linker stripped the translation unit from the archive.
+	wasm_dynarec_init();
+#endif
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	EM_ASM({ console.log('[rec_wasm] Sh4Recompiler::Init() — step 4: sh4Dynarec->init(), sh4Dynarec=' + $0 + ' ctx=' + $1); },
+		(int)(uintptr_t)sh4Dynarec, (int)(uintptr_t)getContext());
+#endif
+	verify(sh4Dynarec != nullptr);
 	sh4Dynarec->init(*getContext(), codeBuffer);
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	EM_ASM({ console.log('[rec_wasm] Sh4Recompiler::Init() — step 5: bm_ResetCache()'); });
+#endif
 	bm_ResetCache();
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	EM_ASM({ console.log('[rec_wasm] Sh4Recompiler::Init() — COMPLETE'); });
+#endif
 }
 
 void Sh4Recompiler::Term()

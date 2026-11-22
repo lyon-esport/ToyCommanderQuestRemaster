@@ -17,6 +17,7 @@
 #define CPU_ARM      0x20000002
 #define CPU_ARM64    0x20000003
 #define CPU_X64      0x20000004
+#define CPU_GENERIC  0x20000005
 
 //FEAT_SHREC, FEAT_AREC, FEAT_DSPREC
 #define DYNAREC_NONE	0x40000001
@@ -24,7 +25,13 @@
 
 //automatic
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__EMSCRIPTEN__) || defined(__wasm__)
+	#define HOST_CPU CPU_GENERIC
+	// WASM JIT backend
+	#define FEAT_SHREC DYNAREC_JIT
+	#define FEAT_AREC DYNAREC_NONE
+	#define FEAT_DSPREC DYNAREC_NONE
+#elif defined(__x86_64__) || defined(_M_X64)
 	#define HOST_CPU CPU_X64
 #elif defined(__i386__) || defined(_M_IX86)
 	#define HOST_CPU CPU_X86
@@ -48,7 +55,7 @@
 #endif
 
 #if defined(TARGET_NO_REC)
-#define FEAT_SHREC DYNAREC_NONE
+#define FEAT_SHREC DYNAREC_JIT
 #define FEAT_AREC DYNAREC_NONE
 #define FEAT_DSPREC DYNAREC_NONE
 #endif
@@ -69,7 +76,7 @@
 	#if HOST_CPU == CPU_ARM || HOST_CPU == CPU_ARM64 || HOST_CPU == CPU_X86 || HOST_CPU == CPU_X64
 		#define FEAT_SHREC DYNAREC_JIT
 	#else
-		#define FEAT_SHREC DYNAREC_NONE
+		#define FEAT_SHREC DYNAREC_JIT
 	#endif
 #endif
 

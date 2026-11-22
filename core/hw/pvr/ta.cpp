@@ -2,6 +2,10 @@
 #include "ta_ctx.h"
 #include "hw/holly/holly_intc.h"
 #include "pvr_mem.h"
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+#include <emscripten.h>
+#include "hw/sh4/sh4_core.h"   // Sh4cntx — EOL-storm probe (guest pc at raise)
+#endif
 
 /*
 	Threaded TA Implementation
@@ -221,14 +225,67 @@ static void DYNACALL ta_handle_cmd(u32 trans)
 	{
 		if (dat->pcw.ParaType == ParamType_End_Of_List)
 		{
+			// ORPHAN-EOL HARDENING (2026-06-12, FLY_TA_ORPHAN_EOL_FIX): an
+			// End-Of-List param arriving when NO list is open (ta_fsm_cl==7)
+			// is ignored — no interrupt, no list-state churn. Rationale: JGR
+			// legitimately streams zero-filled 32-byte slots (entities built
+			// then killed in-frame); a zero PCW parses as EOL/ListType=0.
+			// The previous behavior "adopted" the orphan EOL's list type and
+			// raised holly_OPAQUE for every such param: 88-1024 phantom
+			// interrupts/frame (storm), phantom list-state resets that mangle
+			// the parsing of subsequent real params (flicker/missing
+			// geometry), sound-driver desync, eventual freeze. Real hardware
+			// plausibly ignores EOL with no open list; a game only ever ACKs
+			// ~1 opaque EOL/frame even while streaming hundreds of zeros.
+			// Note: this matches upstream's code otherwise — candidate
+			// upstream patch if verified.
+#ifndef FLY_TA_ORPHAN_EOL_FIX
+#define FLY_TA_ORPHAN_EOL_FIX 1
+#endif
+			bool orphan_eol_ignored = false;
+#if FLY_TA_ORPHAN_EOL_FIX
+			if (ta_fsm_cl == 7)
+			{
+				orphan_eol_ignored = true;
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+				static u32 orphan_eol = 0;
+				orphan_eol++;
+				if (orphan_eol <= 10 || (orphan_eol & 0xFFF) == 0)
+					EM_ASM({ console.log('[TA-ORPHAN-EOL] #' + $0 + ' ignored (no open list)'); }, orphan_eol);
+#endif
+			}
+#else
 			if (ta_fsm_cl==7)
 				ta_fsm_cl=dat->pcw.ListType;
+#endif
 			//printf("List %d ended\n",ta_fsm_cl);
 
+			if (!orphan_eol_ignored)
+			{
 			if (settings.platform.isNaomi2())
 				asic_RaiseInterruptBothCLX(ListEndInterrupt[ta_fsm_cl]);
 			else
 				asic_RaiseInterrupt(ListEndInterrupt[ta_fsm_cl]);
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+			// OPAQUE-EOL storm probe (2026-06-12): production raises ~88 opaque
+			// list-complete ints per frame (clean: 1). Log guest pc + frame for
+			// the first raises and periodically — distinguishes a GAME retry
+			// loop (pc clusters in one small loop) from a TA-side duplication.
+			if (ta_fsm_cl == 0) {
+				extern u32 FrameCount;
+				static u32 eol_log = 0;
+				eol_log++;
+				if (eol_log <= 40 || (eol_log & 0x3FF) == 0) {
+					EM_ASM({
+						if (!window._flyLog) window._flyLog = [];
+						window._flyLog.push('[EOL-OPQ] #' + $0 + ' frame=' + $1
+							+ ' pc=0x' + ($2>>>0).toString(16)
+							+ ' pr=0x' + ($3>>>0).toString(16));
+					}, eol_log, FrameCount, Sh4cntx.pc, Sh4cntx.pr);
+				}
+			}
+#endif
+			}  // end if (!orphan_eol_ignored)
 			ta_fsm_cl=7;
 			trans=TAS_NS;
 		}

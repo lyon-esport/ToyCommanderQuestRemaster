@@ -18,6 +18,13 @@
 #include <chrono>
 #include <deque>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+#ifndef FLY_PVR_DIAG
+#define FLY_PVR_DIAG 0
+#endif
+
 #ifdef LIBRETRO
 void retro_rend_present();
 void retro_resize_renderer(int w, int h, float aspectRatio);
@@ -303,7 +310,18 @@ private:
 	{
 		FC_PROFILE_SCOPE;
 
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD) && FLY_PVR_DIAG
+		static int present_count = 0;
+		present_count++;
+		bool presResult = renderer->Present();
+		if (present_count <= 5) {
+			EM_ASM({ console.log('[rend] present #' + $0 + ': Present()=' + $1 + ' threaded=' + $2); },
+				present_count, presResult ? 1 : 0, (int)config::ThreadedRendering);
+		}
+		if (presResult)
+#else
 		if (renderer->Present())
+#endif
 		{
 			presented = true;
 			if (!config::ThreadedRendering && !ggpo::active())
@@ -594,8 +612,12 @@ void rend_start_render()
 
 	scheduleRenderDone(ctx);
 
-	if (ctx == nullptr)
+	if (ctx == nullptr) {
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+		g_fly_rend_start_render_null_ctx++;
+#endif
 		return;
+	}
 
 	FillBGP(ctx);
 
@@ -699,6 +721,21 @@ int rend_end_render(int tag, int cycles, int jitter, void *arg)
 
 void rend_vblank()
 {
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD) && FLY_PVR_DIAG
+	static int vblank_count = 0;
+	static int last_fb_enable = -1;
+	static int last_fb_dirty = -1;
+	vblank_count++;
+	int cur_fb_enable = (int)FB_R_CTRL.fb_enable;
+	int cur_fb_dirty = (int)fb_dirty;
+	// Log on change or every 30 vblanks
+	if (cur_fb_enable != last_fb_enable || cur_fb_dirty != last_fb_dirty || (vblank_count % 30) == 0) {
+		EM_ASM({ console.log('[rend] vblank #' + $0 + ': fb_dirty=' + $1 + ' fb_enable=' + $2 + ' render_called=' + $3 + ' rend_enabled=' + $4); },
+			vblank_count, cur_fb_dirty, cur_fb_enable, (int)render_called, (int)rend_is_enabled());
+		last_fb_enable = cur_fb_enable;
+		last_fb_dirty = cur_fb_dirty;
+	}
+#endif
 	if (config::EmulateFramebuffer
 			|| (!render_called && fb_dirty && FB_R_CTRL.fb_enable))
 	{

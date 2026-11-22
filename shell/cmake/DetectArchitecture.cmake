@@ -21,6 +21,9 @@ function(detect_architecture symbol arch)
     endif()
 endfunction()
 
+detect_architecture("__EMSCRIPTEN__" wasm32)
+detect_architecture("__wasm__" wasm32)
+
 detect_architecture("__ARM64__" arm64)
 detect_architecture("__aarch64__" arm64)
 detect_architecture("_M_ARM64" arm64)

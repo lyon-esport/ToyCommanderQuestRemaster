@@ -226,8 +226,36 @@ void BaseTextureCacheData::PrintTextureName()
 #endif
 }
 
+// DIAGNOSTIC (2026-06-12): on WASM, texture invalidation-on-write is dead —
+// protectVram relies on mprotect page faults (no-op under Emscripten), so
+// `dirty` is never set by guest VRAM writes and every texture is permanently
+// frozen at its first upload (palette/YUV paths aside). Suspected cause of the
+// JGR menu glitches. This flag forces a re-decode from live VRAM on every use:
+// slow, but isolates exactly one variable (texture freshness). If glitches
+// vanish with this ON, the fix is per-page write tracking (area-1 is currently
+// direct-mapped in addrspace writet — needs handler routing to observe writes).
+#define FLY_TEX_ALWAYS_UPDATE 0   // diagnostic OFF — replaced by checksum-on-use below (2026-07-16). The always-update run was user-verified on Skies: forcing texture freshness removed the "textures where they aren't supposed to be" glitches. Keep for future A/B.
+
+#ifdef __EMSCRIPTEN__
+// Hash of the texture's full VRAM source — the same [startAddress,
+// mmStartAddress+size) range protectVRam guards natively (VQ codebook and
+// all mip levels included, since they sit between the two).
+u32 BaseTextureCacheData::liveVramHash() const
+{
+	u32 end = mmStartAddress + size;
+	if (end > VRAM_SIZE)
+		end = VRAM_SIZE;
+	if (startAddress >= end)
+		return 0;
+	return XXH32(&vram[startAddress], end - startAddress, 7);
+}
+#endif
+
 //true if : dirty or paletted texture and hashes don't match
 bool BaseTextureCacheData::NeedsUpdate() {
+#if defined(__EMSCRIPTEN__) && FLY_TEX_ALWAYS_UPDATE
+	return true;
+#endif
 	bool rc = dirty != 0;
 	if (tex_type != TextureType::_8)
 	{
@@ -236,6 +264,25 @@ bool BaseTextureCacheData::NeedsUpdate() {
 		else if (tcw.PixelFmt == PixelPal8 && palette_hash != pal_hash_256[tcw.PalSelect >> 4])
 			rc = true;
 	}
+#ifdef __EMSCRIPTEN__
+	// Checksum-on-use invalidation: mprotect is a no-op on WASM so `dirty` is
+	// never set by guest VRAM writes and textures would stay frozen at first
+	// upload (user-verified cause of the Skies misplaced-texture glitches).
+	// Rehash the VRAM source (at most once per frame per texture) and
+	// re-decode when it changed. Unlike write-side page tracking, this cannot
+	// be bypassed by unobserved write paths (SQ bursts, DMA memcpy) — it
+	// checks the data, not the writers.
+	if (!rc && Updates > 0 && wasm_hash_frame != FrameCount)
+	{
+		wasm_hash_frame = FrameCount;
+		u32 h = liveVramHash();
+		if (h != wasm_vram_hash)
+		{
+			wasm_vram_hash = h;
+			rc = true;
+		}
+	}
+#endif
 
 	return rc;
 }
@@ -442,6 +489,12 @@ bool BaseTextureCacheData::Update()
 	dirty = 0;
 	gpuPalette = false;
 	tex_type = tex->type;
+#ifdef __EMSCRIPTEN__
+	// Baseline for checksum-on-use invalidation: hash the exact VRAM bytes
+	// this update is about to decode.
+	wasm_vram_hash = liveVramHash();
+	wasm_hash_frame = FrameCount;
+#endif
 
 	bool has_alpha = false;
 	if (IsPaletted())

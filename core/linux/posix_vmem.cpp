@@ -4,7 +4,7 @@
 // Android and OSX since they are slightly different in some areas.
 #include "types.h"
 
-#ifndef __SWITCH__
+#if !defined(__SWITCH__) && !defined(__EMSCRIPTEN__)
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -325,7 +325,50 @@ void release_jit_block(void *code_area1, void *code_area2, size_t size)
 
 } // namespace virtmem
 
-#endif // !__SWITCH__
+#endif // !__SWITCH__ && !__EMSCRIPTEN__
+
+#ifdef __EMSCRIPTEN__
+// Emscripten: no mmap/shm_open/mprotect support.
+// All virtmem functions are no-ops. addrspace::initMappings() will use
+// the malloc-based fallback path when virtmem::init() returns false.
+#include "hw/mem/addrspace.h"
+#include "hw/sh4/sh4_if.h"
+#include "oslib/virtmem.h"
+
+namespace virtmem
+{
+
+bool region_lock(void *start, size_t len) { return true; }
+bool region_unlock(void *start, size_t len) { return true; }
+bool region_set_exec(void *start, size_t len) { return true; }
+bool init(void **vmem_base_addr, void **sh4rcb_addr, size_t ramSize) { return false; }
+void destroy() {}
+void reset_mem(void *ptr, unsigned size_bytes) { memset(ptr, 0, size_bytes); }
+void ondemand_page(void *address, unsigned size_bytes) {}
+void create_mappings(const Mapping *vmem_maps, unsigned nummaps) {}
+bool prepare_jit_block(void *code_area, size_t size, void **code_area_rwx) {
+	// WASM JIT: no native code execution, but we need a valid buffer for the block manager
+	// Allocate a dummy buffer — rec_wasm doesn't write native code into it, but driver.cpp expects non-null
+	static u8* wasmJitBuffer = nullptr;
+	if (!wasmJitBuffer)
+		wasmJitBuffer = (u8*)malloc(size);
+	if (!wasmJitBuffer)
+		return false;
+	memset(wasmJitBuffer, 0, size);
+	*code_area_rwx = wasmJitBuffer;
+	return true;
+}
+bool prepare_jit_block(void *code_area, size_t size, void **code_area_rw, ptrdiff_t *rx_offset) {
+	bool rc = prepare_jit_block(code_area, size, code_area_rw);
+	if (rc && rx_offset)
+		*rx_offset = 0;
+	return rc;
+}
+void release_jit_block(void *code_area, size_t size) { /* buffer is static, leaked intentionally */ }
+void release_jit_block(void *code_area1, void *code_area2, size_t size) {}
+
+} // namespace virtmem
+#endif // __EMSCRIPTEN__
 
 namespace virtmem
 {

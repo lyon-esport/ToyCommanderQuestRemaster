@@ -127,9 +127,17 @@ class Sh4Recompiler : public Sh4Interpreter
 public:
 	Sh4Recompiler() {
 		Instance = this;
+		// Sh4Interpreter and Sh4Recompiler each declare their own static
+		// `Instance` pointer — C++ name shadowing. Without this line, the
+		// base pointer stays nullptr until WasmDynarec::Run() sets it at
+		// top-of-mainloop; any code path that reaches Sh4Interpreter::Instance
+		// earlier (e.g. a test harness that runs branch opcodes at boot)
+		// dereferences nullptr. Upcast is implicit via inheritance.
+		Sh4Interpreter::Instance = this;
 	}
 	~Sh4Recompiler() {
 		Instance = nullptr;
+		Sh4Interpreter::Instance = nullptr;
 	}
 	void Run() override;
 	void ResetCache() override;

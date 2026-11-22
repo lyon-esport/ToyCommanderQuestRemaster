@@ -117,6 +117,138 @@ void retro_audio_flush_buffer(void)
 	drop_samples = false;
 }
 
+size_t retro_audio_buffer_fill(void)
+{
+	/* Returns current buffer fill in stereo frames (sample pairs).
+	 * Used by the frame pacer to sync emulation speed to audio
+	 * consumption rate. Lock-free read — approximate value is fine. */
+	return audio_buffer_idx >> 1;
+}
+
+/* Audio-loss telemetry (2026-07-17): the two silent sample-loss points are
+ * WriteSample overflow (drops the whole buffer + mutes until next upload)
+ * and audio_batch_cb shortfalls (unwritten tail discarded). Counters feed
+ * the HUD so the loss mode can be identified during real play before any
+ * rate-control design. */
+u32 g_aud_overflow_events = 0;   /* WriteSample overflow occurrences */
+u32 g_aud_shortfall_frames = 0;  /* frames the frontend refused (discarded) */
+u32 g_aud_produced_frames = 0;   /* frames handed to audio_batch_cb */
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+/* ★ AudioWorklet ring-buffer sink (2026-07-17). Replaces the RetroArch
+ * OpenAL path on WASM. Why: the OpenAL→WebAudio shim schedules each ~6ms
+ * chunk as its own AudioBufferSourceNode and clamps late buffers to
+ * currentTime — a click-length seam on EVERY late main-thread frame — and
+ * RetroArch's write side SPIN-WAITS the main thread when the queue is full
+ * (a built-in per-frame stall). The worklet consumes from a ring buffer on
+ * the AUDIO thread: gapless under main-thread jank, non-blocking writes,
+ * underruns become counted silence instead of clicks. Stats (queue depth,
+ * underrun frames, dropped frames) surface in the HUD via Module._flyAud. */
+EM_JS(int, fly_worklet_push, (const short* ptr, unsigned frames), {
+	var A = Module._flyAud;
+	if (A && A.failed)
+		return 1;   // worklet unavailable — caller falls back to audio_batch_cb
+	if (!A) {
+		A = Module._flyAud = { ready: false, failed: false, pend: [], drop: 0, lastVol: -1, stats: { avail: 0, under: 0, drop: 0 } };
+		var ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+		A.ctx = ctx;
+		var src = ""
+			+ "class FlyAudio extends AudioWorkletProcessor {"
+			+ "  constructor() { super();"
+			+ "    this.cap = 32768;"
+			+ "    this.rbL = new Float32Array(this.cap);"
+			+ "    this.rbR = new Float32Array(this.cap);"
+			+ "    this.r = 0; this.w = 0; this.avail = 0;"
+			+ "    this.under = 0; this.drop = 0; this.tick = 0;"
+			+ "    this.primed = false;"
+			+ "    this.port.onmessage = (e) => {"
+			+ "      var d = e.data; var n = d.length >> 1;"
+			+ "      if (this.avail + n > this.cap) { this.drop += n; return; }"
+			+ "      for (var i = 0; i < n; i++) {"
+			+ "        this.rbL[this.w] = d[2*i] / 32768;"
+			+ "        this.rbR[this.w] = d[2*i+1] / 32768;"
+			+ "        this.w = (this.w + 1) % this.cap;"
+			+ "      }"
+			+ "      this.avail += n;"
+			+ "    };"
+			+ "  }"
+			+ "  process(inputs, outputs) {"
+			+ "    var out = outputs[0]; var L = out[0]; var R = out[1] || out[0];"
+			+ "    if (!this.primed) {"
+			+ "      if (this.avail >= 2048) { this.primed = true; }"
+			+ "      else { for (var j = 0; j < L.length; j++) { L[j] = 0; R[j] = 0; } return true; }"
+			+ "    }"
+			+ "    for (var i = 0; i < L.length; i++) {"
+			+ "      if (this.avail > 0) {"
+			+ "        L[i] = this.rbL[this.r]; R[i] = this.rbR[this.r];"
+			+ "        this.r = (this.r + 1) % this.cap; this.avail--;"
+			+ "      } else { L[i] = 0; R[i] = 0; this.under++; this.primed = false; }"
+			+ "    }"
+			+ "    if (++this.tick >= 16) {"
+			+ "      this.tick = 0;"
+			+ "      this.port.postMessage({ avail: this.avail, under: this.under, drop: this.drop });"
+			+ "    }"
+			+ "    return true;"
+			+ "  }"
+			+ "}"
+			+ "registerProcessor('fly-audio', FlyAudio);";
+		var url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
+		ctx.audioWorklet.addModule(url).then(function() {
+			var node = new AudioWorkletNode(ctx, "fly-audio", { outputChannelCount: [2] });
+			// Volume: route through a GainNode driven by the EmulatorJS
+			// volume/mute state (players expect the slider to work).
+			A.gain = ctx.createGain();
+			node.connect(A.gain);
+			A.gain.connect(ctx.destination);
+			node.port.onmessage = function(e) { A.stats = e.data; };
+			A.node = node;
+			A.ready = true;
+			for (var i = 0; i < A.pend.length; i++)
+				node.port.postMessage(A.pend[i], [A.pend[i].buffer]);
+			A.pend = [];
+			console.log("[fly-audio] AudioWorklet sink active @" + ctx.sampleRate + "Hz");
+		}, function(e) {
+			console.error("[fly-audio] worklet init failed, falling back to audio_batch_cb: " + (e && e.message));
+			A.failed = true;
+		});
+	}
+	if (A.ctx.state !== "running")
+		A.ctx.resume();
+	// Track EmulatorJS volume/mute (guarded — property names may evolve)
+	if (A.ready) {
+		var vol = 1;
+		try {
+			var E = window.EJS_emulator;
+			if (E) {
+				if (E.muted) vol = 0;
+				else if (typeof E.volume === "number") vol = E.volume;
+			}
+		} catch (e) {}
+		if (A.lastVol !== vol) {
+			A.gain.gain.value = vol;
+			A.lastVol = vol;
+		}
+	}
+	var n = frames * 2;
+	var chunk = new Int16Array(n);
+	chunk.set(Module.HEAP16.subarray(ptr >> 1, (ptr >> 1) + n));
+	// Backpressure (stats are ~45ms stale — leave slack): past ~0.56s queued,
+	// drop instead of growing latency. Non-blocking by construction.
+	if (A.stats.avail > 24576) { A.drop += frames; return; }
+	if (A.ready)
+		A.node.port.postMessage(chunk, [chunk.buffer]);
+	else if (A.pend.length < 64)
+		A.pend.push(chunk);
+	return 0;
+});
+#endif
+
+size_t retro_audio_buffer_capacity(void)
+{
+	return audio_buffer.size() >> 1;
+}
+
 void retro_audio_upload(void)
 {
 	audio_buffer_mutex.lock();
@@ -193,6 +325,20 @@ void retro_audio_upload(void)
 	}
 
 	int16_t *audio_out_buffer_ptr = audio_out_buffer;
+	g_aud_produced_frames += (u32)num_frames;
+#ifdef __EMSCRIPTEN__
+	/* AudioWorklet sink — RetroArch's OpenAL driver (blocking writes,
+	 * buffer-source seam scheduling) is bypassed entirely. If the worklet
+	 * cannot initialize (old Safari, odd embeds) fall back to the legacy
+	 * audio_batch_cb path permanently: degraded beats mute. */
+	static bool worklet_failed = false;
+	if (num_frames > 0 && !worklet_failed) {
+		if (fly_worklet_push(audio_out_buffer_ptr, (unsigned)num_frames) != 0)
+			worklet_failed = true;
+	}
+	if (!worklet_failed)
+		return;
+#endif
 	while (num_frames > 0)
 	{
 		size_t frames_to_write = (num_frames > audio_batch_frames_max) ?
@@ -202,7 +348,10 @@ void retro_audio_upload(void)
 
 		if ((frames_written < frames_to_write) &&
 			 (frames_written > 0))
+		{
 			audio_batch_frames_max = frames_written;
+			g_aud_shortfall_frames += (u32)(frames_to_write - frames_written);
+		}
 
 		num_frames -= frames_to_write;
 		audio_out_buffer_ptr += frames_to_write << 1;
@@ -224,6 +373,7 @@ void WriteSample(s16 r, s16 l)
 		 *   call of retro_audio_upload() */
 		audio_buffer_idx = 0;
 		drop_samples = true;
+		g_aud_overflow_events++;
 		return;
 	}
 

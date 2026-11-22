@@ -18,8 +18,23 @@ static void ChangeGPR()
 
 //called when sr is changed and we must check for reg banks etc.
 //returns true if interrupt pending
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+extern "C" {
+// BL transitions — captures exception entry (0→1) and exit (1→0) regardless of
+// whether the code path goes through the RTE interpreter or gets rewritten into
+// SHIL ops by the JIT decoder. The raw `g_fly_rte_count` from sh4_opcodes.cpp
+// only counts interpreter-mode RTEs and massively under-reports.
+u32 g_fly_bl_clear_count = 0;
+u32 g_fly_bl_set_count = 0;
+}
+#endif
+
 bool UpdateSR()
 {
+#if defined(__EMSCRIPTEN__) && !defined(JIT_PROD_BUILD)
+	if (Sh4cntx.old_sr.BL == 1 && Sh4cntx.sr.BL == 0) g_fly_bl_clear_count++;
+	if (Sh4cntx.old_sr.BL == 0 && Sh4cntx.sr.BL == 1) g_fly_bl_set_count++;
+#endif
 	if (Sh4cntx.sr.MD)
 	{
 		if (Sh4cntx.old_sr.RB != Sh4cntx.sr.RB)
@@ -120,6 +135,10 @@ static void setHostRoundingMode(u32 roundingMode, u32 denorm2zero)
                 : "r"(off_mask), "r"(on_mask)
 				: "x10"
             );
+    #elif defined(__EMSCRIPTEN__) || defined(__wasm__) || HOST_CPU == CPU_GENERIC
+		// WASM/generic: no hardware FPU control — rounding mode is not configurable
+		(void)roundingMode;
+		(void)denorm2zero;
     #else
 	#error "SetFloatStatusReg: Unsupported platform"
     #endif

@@ -103,6 +103,9 @@ public:
 	bool isReadOnly() const {
 		return overridden;
 	}
+	bool isOverridden() const {		// (hotd2-vr: a game-specific value set since the game loaded)
+		return overridden;
+	}
 
 	explicit operator T() const { return value; }
 	operator T&() { return value; }

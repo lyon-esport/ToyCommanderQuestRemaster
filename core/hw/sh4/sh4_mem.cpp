@@ -201,8 +201,29 @@ void mem_Term()
 	addrspace::term();
 }
 
+
+#ifdef __EMSCRIPTEN__
+// Page-generation SMC (rec_wasm.cpp): block writers bypass the JIT store
+// imports — bump the written pages here so lazily-hashed dispatch slots
+// re-verify against DMA/SQ-loaded code.
+extern u32 g_fly_page_gen[];
+static inline void fly_block_written(u32 dst, u32 size) {
+	u32 phys = dst & 0x1FFFFFFF;
+	if ((phys >> 26) != 3 || size == 0) return;
+	u32 p0 = (phys & (RAM_SIZE - 1)) >> 12;
+	u32 p1 = ((phys + size - 1) & (RAM_SIZE - 1)) >> 12;
+	for (u32 p = p0; ; p = (p + 1) & ((RAM_SIZE - 1) >> 12)) {
+		g_fly_page_gen[p]++;
+		if (p == p1) break;
+	}
+}
+#else
+static inline void fly_block_written(u32, u32) {}
+#endif
+
 void WriteMemBlock_nommu_dma(u32 dst, u32 src, u32 size)
 {
+	fly_block_written(dst, size);   // covers the direct-memcpy branch too
 	bool dst_ismem, src_ismem;
 	void* dst_ptr = addrspace::writeConst(dst, dst_ismem, 4);
 	void* src_ptr = addrspace::readConst(src, src_ismem, 4);
@@ -225,6 +246,7 @@ void WriteMemBlock_nommu_dma(u32 dst, u32 src, u32 size)
 
 void WriteMemBlock_nommu_ptr(u32 dst, const u32 *src, u32 size)
 {
+	fly_block_written(dst, size);
 	bool dst_ismem;
 
 	void* dst_ptr = addrspace::writeConst(dst, dst_ismem, 4);
@@ -259,6 +281,7 @@ void WriteMemBlock_nommu_ptr(u32 dst, const u32 *src, u32 size)
 
 void WriteMemBlock_nommu_sq(u32 dst, const SQBuffer *src)
 {
+	fly_block_written(dst, 32);
 	// destination address is 32-byte aligned
 	SQBuffer *pdst = (SQBuffer *)GetMemPtr(dst, sizeof(SQBuffer));
 	if (pdst != nullptr)

@@ -200,6 +200,27 @@ if(NINTENDO_SWITCH)
 		SA_NOCLDWAIT=0
 		IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS)
 
+elseif(LIBRETRO AND EMSCRIPTEN)
+	# tcvr-web: browser build (Flycast WASM port). Static library, linked later with the web front end.
+	add_library(${PROJECT_NAME} STATIC core/emulator.cpp)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE
+		LIBRETRO
+		GLES GLES3 HAVE_OPENGLES HAVE_OPENGLES3 HAVE_OIT)
+	target_compile_options(${PROJECT_NAME} PRIVATE -fexceptions)
+	set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "flycast_libretro_emscripten")
+	set(USE_VULKAN OFF CACHE BOOL "Force vulkan off" FORCE)
+	set(USE_DX9 OFF CACHE BOOL "Force DX9 off" FORCE)
+	set(USE_DX11 OFF CACHE BOOL "Force DX11 off" FORCE)
+	set(USE_OPENMP OFF CACHE BOOL "Force OpenMP off" FORCE)
+	set(USE_BREAKPAD OFF CACHE BOOL "Force breakpad off" FORCE)
+	set(USE_LUA OFF CACHE BOOL "Force Lua off" FORCE)
+	set(USE_DISCORD OFF CACHE BOOL "Force Discord off" FORCE)
+	set(USE_GLES ON CACHE BOOL "Force GLES for Emscripten" FORCE)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE
+		ASIO_DISABLE_THREADS
+		ASIO_DISABLE_LOCAL_SOCKETS
+		ASIO_DISABLE_SERIAL_PORT)
+	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 elseif(LIBRETRO)
 	add_library(${PROJECT_NAME} SHARED core/emulator.cpp)
 	if(APPLE)
@@ -1213,7 +1234,9 @@ if("x86" IN_LIST ARCHITECTURE OR "x86_64" IN_LIST ARCHITECTURE)
 			core/rec-x64/x64_regalloc.h)
 	endif()
 endif()
-
+if(EMSCRIPTEN)
+	target_sources(${PROJECT_NAME} PRIVATE core/rec-wasm/rec_wasm.cpp core/rec-wasm/web_stubs.cpp)
+endif()
 if((USE_OPENGL OR USE_GLES2 OR USE_GLES) AND NOT LIBRETRO)
 	add_library(glad STATIC core/deps/glad/src/gl.c)
 	if(NOT APPLE AND NOT WIN32 AND NOT SDL2_FOUND)
