@@ -33,6 +33,20 @@ extern std::string (*restartHook)();
 extern std::string (*saveNameHook)();
 
 lobby::Lobby& theLobby();
+// Internet play: the lobby runs through the server in vr.MpServer when vr.MpInternet is on, else on the LAN.
+// Call after either option changed (and before the Multiplayer pages use the lobby; theLobby() does it once).
+void applyNetworkMode();
+bool internetMode();
+// The internet server's state for the menu ("" on the LAN): "Online: host   key ab12-...", "Can't reach ...".
+std::string internetLine();
+// The match's paths to the other players (internet play): "BBB direct 45 ms", "CCC via server 80 ms".
+std::vector<std::string> internetPaths();
+// Private games (internet play): the PIN for the game this copy hosts or joins next ("" = a public game).
+void setGamePin(const std::string& pin);
+// Why the last join was turned away ("Wrong PIN", ...), "" if it wasn't.
+std::string internetRefusal();
+// Whether the server lets players host this kind of game; false with a line for the menu.
+bool internetAllows(bool isPrivate, std::string& why);
 // True once the lobby has been made (it is made on first use: the Multiplayer pages).
 bool lobbyStarted();
 lobby::Identity identity();
@@ -82,6 +96,8 @@ struct Results
 	bool valid = false;
 };
 Results results();
+// A new game (hosted or joined): the last game's ranking is not shown in its lobby.
+void clearResults();
 // Why the last match ended ("" if none yet this run).
 std::string lastEnd();
 // The same, "The match is over" when empty (the RETURN test command, the menu).
@@ -89,6 +105,9 @@ std::string endText();
 
 // Called at each game load, before the netplay starts (emulator.cpp).
 void gate();
+// At the game load after a match (emulator.cpp, where a savestate would load): the player's own game as it was
+// before the match, kept at its start. False: none kept (the game starts from its power-on).
+bool restoreOwnGame();
 // True once after a match has ended: the menu should open on its Multiplayer page.
 bool takeReturn();
 
@@ -99,6 +118,11 @@ bool takeReturn();
 // join the page with Start. Everything goes through the netplay as pad input, so every copy runs the
 // same game; the copies only read memory to know where the game is.
 uint32_t setupButtons();
+
+// Single player (not a match): the game's own team and vehicle page is open, the player chose Multiplayer
+// in the game's main menu. That page waits for more pads plugged into the Dreamcast; in VR, multiplayer is
+// the VR menu's, which leaves the page and opens its Multiplayer section instead (xr_menu.cpp).
+bool gameSetupPageOpen();
 
 // The options a START puts in emu.cfg, as text "key=value" lines, for the tests.
 std::vector<std::string> optionsFor(const lobby::StartInfo& info, const std::string& hostAddress);

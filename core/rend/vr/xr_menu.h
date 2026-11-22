@@ -30,6 +30,9 @@ struct MenuInput
 enum class MenuAction { None, Recenter };
 
 bool menuOpen();
+// Dreamcast buttons (DC_BTN_*) the menu presses on the game's first pad this headset frame, after
+// updateMenu: B to leave the game's own Multiplayer page, whose place the VR menu takes.
+uint32_t gameButtons();
 // Once per headset frame with the controllers' state (gamepad mode). headYaw: where the head
 // looks (radians, relative to the game camera's direction), for placing the menu when it opens.
 MenuAction updateMenu(const MenuInput& input, float headYaw);
@@ -49,6 +52,10 @@ void noteHeadsetFrame();
 void frameRates(float& headset, float& game);
 // The menu goes (session ending): the game runs again if the menu paused it.
 void closeMenu();
+// tcvr: the game is about to be loaded again in the running app (a match starts or ends): a game the menu
+// paused is not started again by the menu (closing it then started the emulator while the new game was
+// loading, ahead of the netplay: "Unexpected emu state" on every match start, a crash if it was loaded).
+void forgetPausedGame();
 
 // What the platform does for the menu (Android.cpp): export the saves to Download, import the
 // newest exported ones and start the game again, quit, open every level of the saved games

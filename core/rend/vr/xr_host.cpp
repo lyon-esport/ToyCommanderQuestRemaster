@@ -121,6 +121,7 @@ int foveationApplied = -1;	// the level the eye buffers have (-1: new eye buffer
 
 bool initTried;
 bool sessionRunning;
+bool sessionPausedGame;		// tcvr: the game was paused because the session stopped (the app in the background)
 bool focused;
 std::chrono::steady_clock::time_point focusLost;
 // The runtime lost the session (start a new one) or wants the app to quit (don't).
@@ -613,12 +614,7 @@ bool updateMenuLayer(const Panel& panel)
 	if (!initMenuLayer(panel.imageWidth, panel.imageHeight))
 		return false;
 	menuShot();
-	std::string says;
-	for (const PanelLine& line : panel.lines)
-		says += line.text + '\n';
-	says += std::to_string(panel.highlight);
-	for (const PanelLine& line : panel.lines)
-		says += ' ' + std::to_string((int)(line.colour.r * 255.f)) + ',' + std::to_string((int)(line.colour.g * 255.f));
+	const std::string says = panelKey(panel);
 	if (menuLayer.ready && says == menuLayer.shown)
 		return true;
 	u32 index = 0;
@@ -862,6 +858,20 @@ void pollEvents()
 				if (XRCHECK(xrBeginSession(session, &begin)))
 				{
 					sessionRunning = true;
+					// tcvr: shown again: the game the session paused goes on (unless the VR menu holds it)
+					if (sessionPausedGame)
+					{
+						sessionPausedGame = false;
+						if (!emu.running() && !menuOpen())
+						{
+							try {
+								emu.start();
+								NOTICE_LOG(RENDERER, "XR: session running again: the game goes on");
+							} catch (const FlycastException& e) {
+								WARN_LOG(RENDERER, "XR: couldn't resume the game: %s", e.what());
+							}
+						}
+					}
 					if (requestRefreshRate)
 						XRCHECK(requestRefreshRate(session, (float)config::VrXrRefreshRate));
 					if (setPerformanceLevel)
@@ -875,6 +885,19 @@ void pollEvents()
 			{
 				xrEndSession(session);
 				sessionRunning = false;
+				// tcvr: the app is really in the background now (a 2D panel in front, such as a launcher,
+				// leaves the session VISIBLE and the game going): a single-player game pauses. A match goes
+				// on (its netplay decides).
+				if (!config::GGPOEnable && emu.running())
+				{
+					try {
+						emu.stop();
+						sessionPausedGame = true;
+						NOTICE_LOG(RENDERER, "XR: session stopping: the game is paused");
+					} catch (const FlycastException& e) {
+						WARN_LOG(RENDERER, "XR: couldn't pause the game: %s", e.what());
+					}
+				}
 			}
 			else if (change.state == XR_SESSION_STATE_LOSS_PENDING)
 				sessionLost = true;
@@ -2052,6 +2075,8 @@ void updateGamepad(XrTime time)
 			else
 				swallow = false;
 		}
+		// the menu's own presses on the game's pad (B to leave the game's Multiplayer page)
+		buttons |= gameButtons();
 	}
 	// a dead zone, then the DC's analog range (up is negative on the Dreamcast)
 	auto dead = [](float v) { return std::abs(v) < 0.12f ? 0.f : (v - std::copysign(0.12f, v)) / 0.88f; };
@@ -2754,6 +2779,11 @@ void term()
 	guns[1] = Gun { 1, Left };
 	dualWield = leftStartWas = recenterWas = laserWas = false;
 	initTried = false;
+}
+
+bool sessionPausedTheGame()
+{
+	return sessionPausedGame;
 }
 
 bool hasSession()

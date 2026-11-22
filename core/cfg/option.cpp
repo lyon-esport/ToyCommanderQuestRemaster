@@ -141,6 +141,9 @@ Option<int> VrMpMarker("vr.MpMarker", 0);
 Option<bool> VrMpReturn("vr.MpReturn", false);
 OptionString VrMpNames("vr.MpNames", "");	// tcvr: the match's player names in player order, "AAA,BBB" (for "BBB left")
 OptionString VrMpEndText("vr.MpEndText", "");	// tcvr: why the last match ended, for the VR menu after the restart
+Option<bool> VrMpInternet("vr.MpInternet", false);	// tcvr: multiplayer over the internet server (vr.MpServer) instead of the LAN
+OptionString VrMpServer("vr.MpServer", "");			// tcvr: the internet server, "host" or "host:port" (IP address or DNS name)
+OptionString VrMpServerKey("vr.MpServerKey", "");		// tcvr: "server|key" the server's key as first met (pinned), hex
 Option<int> VrMpTestEnd("vr.MpTestEnd", 0);	// tcvr: TEST ONLY (never set by the menu): at this netplay frame team 1 reaches the match limit, the game ends the match (results page); 0 off
 OptionString VrMpSetup("vr.MpSetup", "");	// tcvr: the match's settings from the lobby, "mode,room,points" (the automatic setup enters them)
 Option<bool> CustomTextures("rend.CustomTextures");

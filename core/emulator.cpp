@@ -700,6 +700,8 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 #ifndef LIBRETRO
 			if (config::GGPOEnable)
 				dc_loadstate(-1);
+			else if (tcvr::match::restoreOwnGame())	// tcvr: back from a match, in the player's own game
+				;
 			else if (config::AutoLoadState && !naomiNetworkSupported() && !settings.naomi.multiboard)
 				dc_loadstate(config::SavestateSlot);
 #endif
@@ -1183,6 +1185,10 @@ bool Emulator::render()
 	// tcvr: the VR menu stopped the game: the headset keeps drawing (the last game picture,
 	// head-tracked, and the menu) and reading the controllers, which close the menu
 	if (state == Loaded && vr::xr::enabled() && vr::xr::menuOpen())
+		return vr::xr::frame();
+	// tcvr: the XR session stopped (the app in the background) and paused the game: the frames go on, so
+	// the session can start again and the game with it
+	if (state == Loaded && vr::xr::enabled() && vr::xr::sessionPausedTheGame())
 		return vr::xr::frame();
 #endif
 

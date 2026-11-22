@@ -15,6 +15,7 @@
 */
 #include "xr_menu.h"
 #include "xr_panel.h"
+#include "xr_mp_pages.h"
 #include "cfg/option.h"
 #include "emulator.h"
 #include "hw/pvr/Renderer_if.h"
@@ -22,6 +23,9 @@
 #include "log/Log.h"
 #include "network/tcvr_lobby.h"
 #include "network/tcvr_match.h"
+#include "network/tcvr_inet_proto.h"
+#include <random>
+#include "input/gamepad.h"
 #include "stdclass.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -47,7 +51,6 @@ const char *const SectionNames[] = { "Display", "Image quality", "Performance", 
 
 // The Multiplayer section's own pages.
 enum class MpPage { Top, Create, Join, Lobby };
-const char *const MpPageNames[] = { "Multiplayer", "Create game", "Join game", "Lobby" };
 using tcvr::lobby::ModeNames;
 using tcvr::lobby::RoomCount;
 
@@ -68,6 +71,10 @@ tcvr::lobby::Settings mpSettings;	// the Create game page's choices
 std::string mpAddress;				// "Enter address" on the Join page
 bool mpReady;						// this copy's Ready in the lobby
 bool mpSearching;					// the Join page listens
+bool mpPrivate;						// internet play: Create game makes a private game (a PIN to join)
+std::string mpPin;					// its PIN, 4 digits
+uint32_t mpJoinTarget;				// Join page: the private game whose PIN is being entered
+std::string mpHostedPin;			// the PIN of the private game this copy hosts or joined (shown in the lobby)
 
 // A short text edited with the stick: up/down changes the letter, left/right moves, A keeps it, B drops it.
 struct TextEdit
@@ -159,7 +166,7 @@ const std::vector<Choice>& choices()
 enum class Action { Resume, Recenter, OpenSection, Back, Choice, WorldSize, Export, Import, UnlockAll, Quit,
 	// Multiplayer
 	MpCreate, MpJoin, MpName, MpMode, MpRoom, MpPoints, MpStartHosting, MpGame, MpRefresh, MpAddress,
-	MpReady, MpStartMatch, MpLeave, LeaveMatch, Info };
+	MpReady, MpStartMatch, MpLeave, LeaveMatch, Info, MpNetwork, MpServer, MpPrivate, MpPin, MpJoinPin };
 struct Entry
 {
 	Action action;
@@ -189,16 +196,8 @@ bool isInfo(const Entry& e) { return e.action == Action::Info; }
 constexpr uint8_t MatchInputDelay = 2;
 std::string roomName(int room) { return tcvr::lobby::RoomNames[room % RoomCount]; }
 
-std::string gameLine(const tcvr::lobby::FoundGame& g)
-{
-	const tcvr::lobby::Beacon& b = g.beacon;
-	char buf[128];
-	snprintf(buf, sizeof(buf), "%s   %s   %s   %d/%d%s", b.hostName.c_str(), ModeNames[b.settings.mode % 3],
-			roomName(b.settings.room % RoomCount).c_str(), b.players, b.maxPlayers, b.started ? "  (started)" : "");
-	return buf;
-}
-
-// The pages of the Multiplayer section.
+// The pages of the Multiplayer section: what can be picked on them (they are drawn as cards and
+// buttons, xr_mp_pages.h; B goes back, so they have no Back line).
 std::vector<Entry> mpEntries()
 {
 	using namespace tcvr;
@@ -206,89 +205,56 @@ std::vector<Entry> mpEntries()
 	switch (mpPage)
 	{
 	case MpPage::Top:
-		list.push_back({ Action::Back });
+		// tcvr: internet play goes through a server the players chose (tcvr_inet.h)
 		list.push_back({ Action::MpCreate });
 		list.push_back({ Action::MpJoin });
 		list.push_back({ Action::MpName });
+		list.push_back({ Action::MpNetwork });
+		if (match::internetMode())
+			list.push_back({ Action::MpServer });
 		break;
 	case MpPage::Create:
-		list.push_back({ Action::Back });
 		list.push_back({ Action::MpMode });
 		list.push_back({ Action::MpRoom });
 		list.push_back({ Action::MpPoints });
+		if (match::internetMode())
+		{
+			// private games: a 4-digit PIN to join (no PIN: public)
+			list.push_back({ Action::MpPrivate });
+			if (mpPrivate)
+				list.push_back({ Action::MpPin });
+		}
 		list.push_back({ Action::MpStartHosting });
 		break;
 	case MpPage::Join:
-	{
-		list.push_back({ Action::Back });
-		const auto games = match::theLobby().games();
-		for (const auto& g : games)
+		for (const auto& g : match::theLobby().games())
 		{
 			Entry e { Action::MpGame };
 			e.id = g.hostId;
-			e.text = gameLine(g);
 			list.push_back(e);
 		}
-		if (games.empty())
-			list.push_back(infoLine("No game found yet. Is the host on the same Wi-Fi?"));
-		list.push_back({ Action::MpRefresh });
+		if (match::internetMode())
+		{
+			// (a private game's PIN being entered: the PIN box takes the address box's place)
+			if (edit.active && edit.action == (int)Action::MpJoinPin)
+				list.push_back({ Action::MpJoinPin });
+			list.push_back({ Action::MpRefresh });
+			break;
+		}
 		list.push_back({ Action::MpAddress });
+		list.push_back({ Action::MpRefresh });
 		break;
-	}
 	case MpPage::Lobby:
 	{
 		const lobby::View v = match::theLobby().view();
 		if (v.phase == lobby::Phase::InLobby)
-		{
-			const lobby::State& s = v.state;
-			// the last match's ranking, from the game's results page (task 3.5)
-			const match::Results r = match::results();
-			if (r.valid)
-			{
-				std::string line = "Last match:";
-				static const char *const places[] { "1st", "2nd", "3rd", "4th" };
-				for (size_t k = 0; k < r.lines.size() && k < 4; k++)
-					line += std::string("   ") + places[k] + " " + r.lines[k].name + " " + std::to_string(r.lines[k].points)
-							+ " pt" + (r.lines[k].kills > 0 ? " (" + std::to_string(r.lines[k].kills) + " kills)" : std::string());
-				list.push_back(infoLine(line));
-			}
-			list.push_back(infoLine("Host " + s.players[s.hostSlot % lobby::MaxPlayers].name + "   " + ModeNames[s.settings.mode % 3]));
-			list.push_back(infoLine(roomName(s.settings.room % RoomCount) + "   " + tcvr::lobby::limitText(s.settings.mode, s.settings.points)));
-			for (int i = 0; i < lobby::MaxPlayers; i++)
-			{
-				const lobby::PlayerInfo& p = s.players[i];
-				if (!p.present)
-					continue;
-				std::string line = std::to_string(i + 1) + "   " + p.name;
-				if (i == v.mySlot)
-					line += "  (you)";
-				line += i == s.hostSlot ? "   host" : p.ready ? "   ready" : "   not ready";
-				list.push_back(infoLine(line));
-			}
-			if (!v.message.empty())
-				list.push_back(infoLine(v.message));		// (a host handover)
-			if (v.role == lobby::Role::Host)
-			{
-				list.push_back(infoLine("To join by hand: address " + v.hostAddress));
-				list.push_back({ Action::MpStartMatch });
-			}
-			else
-				list.push_back({ Action::MpReady });
+			list.push_back({ v.role == lobby::Role::Host ? Action::MpStartMatch : Action::MpReady });
+		if (v.phase == lobby::Phase::InLobby || v.phase == lobby::Phase::Connecting)
 			list.push_back({ Action::MpLeave });
-		}
-		else if (v.phase == lobby::Phase::Connecting)
-		{
-			list.push_back(infoLine(v.message.empty() ? "Connecting..." : v.message));
-			list.push_back({ Action::MpLeave });
-		}
 		else if (v.phase == lobby::Phase::Started)
 			list.push_back(infoLine("Starting the match..."));
 		else
-		{
-			// refused, host left, failed: say it, and Back
-			list.push_back(infoLine(v.message.empty() ? "The game is closed" : v.message));
-			list.push_back({ Action::Back });
-		}
+			list.push_back({ Action::Back });		// refused, host left, failed: the page says it
 		break;
 	}
 	}
@@ -453,6 +419,9 @@ void showPage(int newPage)
 	}
 	else if (newPage == (int)Section::Multiplayer)
 	{
+		// (internet play: the connection to the server starts now, so it is up by the time Host or Join is
+		// pressed; the first Host was refused with "Connecting to ..." in the headset test)
+		tcvr::match::theLobby();
 		// a game already created or joined: its lobby
 		mpPage = lobbyActive() ? MpPage::Lobby : MpPage::Top;
 		if (mpPage == MpPage::Join)
@@ -545,6 +514,18 @@ void change(const Entry& e, int step)
 		mpChange(e.action, step, false);
 		return;
 	}
+	if (e.action == Action::MpPrivate)
+	{
+		mpPrivate = !mpPrivate;
+		if (mpPrivate && mpPin.size() != 4)
+		{
+			// a PIN to start from (the player can change it)
+			char buf[8];
+			snprintf(buf, sizeof(buf), "%04u", (unsigned)(std::random_device()() % 10000));
+			mpPin = buf;
+		}
+		return;
+	}
 	if (e.action == Action::MpReady)
 	{
 		const bool ready = step > 0;
@@ -579,6 +560,21 @@ void beginEdit(Action a)
 		edit.maxLen = 3;
 		edit.cursor = 0;
 	}
+	else if (a == Action::MpPin || a == Action::MpJoinPin)
+	{
+		edit.text = a == Action::MpPin ? mpPin : std::string();
+		edit.charset = "0123456789 ";
+		edit.maxLen = 4;
+		edit.cursor = 0;
+	}
+	else if (a == Action::MpServer)
+	{
+		// an IP address or a DNS name, ":port" if not the default
+		edit.text = config::VrMpServer.get();
+		edit.charset = "abcdefghijklmnopqrstuvwxyz0123456789.-: ";
+		edit.maxLen = 40;
+		edit.cursor = (int)std::min(edit.text.size(), edit.maxLen - 1);
+	}
 	else
 	{
 		edit.text = mpAddress;
@@ -586,7 +582,7 @@ void beginEdit(Action a)
 		edit.maxLen = 15;
 		edit.cursor = (int)std::min(edit.text.size(), edit.maxLen - 1);
 	}
-	setStatus("Stick: up/down letter, left/right move. A keeps it, B drops it");
+	status.clear();		// (the footer shows the keys)
 }
 
 std::string editDisplay()
@@ -640,6 +636,45 @@ void commitEdit()
 			return;
 		tcvr::match::setPlayerName(t);
 		setStatus("Player name: " + tcvr::match::playerName());
+	}
+	else if (edit.action == (int)Action::MpPin)
+	{
+		if (tcvr::inet::validPin(t) && !t.empty())
+			mpPin = t;
+		else
+			setStatus("The PIN is 4 digits");
+	}
+	else if (edit.action == (int)Action::MpJoinPin)
+	{
+		if (t.size() != 4 || !tcvr::inet::validPin(t))
+		{
+			setStatus("The PIN is 4 digits");
+			return;
+		}
+		for (const auto& g : tcvr::match::theLobby().games())
+			if (g.hostId == mpJoinTarget)
+			{
+				mpStopSearch();
+				mpReady = false;
+				mpHostedPin = t;
+				tcvr::match::setGamePin(t);
+				tcvr::match::clearResults();
+				tcvr::match::theLobby().join(tcvr::match::identity(), g.address, g.beacon.lobbyPort);
+				mpShow(MpPage::Lobby);
+				return;
+			}
+		setStatus("That game is gone");
+	}
+	else if (edit.action == (int)Action::MpServer)
+	{
+		// entering the address (again) trusts the key the server shows next time: that's how a player
+		// accepts a server whose key changed
+		config::VrMpServer.set(t);
+		config::VrMpServer.save();
+		config::VrMpServerKey.set(std::string());
+		config::VrMpServerKey.save();
+		tcvr::match::applyNetworkMode();
+		setStatus(t.empty() ? "No server" : "Server: " + t);
 	}
 	else
 	{
@@ -713,8 +748,28 @@ MenuAction accept(const Entry& e)
 		return MenuAction::None;
 	case Action::MpName:
 	case Action::MpAddress:
+	case Action::MpServer:
+	case Action::MpPin:
 		beginEdit(e.action);
 		return MenuAction::None;
+	case Action::MpPrivate:
+		change(e, 1);
+		return MenuAction::None;
+	case Action::MpJoinPin:
+		return MenuAction::None;
+	case Action::MpNetwork:
+	{
+		if (lobbyActive())
+		{
+			setStatus("Leave the game first");
+			return MenuAction::None;
+		}
+		config::VrMpInternet.set(!config::VrMpInternet);
+		config::VrMpInternet.save();
+		match::applyNetworkMode();
+		setStatus(config::VrMpInternet ? "Internet play: through the server below" : "Local network play");
+		return MenuAction::None;
+	}
 	case Action::MpMode:
 	case Action::MpRoom:
 	case Action::MpPoints:
@@ -723,6 +778,20 @@ MenuAction accept(const Entry& e)
 	case Action::MpStartHosting:
 	{
 		std::string error;
+		const bool priv = match::internetMode() && mpPrivate;
+		if (!match::internetAllows(priv, error))
+		{
+			setStatus(error);
+			return MenuAction::None;
+		}
+		if (priv && mpPin.size() != 4)
+		{
+			setStatus("Enter a 4-digit PIN first");
+			return MenuAction::None;
+		}
+		mpHostedPin = priv ? mpPin : std::string();
+		match::setGamePin(mpHostedPin);
+		match::clearResults();
 		if (match::theLobby().host(match::identity(), mpSettings, error))
 		{
 			mpReady = false;
@@ -737,8 +806,19 @@ MenuAction accept(const Entry& e)
 		for (const auto& g : match::theLobby().games())
 			if (g.hostId == e.id)
 			{
+				if (g.isPrivate)
+				{
+					// its PIN first (the host's copy checks it)
+					mpJoinTarget = g.hostId;
+					beginEdit(Action::MpJoinPin);
+					setStatus("Private game: enter its PIN. Stick: up/down digit, left/right move, A joins, B drops it");
+					return MenuAction::None;
+				}
+				mpHostedPin.clear();
+				match::setGamePin(std::string());
 				mpStopSearch();
 				mpReady = false;
+				match::clearResults();
 				match::theLobby().join(match::identity(), g.address, g.beacon.lobbyPort);
 				mpShow(MpPage::Lobby);
 				return MenuAction::None;
@@ -784,7 +864,7 @@ bool hasValue(const Entry& e)
 	if (isMatchLocked(e))
 		return false;
 	return e.action == Action::Choice || e.action == Action::WorldSize || e.action == Action::MpMode
-			|| e.action == Action::MpRoom || e.action == Action::MpPoints || e.action == Action::MpReady;
+			|| e.action == Action::MpRoom || e.action == Action::MpPoints;	// (Game Public/Private: A, so the stick reaches the PIN box)
 }
 
 std::string lineText(const Entry& e)
@@ -833,8 +913,205 @@ std::string lineText(const Entry& e)
 	}
 	case Action::MpLeave: return "Leave game";
 	case Action::Info: return e.text;
+	case Action::MpPrivate: return mpPrivate ? "Game:  Private (PIN to join)" : "Game:  Public";
+	case Action::MpPin:
+		return "PIN:  " + (edit.active && edit.action == (int)Action::MpPin ? editDisplay() : mpPin);
+	case Action::MpJoinPin: return "PIN:  " + editDisplay();
+	case Action::MpNetwork: return config::VrMpInternet ? "Play over:  Internet" : "Play over:  Local network (Wi-Fi)";
+	case Action::MpServer:
+		if (edit.active && edit.action == (int)Action::MpServer)
+			return "Server:  " + editDisplay();
+		return "Server:  " + (config::VrMpServer.get().empty() ? std::string("enter its address") : config::VrMpServer.get());
 	}
 	return "";
+}
+
+// ---- the Multiplayer pages as cards and buttons (Manu chose layout A, 2026-11-21) ------------
+
+// the limit's value alone ("10", "8 min", "No limit"), for the host page's button
+std::string limitValueText(int mode, int points)
+{
+	std::string t = tcvr::lobby::limitText(mode, points);
+	for (const char *tail : { " points to win", " point to win", " time limit" })
+	{
+		const size_t at = t.find(tail);
+		if (at != std::string::npos)
+			return t.substr(0, at);
+	}
+	return t == "no limit" ? "No limit" : t;
+}
+
+std::string summaryText(const tcvr::lobby::Settings& st)
+{
+	return std::string(ModeNames[st.mode % 3]) + "  \xC2\xB7  " + roomName(st.room % RoomCount) + "  \xC2\xB7  "
+			+ tcvr::lobby::limitText(st.mode, st.points);
+}
+
+mp::Item mpItem(Action a)
+{
+	switch (a)
+	{
+	case Action::MpCreate: return mp::Item::Host;
+	case Action::MpJoin: return mp::Item::Join;
+	case Action::MpName: return mp::Item::Name;
+	case Action::MpMode: return mp::Item::Mode;
+	case Action::MpRoom: return mp::Item::Room;
+	case Action::MpPoints: return mp::Item::Points;
+	case Action::MpStartHosting: return mp::Item::StartHosting;
+	case Action::MpGame: return mp::Item::Game;
+	case Action::MpAddress: return mp::Item::Address;
+	case Action::MpRefresh: return mp::Item::Refresh;
+	case Action::MpReady: return mp::Item::Ready;
+	case Action::MpStartMatch: return mp::Item::StartMatch;
+	case Action::MpLeave: return mp::Item::Leave;
+	case Action::Back: return mp::Item::Back;
+	case Action::MpNetwork: return mp::Item::Network;
+	case Action::MpServer: return mp::Item::Server;
+	case Action::MpPrivate: return mp::Item::Private;
+	case Action::MpPin: return mp::Item::Pin;
+	case Action::MpJoinPin: return mp::Item::Pin;
+	default: return mp::Item::None;
+	}
+}
+
+// What the Multiplayer page shows now, for xr_mp_pages.
+mp::Screen mpScreen(const std::vector<Entry>& list)
+{
+	using namespace tcvr;
+	mp::Screen sc;
+	for (const Entry& e : list)
+		sc.items.push_back(mpItem(e.action));
+	sc.selected = selected;
+	const std::string sep = " \xE2\x80\xBA ";
+	const bool editName = edit.active && edit.action == (int)Action::MpName;
+	const bool editAddress = edit.active && edit.action == (int)Action::MpAddress;
+	sc.editing = edit.active;
+	// internet play (tcvr_inet.h)
+	sc.internet = match::internetMode();
+	if (sc.internet)
+		sc.serverLine = match::internetLine();
+	switch (mpPage)
+	{
+	case MpPage::Top:
+		sc.page = mp::Page::Top;
+		sc.crumb = "VR menu" + sep + "Multiplayer";
+		sc.name = editName ? editDisplay() : match::playerName();
+		sc.nameEditing = editName;
+		sc.serverEditing = edit.active && edit.action == (int)Action::MpServer;
+		sc.server = sc.serverEditing ? editDisplay()
+				: config::VrMpServer.get().empty() ? std::string("Press A to enter its address") : config::VrMpServer.get();
+		break;
+	case MpPage::Create:
+		sc.page = mp::Page::Create;
+		sc.crumb = "Multiplayer" + sep + "Host a game";
+		sc.mode = ModeNames[mpSettings.mode % 3];
+		sc.room = roomName(mpSettings.room % RoomCount);
+		sc.roomIndex = mpSettings.room % RoomCount;
+		sc.roomCount = RoomCount;
+		sc.limitLabel = mpSettings.mode == 1 ? "Time limit" : "Points to win";
+		sc.limit = limitValueText(mpSettings.mode, mpSettings.points);
+		sc.privateGame = mpPrivate;
+		sc.pinEditing = edit.active && edit.action == (int)Action::MpPin;
+		sc.pin = sc.pinEditing ? editDisplay() : mpPin;
+		break;
+	case MpPage::Join:
+	{
+		sc.page = mp::Page::Join;
+		sc.crumb = "Multiplayer" + sep + "Join a game";
+		const auto games = match::theLobby().games();
+		// (in the order of the list's game lines)
+		for (const Entry& e : list)
+			if (e.action == Action::MpGame)
+				for (const auto& g : games)
+					if (g.hostId == e.id)
+					{
+						const lobby::Beacon& b = g.beacon;
+						mp::GameCard c;
+						c.host = b.hostName;
+						c.mode = ModeNames[b.settings.mode % 3];
+						c.room = roomName(b.settings.room % RoomCount);
+						c.limit = lobby::limitText(b.settings.mode, b.settings.points);
+						c.players = b.players;
+						c.maxPlayers = b.maxPlayers;
+						c.started = b.started;
+						c.isPrivate = g.isPrivate;
+						if (g.isPrivate && g.hostId == mpJoinTarget)
+							sc.pinFor = b.hostName;
+						sc.games.push_back(c);
+						break;
+					}
+		sc.address = editAddress ? editDisplay() : mpAddress.empty() ? std::string("Press A to type one") : mpAddress;
+		sc.addressEditing = editAddress;
+		sc.pinEditing = edit.active && edit.action == (int)Action::MpJoinPin;
+		if (sc.pinEditing)
+			sc.pin = editDisplay();
+		break;
+	}
+	case MpPage::Lobby:
+	{
+		sc.crumb = "Multiplayer" + sep + "Lobby";
+		const lobby::View v = match::theLobby().view();
+		if (v.phase != lobby::Phase::InLobby)
+		{
+			sc.page = mp::Page::Message;
+			const std::string refused = match::internetRefusal();		// (internet: "Wrong PIN"...)
+			sc.message = v.phase == lobby::Phase::Connecting ? (v.message.empty() ? "Connecting to the game..." : v.message)
+					: v.phase == lobby::Phase::Started ? "Starting the match..."
+					: !refused.empty() ? refused
+					: v.message.empty() ? "The game is closed" : v.message;
+			break;
+		}
+		sc.page = mp::Page::Lobby;
+		const lobby::State& st = v.state;
+		sc.isHost = v.role == lobby::Role::Host;
+		sc.summary = summaryText(st.settings);
+		for (int i = 0; i < lobby::MaxPlayers; i++)
+		{
+			const lobby::PlayerInfo& p = st.players[i];
+			mp::Slot sl;
+			sl.present = p.present;
+			sl.name = p.name;
+			sl.you = i == v.mySlot;
+			sl.host = i == st.hostSlot;
+			sl.ready = p.ready;
+			sc.slots.push_back(sl);
+		}
+		sc.hostAddress = v.hostAddress;
+		std::string why;
+		sc.canStart = sc.isHost && match::theLobby().canStart(why);
+		sc.whyNot = why;
+		sc.ready = mpReady;
+		const match::Results r = match::results();
+		if (r.valid)
+			for (const auto& l : r.lines)
+				sc.results.push_back({ l.name, l.points, l.kills });
+		sc.message = v.message;
+		if (sc.internet)
+		{
+			// how the match's packets reach each player, and who may join
+			for (const std::string& path : match::internetPaths())
+				sc.links.push_back(path);
+			sc.access = mpHostedPin.empty() ? "Public game" : "Private game, PIN " + mpHostedPin;
+			sc.hostAddress.clear();
+		}
+		break;
+	}
+	}
+	return sc;
+}
+
+// The Multiplayer page drawn; the place of each line of list.
+std::vector<mp::Rect> mpLayout(const std::vector<Entry>& list, Panel* panel = nullptr)
+{
+	Panel scratch;
+	mp::Screen sc = mpScreen(list);
+	const bool showStatus = !status.empty() && Clock::now() < statusUntil;
+	if (showStatus)
+		sc.status = status;
+	char rates[96];
+	snprintf(rates, sizeof(rates), "Headset %.0f fps   Game %.0f fps%s", headsetFps, gameFps, pausedGame ? " (paused)" : "");
+	sc.rates = rates;
+	return mp::build(sc, panel != nullptr ? *panel : scratch);
 }
 
 }	// namespace
@@ -848,6 +1125,13 @@ void frameRates(float& headset, float& game)
 {
 	headset = headsetFps;
 	game = gameFps;
+}
+
+void forgetPausedGame()
+{
+	if (pausedGame)
+		NOTICE_LOG(RENDERER, "XR menu: the game is loaded again: the menu won't start it");
+	pausedGame = false;
 }
 
 void closeMenu()
@@ -922,6 +1206,98 @@ void keepSelection(const std::vector<Entry>& list)
 	lastGames = games;
 }
 
+// The game's own Multiplayer (Manu, 2026-11-19): the Dreamcast's team and vehicle page waits for more pads
+// plugged in, but in VR the players are other headsets, met in the VR menu's Multiplayer section. When that
+// page opens in single player, the menu player leaves it with B (as on the Dreamcast: the "MASTER" quarter
+// aborts the page, the game goes back to its main menu) and the VR menu opens on its Multiplayer section.
+static struct GameMultiplayer
+{
+	enum class Step { Idle, Leaving, Left, Failed } step = Step::Idle;
+	int seen = 0;			// headset frames in a row with the page open (a word read mid-frame can flicker)
+	int tries = 0;
+	std::chrono::steady_clock::time_point pressUntil, nextPress, goneSince;
+	bool gone = false;
+} gm;
+static uint32_t gmButtons;
+
+uint32_t gameButtons()
+{
+	return gmButtons;
+}
+
+static void redirectGameMultiplayer(float headYaw)
+{
+	using namespace std::chrono;
+	gmButtons = 0;
+	if (!emu.running())
+		return;		// (paused, loading: the page is neither open nor gone)
+	const auto now = steady_clock::now();
+	const bool page = !open && !pausedGame && tcvr::match::gameSetupPageOpen();
+	switch (gm.step)
+	{
+	case GameMultiplayer::Step::Idle:
+		gm.seen = page ? gm.seen + 1 : 0;
+		if (gm.seen >= 3)
+		{
+			NOTICE_LOG(RENDERER, "XR menu: the game's Multiplayer page opened: leaving it for the VR menu's");
+			gm.step = GameMultiplayer::Step::Leaving;
+			gm.tries = 0;
+			gm.gone = false;
+			gm.nextPress = now + milliseconds(100);	// (the menu player's quarter is ready for B)
+		}
+		break;
+	case GameMultiplayer::Step::Leaving:
+		if (open)
+		{
+			gm.step = GameMultiplayer::Step::Failed;	// the player opened the menu meanwhile
+			break;
+		}
+		if (!page && !pausedGame)
+		{
+			if (!gm.gone)
+			{
+				gm.gone = true;
+				gm.goneSince = now;
+			}
+			// the main menu back on screen behind the VR menu
+			if (now - gm.goneSince >= milliseconds(300))
+			{
+				NOTICE_LOG(RENDERER, "XR menu: the game's Multiplayer page left (%d presses): VR menu, Multiplayer", gm.tries);
+				gm.step = GameMultiplayer::Step::Left;
+				openMenu(headYaw);
+				showPage((int)Section::Multiplayer);
+			}
+			break;
+		}
+		gm.gone = false;
+		if (now < gm.pressUntil)
+			gmButtons = DC_BTN_B;
+		else if (now >= gm.nextPress)
+		{
+			if (gm.tries >= 5)
+			{
+				WARN_LOG(RENDERER, "XR menu: the game's Multiplayer page did not close with B");
+				gm.step = GameMultiplayer::Step::Failed;
+				break;
+			}
+			gm.tries++;
+			gm.pressUntil = now + milliseconds(120);
+			gm.nextPress = now + milliseconds(500);
+			gmButtons = DC_BTN_B;
+		}
+		break;
+	case GameMultiplayer::Step::Left:
+	case GameMultiplayer::Step::Failed:
+		// once the page is gone (and the menu closed), a new choice of Multiplayer goes the same way
+		if (!page && !open)
+		{
+			gm.step = GameMultiplayer::Step::Idle;
+			gm.seen = 0;
+		}
+		break;
+	}
+}
+
 MenuAction updateMenu(const MenuInput& input, float headYaw)
 {
 	lastHeadYaw = headYaw;
@@ -946,6 +1322,7 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 		setStatus(why.empty() ? "The match is over" : why);
 		return MenuAction::None;
 	}
+	redirectGameMultiplayer(headYaw);
 	if (input.toggle)
 	{
 		if (open)
@@ -996,7 +1373,23 @@ MenuAction updateMenu(const MenuInput& input, float headYaw)
 			commitEdit();
 		return MenuAction::None;
 	}
-	if (step)
+	if (step && page == (int)Section::Multiplayer)
+	{
+		// the cards and buttons: left/right changes a value, else the stick goes to the nearest button
+		// that way
+		if ((dir == 3 || dir == 4) && hasValue(list[selected]))
+			change(list[selected], dir == 3 ? -1 : 1);
+		else
+		{
+			const int to = mp::move(mpLayout(list), selected, dir);
+			if (to >= 0)
+				selected = to;
+			else if (dir == 3 && mpPage == MpPage::Top)	// (only from the start page: elsewhere a stray push left the
+				goBack();								// page, or the game; B goes back)
+		}
+		confirming = -1;
+	}
+	else if (step)
 	{
 		const int count = (int)list.size();
 		if (dir == 1 || dir == 2)
@@ -1060,11 +1453,15 @@ bool menuPanel(Panel& panel, float& yaw)
 	panel.imageWidth = 1536;
 	panel.imageHeight = 1000;
 	panel.widthMetres = 1.2f;
-	panel.lines.push_back({ "TOY COMMANDER VR", 0.052f, red });
-	const bool mp = page == (int)Section::Multiplayer;
-	panel.lines.push_back({ page < 0 ? (inMatch() ? "VR menu   (match running)" : "VR menu")
-			: mp ? MpPageNames[(int)mpPage] : SectionNames[page], 0.04f, grey });
+	yaw = placedYaw;
 	const auto list = entries();
+	if (page == (int)Section::Multiplayer)
+	{
+		mpLayout(list, &panel);		// (cards and buttons, xr_mp_pages.cpp)
+		return true;
+	}
+	panel.lines.push_back({ "TOY COMMANDER VR", 0.052f, red });
+	panel.lines.push_back({ page < 0 ? (inMatch() ? "VR menu   (match running)" : "VR menu") : SectionNames[page], 0.04f, grey });
 	const float lineSize = list.size() > 9 ? 0.039f : 0.046f;
 	for (int i = 0; i < (int)list.size(); i++)
 	{
