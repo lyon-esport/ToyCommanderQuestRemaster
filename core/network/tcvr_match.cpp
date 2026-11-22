@@ -82,12 +82,16 @@ enum class Reload { None, IntoMatch, BackToLobby };
 std::atomic<int> reloadWanted { (int)Reload::None };	// for the render thread
 std::atomic<int> reloading { (int)Reload::None };		// until the game runs again
 std::chrono::steady_clock::time_point reloadSince;
+// The game was loaded (gate()) since the reload was asked for. The old game still runs for a moment after
+// the ask (until the render thread unloads it): running alone does not mean the reload is done.
+std::atomic<bool> loadedSinceReload { false };
 std::string endLine;									// why the last match ended, for the menu
 
 std::string restart(Reload kind)
 {
 	WARN_LOG(NETWORK, "MP RESTART in the running app (%s)", kind == Reload::IntoMatch ? "into the match" : "back to the lobby");
 	reloadSince = std::chrono::steady_clock::now();
+	loadedSinceReload = false;
 	reloading = (int)kind;
 	reloadWanted = (int)kind;
 	return kind == Reload::IntoMatch ? "Starting the match..." : "Back to the lobby...";
@@ -573,7 +577,7 @@ static std::string endMatch(const std::string& why)
 // The game runs again after a reload: the reload is done.
 static void reloadDoneIfRunning()
 {
-	if (reloading != (int)Reload::None && reloadWanted == (int)Reload::None && emu.running())
+	if (reloading != (int)Reload::None && reloadWanted == (int)Reload::None && loadedSinceReload && emu.running())
 	{
 		NOTICE_LOG(NETWORK, "MP: the game runs again (%.1f s)",
 				std::chrono::duration<float>(std::chrono::steady_clock::now() - reloadSince).count());
@@ -690,6 +694,7 @@ bool gameStopped(const std::string& message)
 			: "The match is over: " + (message.empty() ? std::string("the network dropped") : message));
 	// the caller loads the game again (single player); the panel says so meanwhile
 	reloadSince = std::chrono::steady_clock::now();
+	loadedSinceReload = false;
 	reloading = (int)Reload::BackToLobby;
 	reloadWanted = (int)Reload::None;
 	return true;
@@ -775,6 +780,7 @@ static void resetWatch();
 
 void gate()
 {
+	loadedSinceReload = true;
 	const int marker = config::VrMpMarker;
 	// The first game load of this run of the app: a "match over" mark from an earlier run is stale (that run's
 	// lobby is gone with it; the menu opened by itself on Multiplayer with "The match is over" at each start).
