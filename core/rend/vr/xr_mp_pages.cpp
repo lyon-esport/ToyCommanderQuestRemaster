@@ -210,13 +210,19 @@ int itemIndex(const Screen& s, Item item, int nth = 0)
 bool picked(const Screen& s, int index) { return index >= 0 && index == s.selected; }
 
 // a value with arrows (Mode, Arena, Points): label above the value, arrows on the right
-void valueButton(Painter& p, const Rect& r, bool sel, const std::string& label, const std::string& value)
+// toggle: A changes it (no arrows: left/right go to the next button)
+void valueButton(Painter& p, const Rect& r, bool sel, const std::string& label, const std::string& value, bool toggle = false)
 {
 	p.frame(r, sel);
 	const float my = (r.y0 + r.y1) * 0.5f;
 	p.text(upper(label), r.x0 + 36.f, my - 12.f, 24.f, Label);
-	p.text(p.fit(value, 40.f, r.x1 - r.x0 - 200.f), r.x0 + 36.f, my + 34.f, 40.f, Text);
+	p.text(p.fit(value, 40.f, r.x1 - r.x0 - (toggle ? 150.f : 200.f)), r.x0 + 36.f, my + 34.f, 40.f, Text);
 	const glm::vec3 c = sel ? Yellow : Faint;
+	if (toggle)
+	{
+		p.text("Change", r.x1 - 30.f, my + 10.f, 26.f, c, 2);
+		return;
+	}
 	p.arrow(r.x1 - 110.f, my, 34.f, -1, c);
 	p.arrow(r.x1 - 50.f, my, 34.f, 1, c);
 }
@@ -285,7 +291,7 @@ void topPage(Painter& p, const Screen& s, std::vector<Rect>& rects)
 	{
 		const Rect r { Margin, 806.f, 700.f, 900.f };
 		rects[net] = r;
-		valueButton(p, r, picked(s, net), "Play over", s.internet ? "Internet" : "This Wi-Fi");
+		valueButton(p, r, picked(s, net), "Play over", s.internet ? "Internet" : "This Wi-Fi", true);
 	}
 	if (server >= 0)
 	{
@@ -324,7 +330,7 @@ void createPage(Painter& p, const Screen& s, std::vector<Rect>& rects)
 	{
 		const Rect r { x0, 560.f, pin >= 0 ? x1 - 280.f : x1, 660.f };
 		rects[priv] = r;
-		valueButton(p, r, picked(s, priv), "Game", s.privateGame ? "Private" : "Public");
+		valueButton(p, r, picked(s, priv), "Game", s.privateGame ? "Private" : "Public", true);
 	}
 	if (pin >= 0)
 	{

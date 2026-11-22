@@ -110,6 +110,10 @@ private:
 	std::unique_ptr<Impl> impl;
 };
 
+// Where the client's events go (the server connection, lobby streams, direct/relay paths): the app's log.
+// Called on the client's thread.
+void setLog(std::function<void(const std::string&)> sink);
+
 // "host:port" -> host and port (DefaultServerPort when none). False: empty or a bad port.
 bool splitServer(const std::string& text, std::string& host, uint16_t& port);
 

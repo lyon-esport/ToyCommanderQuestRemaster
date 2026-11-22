@@ -96,6 +96,8 @@ struct Results
 	bool valid = false;
 };
 Results results();
+// A new game (hosted or joined): the last game's ranking is not shown in its lobby.
+void clearResults();
 // Why the last match ended ("" if none yet this run).
 std::string lastEnd();
 // The same, "The match is over" when empty (the RETURN test command, the menu).

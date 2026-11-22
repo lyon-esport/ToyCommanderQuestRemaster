@@ -419,6 +419,9 @@ void showPage(int newPage)
 	}
 	else if (newPage == (int)Section::Multiplayer)
 	{
+		// (internet play: the connection to the server starts now, so it is up by the time Host or Join is
+		// pressed; the first Host was refused with "Connecting to ..." in the headset test)
+		tcvr::match::theLobby();
 		// a game already created or joined: its lobby
 		mpPage = lobbyActive() ? MpPage::Lobby : MpPage::Top;
 		if (mpPage == MpPage::Join)
@@ -655,6 +658,7 @@ void commitEdit()
 				mpReady = false;
 				mpHostedPin = t;
 				tcvr::match::setGamePin(t);
+				tcvr::match::clearResults();
 				tcvr::match::theLobby().join(tcvr::match::identity(), g.address, g.beacon.lobbyPort);
 				mpShow(MpPage::Lobby);
 				return;
@@ -787,6 +791,7 @@ MenuAction accept(const Entry& e)
 		}
 		mpHostedPin = priv ? mpPin : std::string();
 		match::setGamePin(mpHostedPin);
+		match::clearResults();
 		if (match::theLobby().host(match::identity(), mpSettings, error))
 		{
 			mpReady = false;
@@ -813,6 +818,7 @@ MenuAction accept(const Entry& e)
 				match::setGamePin(std::string());
 				mpStopSearch();
 				mpReady = false;
+				match::clearResults();
 				match::theLobby().join(match::identity(), g.address, g.beacon.lobbyPort);
 				mpShow(MpPage::Lobby);
 				return MenuAction::None;
@@ -858,7 +864,7 @@ bool hasValue(const Entry& e)
 	if (isMatchLocked(e))
 		return false;
 	return e.action == Action::Choice || e.action == Action::WorldSize || e.action == Action::MpMode
-			|| e.action == Action::MpRoom || e.action == Action::MpPoints || e.action == Action::MpPrivate;
+			|| e.action == Action::MpRoom || e.action == Action::MpPoints;	// (Game Public/Private: A, so the stick reaches the PIN box)
 }
 
 std::string lineText(const Entry& e)

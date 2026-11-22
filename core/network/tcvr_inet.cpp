@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdarg>
 #include <cstring>
 #include <random>
 #include <deque>
@@ -31,6 +32,35 @@ using asio::ip::tcp;
 using asio::ip::udp;
 using Clock = std::chrono::steady_clock;
 using std::chrono::milliseconds;
+
+namespace
+{
+std::mutex logMutex;
+std::function<void(const std::string&)> logSink;
+
+void logLine(const char *fmt, ...)
+{
+	std::function<void(const std::string&)> sink;
+	{
+		std::lock_guard<std::mutex> lock(logMutex);
+		sink = logSink;
+	}
+	if (!sink)
+		return;
+	char buf[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	sink(buf);
+}
+}
+
+void setLog(std::function<void(const std::string&)> sink)
+{
+	std::lock_guard<std::mutex> lock(logMutex);
+	logSink = std::move(sink);
+}
 
 bool splitServer(const std::string& text, std::string& host, uint16_t& port)
 {
@@ -70,6 +100,12 @@ constexpr int PunchFastPhaseMs = 10000;
 constexpr int DirectFreshMs = 3000;		// the other side heard our direct packets this recently: send direct
 constexpr int AcceptTimeoutMs = 10000;
 constexpr int GamesVisibleMs = 3000;
+// Relayed streams: the bytes one side may send before the other says it passed them on. The server drops a
+// player whose backlog passes 512 KB ("too slow"): a match's start state (megabytes, lobby SNAP) sent at
+// full speed did that, and the lobby link broke (headset test 2026-11-22).
+constexpr uint32_t StreamWindow = 192 * 1024;
+constexpr uint32_t StreamCreditStep = 32 * 1024;	// the receiver gives credit back by this much at least
+enum : uint8_t { StreamBytes = 0, StreamCredit = 1 };	// the first byte of a Data message (inside the E2E seal)
 constexpr int PinRetryMs = 2000;		// after a wrong PIN, the same player waits this long before the next try (Manu)
 
 enum PeerKind : uint8_t { Punch = 1, Ggpo = 2, Pong = 3 };
@@ -138,6 +174,7 @@ struct InternetClient::Impl
 	{
 		MemberInfo info;
 		PairKey pk;
+		int loggedPath = -1;			// the path last written to the log (1 direct, 0 relay)
 		uint64_t udpSend = 0;
 		ReplayWindow udpWin;
 		uint64_t streamSend = 0;
@@ -179,7 +216,10 @@ struct InternetClient::Impl
 		bool closed = false;
 		std::deque<std::vector<uint8_t>> toLocal;
 		bool writing = false;
-		uint8_t buf[2048];
+		uint32_t unacked = 0;			// bytes sent the other side hasn't passed on yet
+		bool paused = false;			// reading the local socket waits for credit
+		uint32_t passed = 0;			// bytes written to the local socket, not credited yet
+		uint8_t buf[6144];
 		Clock::time_point made = Clock::now();
 	};
 	using StreamPtr = std::shared_ptr<Stream>;
@@ -217,9 +257,15 @@ struct InternetClient::Impl
 
 	void setStatus(Status s, const std::string& line)
 	{
-		std::lock_guard<std::mutex> lock(mutex);
-		st = s;
-		stLine = line;
+		bool changed;
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			changed = st != s;
+			st = s;
+			stLine = line;
+		}
+		if (changed)
+			logLine("internet: %s", line.c_str());
 	}
 
 	// ---- connection to the server
@@ -573,6 +619,8 @@ struct InternetClient::Impl
 			const uint32_t target = r.u32();
 			const bool ok = r.u8() != 0;
 			const std::string why = r.str();
+			if (!ok)
+				logLine("internet: the server can't connect us to #%u: %s", target, why.c_str());
 			if (!ok && !why.empty())
 			{
 				std::lock_guard<std::mutex> lock(mutex);
@@ -704,7 +752,15 @@ struct InternetClient::Impl
 	{
 		std::vector<PeerPath> list;
 		for (auto& [id, p] : peers)
+		{
 			list.push_back({ id, p->info.name, directUsable(*p), p->rtt });
+			const int path = list.back().direct ? 1 : 0;
+			if (p->loggedPath != path)
+			{
+				p->loggedPath = path;
+				logLine("internet: %s (#%u) %s, round trip %d ms", p->info.name.c_str(), id, path ? "direct" : "via the server", p->rtt);
+			}
+		}
 		std::lock_guard<std::mutex> lock(mutex);
 		pathList = list;
 	}
@@ -743,6 +799,7 @@ struct InternetClient::Impl
 		if (s->closed)
 			return;
 		s->closed = true;
+		logLine("internet: lobby link %u with #%u closed (%s)", s->sid, s->peer, tell ? "here" : "by the other side or the server");
 		if (tell)
 			sendStream(*s, StreamKind::Close, {});
 		asio::error_code ec;
@@ -810,6 +867,7 @@ struct InternetClient::Impl
 		w.u16(s->remotePort);
 		w.str(pin);
 		sendStream(*s, StreamKind::Open, w.b);
+		logLine("internet: lobby link %u to #%u opened%s", s->sid, s->peer, pin.empty() ? "" : " (with a PIN)");
 		s->open = true;
 		readLocal(s);
 	}
@@ -824,9 +882,38 @@ struct InternetClient::Impl
 				closeStream(s, true);
 				return;
 			}
-			sendStream(*s, StreamKind::Data, std::vector<uint8_t>(s->buf, s->buf + n));
-			readLocal(s);
+			std::vector<uint8_t> data(n + 1);
+			data[0] = StreamBytes;
+			std::memcpy(data.data() + 1, s->buf, n);
+			sendStream(*s, StreamKind::Data, data);
+			s->unacked += (uint32_t)n;
+			if (s->unacked >= StreamWindow)
+				s->paused = true;		// (credit() reads again)
+			else
+				readLocal(s);
 		});
+	}
+
+	// the other side passed n bytes on: read more
+	void credit(const StreamPtr& s, uint32_t n)
+	{
+		s->unacked -= std::min(s->unacked, n);
+		if (s->paused && s->unacked < StreamWindow && !s->closed)
+		{
+			s->paused = false;
+			readLocal(s);
+		}
+	}
+
+	void giveCredit(const StreamPtr& s, bool all)
+	{
+		if (s->passed == 0 || (!all && s->passed < StreamCreditStep))
+			return;
+		Writer w;
+		w.u8(StreamCredit);
+		w.u32(s->passed);
+		s->passed = 0;
+		sendStream(*s, StreamKind::Data, w.b);
 	}
 
 	void writeLocal(const StreamPtr& s)
@@ -849,6 +936,8 @@ struct InternetClient::Impl
 				closeStream(s, true);
 				return;
 			}
+			s->passed += (uint32_t)data->size();
+			giveCredit(s, s->toLocal.empty());
 			writeLocal(s);
 		});
 	}
@@ -888,6 +977,7 @@ struct InternetClient::Impl
 				std::lock_guard<std::mutex> lock(mutex);
 				refusal = why == RefuseWhy::TooManyTries ? "Wait 2 seconds before trying again" : "Wrong PIN";
 			}
+			logLine("internet: the host's copy refused us: %s", why == RefuseWhy::TooManyTries ? "too soon after a wrong PIN" : "wrong PIN");
 			closeStream(s, false);
 			return;
 		}
@@ -916,6 +1006,7 @@ struct InternetClient::Impl
 				}
 				if (refuse)
 				{
+					logLine("internet: #%u refused: %s", m.peer, why == RefuseWhy::TooManyTries ? "too soon after a wrong PIN" : "wrong PIN");
 					Writer w;
 					w.u8((uint8_t)why);
 					StreamMsg back;
@@ -940,6 +1031,7 @@ struct InternetClient::Impl
 			s->peer = m.peer;
 			s->sid = sid;
 			s->mine = false;
+			logLine("internet: lobby link %u from #%u", sid, m.peer);
 			streams[StreamKey(s->peer, s->sid, false)] = s;
 			asio::error_code ec;
 			s->sock.open(tcp::v4(), ec);
@@ -973,10 +1065,20 @@ struct InternetClient::Impl
 			});
 			return;
 		}
-		// Data
-		if (!s)
+		// Data: bytes for the local socket, or credit for ours
+		if (!s || plain.empty())
 			return;
-		s->toLocal.push_back(std::move(plain));
+		if (plain[0] == StreamCredit)
+		{
+			Reader r(plain.data() + 1, plain.size() - 1);
+			const uint32_t n = r.u32();
+			if (r.ok)
+				credit(s, n);
+			return;
+		}
+		plain.erase(plain.begin());
+		if (!plain.empty())
+			s->toLocal.push_back(std::move(plain));
 		writeLocal(s);
 	}
 

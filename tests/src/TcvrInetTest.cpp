@@ -250,6 +250,60 @@ TEST(TcvrInetTest, lobbyAndMatchThroughServer)
 	lb.leave();
 }
 
+// A match's start state (lobby SNAP, megabytes) through the server: the relayed stream must pace itself, or
+// the server drops the receiver ("too slow", backlog over 512 KB) and the lobby link breaks (headset test
+// 2026-11-22: "TWO left: you are the host now" right after joining, once the host had a start state).
+TEST(TcvrInetTest, bigStartStateThroughServer)
+{
+	TestServer srv(19874);
+	ASSERT_TRUE(srv.started);
+	auto makeClient = [](const char *name) {
+		auto c = std::make_shared<inet::InternetClient>();
+		inet::ClientConfig cfg;
+		cfg.server = "127.0.0.1:19874";
+		cfg.name = name;
+		cfg.appVersion = "test";
+		c->configure(cfg);
+		return c;
+	};
+	auto ca = makeClient("AAA"), cb = makeClient("BBB");
+	ASSERT_TRUE(waitUntil([&] { return ca->status() == inet::Status::Online && cb->status() == inet::Status::Online; }));
+	lobby::Timing t;
+	lobby::Lobby la(t), lb(t);
+	la.setRouter(ca);
+	lb.setRouter(cb);
+	lobby::Identity ia, ib;
+	ia.name = "AAA"; ia.appVersion = "test"; ia.ggpoPort = 7001;
+	ib.name = "BBB"; ib.appVersion = "test"; ib.ggpoPort = 7002;
+	// 12 MB that don't compress
+	std::vector<uint8_t> state(12 * 1024 * 1024);
+	uint32_t x = 12345;
+	for (auto& b : state)
+	{
+		x = x * 1664525u + 1013904223u;
+		b = (uint8_t)(x >> 24);
+	}
+	const std::vector<uint8_t> copy = state;
+	la.offerSnapshot(2, "big", std::move(state));
+	std::string error;
+	ASSERT_TRUE(la.host(ia, { 0, 1, 10 }, error)) << error;
+	lb.startSearch();
+	ASSERT_TRUE(waitUntil([&] { return !lb.games().empty(); }));
+	const lobby::FoundGame g = lb.games().front();
+	lb.stopSearch();
+	lb.join(ib, g.address, g.beacon.lobbyPort);
+	ASSERT_TRUE(waitUntil([&] { return lb.view().phase == lobby::Phase::InLobby && la.view().state.count() == 2; }));
+	ASSERT_TRUE(waitUntil([&] { return lb.snapshot(2, "big") != nullptr; }, 60000));
+	EXPECT_TRUE(*lb.snapshot(2, "big") == copy);
+	// still together, both online
+	std::this_thread::sleep_for(std::chrono::milliseconds(500));
+	EXPECT_EQ(lobby::Phase::InLobby, lb.view().phase);
+	EXPECT_EQ(2, la.view().state.count());
+	EXPECT_EQ(inet::Status::Online, cb->status());
+	la.leave();
+	lb.leave();
+}
+
 TEST(TcvrInetTest, pinsAndPolicy)
 {
 	EXPECT_TRUE(inet::validPin(""));

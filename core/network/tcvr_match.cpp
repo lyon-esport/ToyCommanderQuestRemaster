@@ -366,6 +366,7 @@ void applyNetworkMode()
 		l = theOne.get();
 		if (config::VrMpInternet && !theClient)
 		{
+			inet::setLog([](const std::string& line) { NOTICE_LOG(NETWORK, "MP %s", line.c_str()); });
 			theClient = std::make_shared<inet::InternetClient>();
 			theClient->onNewServerKey([](const std::string& server, const std::string& key) {
 				std::lock_guard<std::mutex> lock(pinMutex);
@@ -884,6 +885,12 @@ Results results()
 {
 	std::lock_guard<std::mutex> lock(resultsMutex);
 	return lastResults;
+}
+
+void clearResults()
+{
+	std::lock_guard<std::mutex> lock(resultsMutex);
+	lastResults = Results();
 }
 
 std::string lastEnd()
