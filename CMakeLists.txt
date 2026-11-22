@@ -1247,7 +1247,8 @@ if((USE_OPENGL OR USE_GLES2 OR USE_GLES) AND NOT LIBRETRO)
 	target_link_libraries(${PROJECT_NAME} PRIVATE glad)
 endif()
 
-if(NOT LIBRETRO)
+# tcvr: also in the browser build (libretro core for EmulatorJS), whose netplay goes through the page
+if(NOT LIBRETRO OR EMSCRIPTEN)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/ggpo/include core/deps/ggpo/lib/ggpo)
 	target_sources(${PROJECT_NAME} PRIVATE
 		core/deps/ggpo/lib/ggpo/bitvector.cpp

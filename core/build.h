@@ -112,7 +112,8 @@
 #endif
 #endif
 
-#if !defined(LIBRETRO)
+// tcvr: the browser build (libretro + Emscripten) has netplay too, through the local server
+#if !defined(LIBRETRO) || defined(__EMSCRIPTEN__)
 #define USE_GGPO
 #endif
 

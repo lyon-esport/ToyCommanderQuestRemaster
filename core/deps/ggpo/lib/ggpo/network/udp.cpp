@@ -8,6 +8,79 @@
 #include "ggpo_types.h"
 #include "udp.h"
 #include <cstdlib>
+#include <cstring>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+#ifdef __EMSCRIPTEN__
+// tcvr: the browser build. A web page has no UDP: the datagrams go through the page's WebSocket to the local
+// server (tcvr/web/netbridge.py), which sends them on the LAN from a UDP socket of its own for this page.
+// The page side is window.tcvrNet (tcvr/web/page): bind(port), send(bytes), and q, the datagrams that
+// arrived, each one 4 bytes of sender address and 2 of port (both as in a sockaddr_in) then the payload.
+
+Udp::Udp() : _socket(INVALID_SOCKET), _callbacks(NULL) { }
+
+Udp::~Udp(void) { }
+
+void
+Udp::Init(uint16 port, Poll *poll, Callbacks *callbacks)
+{
+   _callbacks = callbacks;
+   poll->RegisterLoop(this);
+   Log("binding udp port %d through the page.", port);
+   int ok = EM_ASM_INT({
+      if (!window.tcvrNet) return 0;
+      window.tcvrNet.bind($0);
+      return 1;
+   }, port);
+   if (!ok)
+      throw GGPOException("No network in this page", GGPO_ERRORCODE_NETWORK_ERROR);
+}
+
+void
+Udp::SendTo(char *buffer, int len, int flags, struct sockaddr *dst, int destlen)
+{
+   sockaddr_in *to = (sockaddr_in *)dst;
+   EM_ASM({
+      var m = new Uint8Array(7 + $3);
+      m[0] = 2;
+      m.set(HEAPU8.subarray($0, $0 + 4), 1);		// address, as stored
+      m.set(HEAPU8.subarray($1, $1 + 2), 5);		// port, network order as stored
+      m.set(HEAPU8.subarray($2, $2 + $3), 7);
+      window.tcvrNet.send(m);
+   }, &to->sin_addr, &to->sin_port, buffer, len);
+}
+
+bool
+Udp::OnLoopPoll(void *cookie)
+{
+   uint8          recv_buf[MAX_UDP_PACKET_SIZE];
+   sockaddr_in    recv_addr;
+
+   for (;;) {
+      memset(&recv_addr, 0, sizeof(recv_addr));
+      recv_addr.sin_family = AF_INET;
+      int len = EM_ASM_INT({
+         var q = window.tcvrNet ? window.tcvrNet.q : null;
+         if (!q || q.length == 0) return -1;
+         var m = q.shift();
+         var n = m.length - 6;
+         if (n > $3) return 0;			// not one of ours: dropped
+         HEAPU8.set(m.subarray(0, 4), $1);
+         HEAPU8.set(m.subarray(4, 6), $2);
+         HEAPU8.set(m.subarray(6), $0);
+         return n;
+      }, recv_buf, &recv_addr.sin_addr, &recv_addr.sin_port, (int)MAX_UDP_PACKET_SIZE);
+      if (len < 0)
+         break;
+      if (len > 0)
+         _callbacks->OnMsg(recv_addr, (UdpMsg *)recv_buf, len);
+   }
+   return true;
+}
+
+#else
 
 SOCKET
 CreateSocket(uint16 bind_port, int retries)
@@ -115,3 +188,5 @@ Udp::OnLoopPoll(void *cookie)
    }
    return true;
 }
+
+#endif

@@ -242,5 +242,6 @@ Option<int> VrUpscaleCache("", 0);
 #endif
 OptionString GGPOPeers("", "");
 Option<int> GGPOPlayer("", 0);
+Option<bool> NetplayTestAnyCpu("", false);
 
 } // namespace config

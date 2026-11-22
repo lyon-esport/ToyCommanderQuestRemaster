@@ -65,6 +65,7 @@
 #include "hw/sh4/sh4_mem.h"
 #include "hw/sh4/sh4_sched.h"
 #include "hw/sh4/sh4_core.h"  // SH4ThrownException for escape probe
+#include "network/ggpo.h"
 #include "keyboard_map.h"
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
@@ -1887,6 +1888,9 @@ void retro_run()
 					g_fly_rp[7] += 1;
 				u64 fly_vb_t0 = sh4_sched_now64();
 				for (int fly_i = 0; fly_i < fly_frames_to_run && (fly_i == 0 || fly_owed >= 1.0); fly_i++) {
+					// tcvr: netplay: still connecting, or waiting for the other players
+					if (!ggpo::browserTick())
+						break;
 					// ★ PACER-SPREAD (2026-07-24): one guest-time budget for
 					// the WHOLE host tick — without this, the catch-up
 					// iteration can take a second timed-out gulp right after
@@ -1998,8 +2002,35 @@ void retro_run()
 	first_run = false;
 }
 
+#ifdef __EMSCRIPTEN__
+// tcvr: the browser build: netplay from the page's address (test page, before the lobby):
+// ?peers=<address:port>,<address:port>[,...] (in player order) &player=<0-3> [&delay=<frames>]
+static void netplayFromPage()
+{
+	char peers[512] = {};
+	const int player = EM_ASM_INT({
+		var p = new URLSearchParams(location.search);
+		var peers = p.get('peers');
+		if (!peers) return -1;
+		stringToUTF8(peers, $0, $1);
+		return (p.get('player') | 0);
+	}, peers, (int)sizeof(peers));
+	if (player < 0)
+		return;
+	const int delay = EM_ASM_INT({ return (new URLSearchParams(location.search).get('delay') | 0); });
+	config::GGPOEnable.override(true);
+	config::GGPOPeers.override(peers);
+	config::GGPOPlayer.override(player);
+	config::GGPODelay.override(delay);
+	NOTICE_LOG(NETWORK, "Netplay from the page: player %d of %s, delay %d", player + 1, peers, delay);
+}
+#endif
+
 static bool loadGame()
 {
+#ifdef __EMSCRIPTEN__
+	netplayFromPage();
+#endif
 	try {
 		emu.loadGame(game_data.c_str());
 	} catch (const FlycastException& e) {

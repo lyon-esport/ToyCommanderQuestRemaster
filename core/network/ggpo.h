@@ -30,6 +30,10 @@ void startSession(int localPort, int localPlayerNum);
 void stopSession();
 void getInput(MapleInputState inputState[4]);
 bool nextFrame();
+#ifdef __EMSCRIPTEN__
+// tcvr: the browser build (no threads): once per tick before the emulator runs; false = don't run it now
+bool browserTick();
+#endif
 bool active();
 // tcvr: this copy's player (0 = player 1) and how many play, in a netplay session (else 0 and 1)
 int localPlayerIndex();

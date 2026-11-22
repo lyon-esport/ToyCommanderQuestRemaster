@@ -74,7 +74,9 @@ static void getLocalInput(MapleInputState inputState[4])
 #include "ggponet.h"
 #include "emulator.h"
 #include "ui/gui.h"
+#ifndef LIBRETRO
 #include "ui/gui_util.h"
+#endif
 #include "hw/mem/mem_watch.h"
 #include <string.h>
 #include <chrono>
@@ -83,7 +85,9 @@ static void getLocalInput(MapleInputState inputState[4])
 #include <unordered_map>
 #include <numeric>
 #include <vector>
+#ifndef LIBRETRO
 #include "imgui.h"
+#endif
 #include "miniupnp.h"
 #include "hw/naomi/naomi_cart.h"
 #include "hw/maple/maple_if.h"
@@ -99,6 +103,9 @@ static void getLocalInput(MapleInputState inputState[4])
 #include <xxhash.h>
 #include "hw/sh4/sh4_mem.h"
 #include <cstdlib>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace ggpo
 {
@@ -136,6 +143,12 @@ static int msPerFrameIndex;
 static time_point<steady_clock> lastFrameTime;
 static int msPerFrameAvg;
 static bool _endOfFrame;
+#ifdef __EMSCRIPTEN__
+static bool inputStalled;		// tcvr: browser: this frame's input waits for the other players (sendLocalInput)
+static u32 stalledSetupPresses;
+static int timesyncWait;		// tcvr: browser: frames to hold back for the other players (TIMESYNC)
+static int browserStart;		// tcvr: browser: 0 not started, 1 connecting, 2 playing, -1 failed
+#endif
 static MiniUPnP miniupnp;
 static int analogAxes;
 static int gonePlayers;		// tcvr: bit n: player n+1 left the session (on_event)
@@ -301,7 +314,11 @@ static bool on_event(GGPOEvent *info)
 	case GGPO_EVENTCODE_TIMESYNC:
 		INFO_LOG(NETWORK, "Timesync: %d frames ahead", info->u.timesync.frames_ahead);
 		timesyncOccurred += 5;
+#ifdef __EMSCRIPTEN__
+		timesyncWait += 1;	// (the browser can't sleep: browserTick holds back one frame)
+#else
 		std::this_thread::sleep_for(std::chrono::milliseconds(1000 / (msPerFrameAvg >= 25 ? 30 : 60)));
+#endif
 		break;
 	case GGPO_EVENTCODE_CONNECTION_INTERRUPTED:
 		NOTICE_LOG(NETWORK, "Connection interrupted with player %d", info->u.connection_interrupted.player);
@@ -484,6 +501,17 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	}
 #ifdef SYNC_TEST
 	*checksum = XXH3_64bits(*buffer, usedSize);
+#endif
+#ifdef __EMSCRIPTEN__
+	// tcvr: the browser build's sync log (no files): every 30th frame, main RAM's hash goes to the page
+	// (window._tcvrSync, [frame, hash hex]); a frame saved again after a rollback comes again, the last counts
+	if (frame % 30 == 0)
+	{
+		const u64 ramHash = XXH3_64bits(&mem_b[0], RAM_SIZE);
+		EM_ASM({
+			(window._tcvrSync = window._tcvrSync || []).push([$0, ($1 >>> 0).toString(16).padStart(8, '0') + ($2 >>> 0).toString(16).padStart(8, '0')]);
+		}, frame, (u32)(ramHash >> 32), (u32)ramHash);
+	}
 #endif
 	// hotd2-vr netplay test aid: with HOTD2VR_SYNCLOG set to a file name, each frame's state
 	// (the saved state, which leaves RAM to the page watcher, and main RAM) as hashes, to
@@ -1055,64 +1083,11 @@ void getInput(MapleInputState inputState[4])
 	}
 }
 
-bool nextFrame()
+// This copy's input for the new frame. 1: sent; 0: the other players are too far behind, not sent yet (browser
+// build only, see browserTick); -1: the session ended.
+static int sendLocalInput(u32 setupPresses)
 {
-	if (!_endOfFrame)
-		return false;
-	_endOfFrame = false;
-	if (inRollback)
-		return true;
-	auto now = std::chrono::steady_clock::now();
-	if (lastFrameTime != time_point<steady_clock>())
-	{
-		msPerFrame[msPerFrameIndex++] = duration_cast<milliseconds>(now - lastFrameTime).count();
-		if (msPerFrameIndex >= (int)msPerFrame.size())
-			msPerFrameIndex = 0;
-		msPerFrameAvg = std::accumulate(msPerFrame.begin(), msPerFrame.end(), 0) / msPerFrame.size();
-	}
-	// hotd2-vr: every 5 s what netplay costs, in the log (adb logcat on the headset)
-	{
-		static time_point<steady_clock> since;
-		static long long longest;
-		if (since == time_point<steady_clock>())
-			since = now;
-		if (lastFrameTime != time_point<steady_clock>())
-			longest = std::max<long long>(longest, duration_cast<milliseconds>(now - lastFrameTime).count());
-		netStats.frames++;
-		const double secs = duration_cast<milliseconds>(now - since).count() / 1000.0;
-		if (secs >= 5.0)
-		{
-			const int again = netStats.saves - netStats.frames;
-			NOTICE_LOG(NETWORK, "GGPO stats %.1f s: %d frames (%.1f fps), %d rollbacks, %d frames simulated again (%d%%), longest frame %lld ms",
-					secs, netStats.frames, netStats.frames / secs, netStats.rollbacks, std::max(0, again),
-					netStats.frames > 0 ? std::max(0, again) * 100 / netStats.frames : 0, longest);
-			netStats = {};
-			longest = 0;
-			since = now;
-		}
-	}
-	lastFrameTime = now;
-
-	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
-	if (ggpoSession == nullptr)
-		return false;
-	// will call save_game_state
-	GGPOErrorCode error = ggpo_advance_frame(ggpoSession);
-
-	// may rollback
-	if (error == GGPO_OK)
-		error = ggpo_idle(ggpoSession, 0);
-	if (error != GGPO_OK)
-	{
-		stopSession();
-		if (error == GGPO_ERRORCODE_INPUT_SIZE_DIFF)
-			throw FlycastException("GGPO analog settings are different from peer");
-		else
-			throw FlycastException("GGPO error");
-	}
-
-	// tcvr: the automatic match setup's presses on this copy's pad (once per new frame)
-	const u32 setupPresses = dcPad ? tcvr::match::setupButtons() : 0;
+	GGPOErrorCode error;
 	// may call save_game_state
 	do {
 		if (!config::ThreadedRendering)
@@ -1191,8 +1166,20 @@ bool nextFrame()
 			throw FlycastException("GGPO error");
 		}
 		DEBUG_LOG(NETWORK, "ggpo_add_local_input prediction barrier reached");
+#ifdef __EMSCRIPTEN__
+		// tcvr: the browser can't wait here (one thread, the page's): the frame waits instead and
+		// browserTick() tries again on the next tick
+		error = ggpo_idle(ggpoSession, 0);
+		if (error != GGPO_OK)
+		{
+			stopSession();
+			throw FlycastException("GGPO error");
+		}
+		return 0;
+#else
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		error = ggpo_idle(ggpoSession, 0);
+#endif
 		if (error != GGPO_OK)
 		{
 			stopSession();
@@ -1205,12 +1192,145 @@ bool nextFrame()
 	if (result != GGPO_OK)
 		WARN_LOG(NETWORK, "ggpo_add_local_input(2) failed %d", result);
 #endif
-	if (active()) {
+	return active() ? 1 : -1;
+}
+
+bool nextFrame()
+{
+	if (!_endOfFrame)
+		return false;
+	_endOfFrame = false;
+	if (inRollback)
+		return true;
+	auto now = std::chrono::steady_clock::now();
+	if (lastFrameTime != time_point<steady_clock>())
+	{
+		msPerFrame[msPerFrameIndex++] = duration_cast<milliseconds>(now - lastFrameTime).count();
+		if (msPerFrameIndex >= (int)msPerFrame.size())
+			msPerFrameIndex = 0;
+		msPerFrameAvg = std::accumulate(msPerFrame.begin(), msPerFrame.end(), 0) / msPerFrame.size();
+	}
+	// hotd2-vr: every 5 s what netplay costs, in the log (adb logcat on the headset)
+	{
+		static time_point<steady_clock> since;
+		static long long longest;
+		if (since == time_point<steady_clock>())
+			since = now;
+		if (lastFrameTime != time_point<steady_clock>())
+			longest = std::max<long long>(longest, duration_cast<milliseconds>(now - lastFrameTime).count());
+		netStats.frames++;
+		const double secs = duration_cast<milliseconds>(now - since).count() / 1000.0;
+		if (secs >= 5.0)
+		{
+			const int again = netStats.saves - netStats.frames;
+			NOTICE_LOG(NETWORK, "GGPO stats %.1f s: %d frames (%.1f fps), %d rollbacks, %d frames simulated again (%d%%), longest frame %lld ms",
+					secs, netStats.frames, netStats.frames / secs, netStats.rollbacks, std::max(0, again),
+					netStats.frames > 0 ? std::max(0, again) * 100 / netStats.frames : 0, longest);
+			netStats = {};
+			longest = 0;
+			since = now;
+		}
+	}
+	lastFrameTime = now;
+
+	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
+	if (ggpoSession == nullptr)
+		return false;
+	// will call save_game_state
+	GGPOErrorCode error = ggpo_advance_frame(ggpoSession);
+
+	// may rollback
+	if (error == GGPO_OK)
+		error = ggpo_idle(ggpoSession, 0);
+	if (error != GGPO_OK)
+	{
+		stopSession();
+		if (error == GGPO_ERRORCODE_INPUT_SIZE_DIFF)
+			throw FlycastException("GGPO analog settings are different from peer");
+		else
+			throw FlycastException("GGPO error");
+	}
+
+	// tcvr: the automatic match setup's presses on this copy's pad (once per new frame)
+	const u32 setupPresses = dcPad ? tcvr::match::setupButtons() : 0;
+	const int sent = sendLocalInput(setupPresses);
+#ifdef __EMSCRIPTEN__
+	if (sent == 0)
+	{
+		inputStalled = true;
+		stalledSetupPresses = setupPresses;
+		return true;
+	}
+#endif
+	if (sent > 0) {
 		emu.getSh4Executor()->Start();
 		return true;
 	}
 	return false;
 }
+
+#ifdef __EMSCRIPTEN__
+// tcvr: the browser build runs on the page's one thread: nothing here may wait. The libretro frontend calls
+// this once per tick before running the emulator; false: don't run it this tick (still connecting, this
+// frame's input waits for the other players, or holding back a frame for them).
+bool browserTick()
+{
+	if (!config::GGPOEnable)
+		return true;
+	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
+	if (browserStart == 0)
+	{
+		browserStart = 1;
+		synchronized = false;
+		const int local = config::GGPOPlayer;
+		const std::vector<PeerAddress> peers = peerList(0, local);
+		if (local < 0 || local >= (int)peers.size())
+		{
+			browserStart = -1;
+			throw FlycastException("Netplay: this player's number is not in the list");
+		}
+		startSession(peers[local].port, local);
+	}
+	if (browserStart < 0)
+		return false;
+	if (browserStart == 1)
+	{
+		if (ggpoSession == nullptr)
+		{
+			browserStart = -1;
+			return false;
+		}
+		GGPOErrorCode result = ggpo_idle(ggpoSession, 0);
+		if (result == GGPO_ERRORCODE_VERIFICATION_ERROR)
+			throw FlycastException("Peer verification failed");
+		if (result != GGPO_OK)
+			throw FlycastException("GGPO error");
+		if (!synchronized)
+			return false;
+		browserStart = 2;
+		emu.setNetworkState(true);
+		NOTICE_LOG(NETWORK, "GGPO: all players connected, the match starts");
+	}
+	if (!active())
+		return true;	// the session ended: the game goes on here alone
+	if (timesyncWait > 0)
+	{
+		timesyncWait--;
+		ggpo_idle(ggpoSession, 0);
+		return false;
+	}
+	if (inputStalled)
+	{
+		const int sent = sendLocalInput(stalledSetupPresses);
+		if (sent == 0)
+			return false;
+		inputStalled = false;
+		if (sent > 0)
+			emu.getSh4Executor()->Start();
+	}
+	return true;
+}
+#endif
 
 bool active()
 {
@@ -1332,7 +1452,9 @@ void displayStats()
 		if (std::abs(peer.timesync.local_frames_behind) > std::abs(stats.timesync.local_frames_behind))
 			stats.timesync.local_frames_behind = peer.timesync.local_frames_behind;
 	}
-
+#ifdef LIBRETRO
+	(void)stats;	// tcvr: the browser build has no ImGui; the page shows its own figures
+#else
 	ImguiStyleVar _(ImGuiStyleVar_WindowRounding, 0);
 	ImguiStyleVar _1(ImGuiStyleVar_WindowBorderSize, 0);
 	ImGui::SetNextWindowPos(ImVec2(10, 10));
@@ -1382,6 +1504,7 @@ void displayStats()
 	}
 
 	ImGui::End();
+#endif
 }
 
 void endOfFrame()

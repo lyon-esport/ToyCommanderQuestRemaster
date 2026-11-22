@@ -167,6 +167,8 @@ window.EJS_onGameStart = () => {
     let extra = {};
     try { extra = JSON.parse(window._flyHudPart + '}'); } catch (e) {}
     report({ ev: 'speed', frame: f, emu, shown: +shown.toFixed(0), phase, hud: extra });
+    // netplay (?peers=...): this copy's RAM hashes (core: every 30th frame) and its LAN port
+    if (window._tcvrSync && window._tcvrSync.length) { report({ ev: 'sync', player: +(params.get('player') || 0), h: window._tcvrSync }); window._tcvrSync = []; }
   }, 1000);
 
   // a picture of the game every 15 s, for checking where the script got to. Not during the
@@ -187,6 +189,7 @@ window.EJS_onGameStart = () => {
   }, 15000);
 };
 </script>
+<script src="tcvrnet.js"></script>
 <script src="data/loader.js"></script>
 </body>
 </html>
