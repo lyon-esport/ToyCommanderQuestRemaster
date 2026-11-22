@@ -2,10 +2,16 @@
 
 name: Crowdin Translation Integration
 
+# CI is paused: GitHub Actions credit is not available for this repository.
+# This workflow now only runs when started by hand (Actions tab > Run workflow).
+# To turn CI back on, remove the two "on:" lines below and uncomment the original triggers.
 on:
-  schedule:
-  # please choose a random time & weekday to avoid all repos synching at the same time
-    - cron: '15 22 * * 5'  # Fridays at 10:15 PM, UTC
+  workflow_dispatch:
+# Original triggers:
+# on:
+#   schedule:
+#   # please choose a random time & weekday to avoid all repos synching at the same time
+#     - cron: '15 22 * * 5'  # Fridays at 10:15 PM, UTC
 
 jobs:
   create_intl_file:

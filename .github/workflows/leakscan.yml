@@ -4,10 +4,16 @@ name: Leak scan
 # (local paths, IP/MAC addresses, device serials, hostnames, e-mails, keys) in new commits,
 # commit messages and PR text. Findings are masked in the log. Help: tcvr/docs/LeakScan.md
 
+# CI is paused: GitHub Actions credit is not available for this repository.
+# This workflow now only runs when started by hand (Actions tab > Run workflow).
+# To turn CI back on, remove the two "on:" lines below and uncomment the original triggers.
 on:
-  push:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
+  workflow_dispatch:
+# Original triggers:
+# on:
+#   push:
+#   pull_request:
+#     types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read

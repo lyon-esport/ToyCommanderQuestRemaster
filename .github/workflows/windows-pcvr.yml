@@ -1,11 +1,17 @@
 name: Windows PCVR
 
+# CI is paused: GitHub Actions credit is not available for this repository.
+# This workflow now only runs when started by hand (Actions tab > Run workflow).
+# To turn CI back on, remove the two "on:" lines below and uncomment the original triggers.
 on:
-  push:
-    branches: [main, 'codex/**', 'claude/**']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+# Original triggers:
+# on:
+#   push:
+#     branches: [main, 'codex/**', 'claude/**']
+#   pull_request:
+#     branches: [main]
+#   workflow_dispatch:
 
 permissions:
   contents: read
