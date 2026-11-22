@@ -155,6 +155,11 @@ class PageLink:
             self.log("net: UDP port %d not available: %s" % (port, e))
             self.ws.send(struct.pack(">BH", UDP_BOUND, 0) + socket.inet_aton(self.lan_ip))
             return
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            # Windows: a datagram sent to a port nobody listens on yet (a peer still starting)
+            # comes back as ICMP "unreachable", and the next recvfrom then fails with
+            # WinError 10054. GGPO just retries, so turn that report off.
+            s.ioctl(socket.SIO_UDP_CONNRESET, False)
         self.udp = s
         bound = s.getsockname()[1]
         self.log("net: page plays on %s:%d" % (self.lan_ip, bound))
@@ -168,8 +173,8 @@ class PageLink:
         while not self.ws.closed and self.udp is s:
             try:
                 data, (ip, port) = s.recvfrom(65536)
-            except socket.timeout:
-                continue
+            except (socket.timeout, ConnectionResetError):
+                continue	# ConnectionResetError: see SIO_UDP_CONNRESET in bind()
             except OSError:
                 return
             self.ws.send(struct.pack(">B", UDP_RECV) + socket.inet_aton(ip) + struct.pack(">H", port) + data)
