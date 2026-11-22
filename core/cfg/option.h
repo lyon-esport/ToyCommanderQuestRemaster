@@ -599,6 +599,8 @@ extern OptionString GGPOPeers;
 extern Option<int> GGPOPlayer;
 extern Option<bool> NetplayTestAnyCpu;
 extern OptionString NetplaySyncLog;
+extern Option<bool> NetplaySyncPages;
+extern OptionString NetplaySyncDump;
 extern Option<bool> NetworkStats;
 extern Option<int> GGPOAnalogAxes;
 extern Option<bool> GGPOChat;

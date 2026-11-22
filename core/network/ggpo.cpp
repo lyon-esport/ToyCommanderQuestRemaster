@@ -527,7 +527,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 		}
 	// and with HOTD2VR_SYNCPAGES set: main RAM per 64 KB page, to <synclog>.pages (where a
 	// difference is, when it shows up in a run that can't be repeated)
-	if (syncLog != nullptr && getenv("HOTD2VR_SYNCPAGES") != nullptr)
+	if (syncLog != nullptr && (getenv("HOTD2VR_SYNCPAGES") != nullptr || config::NetplaySyncPages))
 	{
 		static FILE *pages;
 		static FILE *pagesOf;
@@ -551,7 +551,8 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	// and with HOTD2VR_SYNCDUMP=frame[,frame...]: that frame's saved state and RAM to
 	// <synclog>.<frame>.state/.ram (again after a rollback, so the last one stays)
 	if (syncLog != nullptr)
-		if (const char *frames = getenv("HOTD2VR_SYNCDUMP"))
+		if (const char *frames = getenv("HOTD2VR_SYNCDUMP") != nullptr ? getenv("HOTD2VR_SYNCDUMP")
+				: !config::NetplaySyncDump.get().empty() ? config::NetplaySyncDump.get().c_str() : nullptr)
 			for (const char *p = frames; *p != '\0'; )
 			{
 				char *end;
