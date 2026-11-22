@@ -9,6 +9,8 @@ Usage:  python serve.py --disc "<path to your .chd>" [--port 8642]
 """
 import argparse, http.server, json, os, sys, time, urllib.parse
 
+import netbridge
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "www")
 
@@ -37,6 +39,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if p.startswith("/disc/"):
             return Handler.disc
         return super().translate_path(path)
+
+    def do_GET(self):
+        if urllib.parse.urlparse(self.path).path == "/net":
+            netbridge.handle_upgrade(self, log=lambda m: print(m, flush=True))	# network play (netbridge.py)
+            return
+        super().do_GET()
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
@@ -70,11 +78,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--disc", required=True, help="your own Toy Commander (Europe) disc image (.chd)")
     ap.add_argument("--port", type=int, default=8642)
+    ap.add_argument("--host", default="127.0.0.1", help="address to serve on (default: this PC only)")
     a = ap.parse_args()
     if not os.path.isfile(a.disc):
         sys.exit("disc image not found: " + a.disc)
     Handler.disc = os.path.abspath(a.disc)
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
+    srv = http.server.ThreadingHTTPServer((a.host, a.port), Handler)
+    srv.daemon_threads = True
     print("Open http://localhost:%d/ in Chrome or Edge (Ctrl+C to stop)" % a.port, flush=True)
     srv.serve_forever()
 
