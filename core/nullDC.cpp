@@ -369,6 +369,78 @@ void dc_loadstate(int index)
 	free(data);
 }
 
+bool dc_serializeAll(std::vector<u8>& out)
+{
+	try {
+		Serializer size;
+		dc_serialize(size);
+		out.resize(size.size());
+		Serializer ser(out.data(), out.size());
+		dc_serialize(ser);
+		out.resize(ser.size());
+		return true;
+	} catch (const Serializer::Exception& e) {
+		WARN_LOG(SAVESTATE, "tcvr: state not saved: %s", e.what());
+		out.clear();
+		return false;
+	}
+}
+
+bool dc_writeStateFile(const std::string& path, const std::vector<u8>& state)
+{
+	hostfs::File *f = hostfs::storage().openFile(path, "wb");
+	if (f == nullptr)
+	{
+		WARN_LOG(SAVESTATE, "tcvr: can't write %s", path.c_str());
+		return false;
+	}
+	SavestateHeader header;
+	header.init();
+	RZipFile zipFile;
+	if (f->write(&header, sizeof(header), 1) != 1 || !zipFile.Open(f, true))
+	{
+		delete f;
+		return false;
+	}
+	const bool ok = zipFile.Write(state.data(), state.size()) == state.size();
+	zipFile.Close();
+	return ok;
+}
+
+bool dc_loadStateFile(const std::string& path)
+{
+	hostfs::File *f = hostfs::storage().openFile(path, "rb");
+	if (f == nullptr)
+		return false;
+	SavestateHeader header;
+	if (f->read(&header, sizeof(header), 1) != 1 || !header.isValid())
+	{
+		delete f;
+		return false;
+	}
+	f->seek(header.pngSize, SEEK_CUR);
+	RZipFile zipFile;
+	if (!zipFile.Open(f, false))
+	{
+		delete f;
+		return false;
+	}
+	std::vector<u8> data(zipFile.Size());
+	const bool read = zipFile.Read(data.data(), data.size()) == data.size();
+	zipFile.Close();
+	if (!read)
+		return false;
+	try {
+		Deserializer deser(data.data(), data.size());
+		emu.loadstate(deser);
+		NOTICE_LOG(SAVESTATE, "tcvr: state loaded from %s", path.c_str());
+		return true;
+	} catch (const Deserializer::Exception& e) {
+		ERROR_LOG(SAVESTATE, "tcvr: %s: %s", path.c_str(), e.what());
+		return false;
+	}
+}
+
 time_t dc_getStateCreationDate(int index)
 {
 	std::string filename = hostfs::getSavestatePath(index, false);

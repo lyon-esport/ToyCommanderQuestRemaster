@@ -89,6 +89,9 @@ std::string endText();
 
 // Called at each game load, before the netplay starts (emulator.cpp).
 void gate();
+// At the game load after a match (emulator.cpp, where a savestate would load): the player's own game as it was
+// before the match, kept at its start. False: none kept (the game starts from its power-on).
+bool restoreOwnGame();
 // True once after a match has ended: the menu should open on its Multiplayer page.
 bool takeReturn();
 
@@ -99,6 +102,11 @@ bool takeReturn();
 // join the page with Start. Everything goes through the netplay as pad input, so every copy runs the
 // same game; the copies only read memory to know where the game is.
 uint32_t setupButtons();
+
+// Single player (not a match): the game's own team and vehicle page is open, the player chose Multiplayer
+// in the game's main menu. That page waits for more pads plugged into the Dreamcast; in VR, multiplayer is
+// the VR menu's, which leaves the page and opens its Multiplayer section instead (xr_menu.cpp).
+bool gameSetupPageOpen();
 
 // The options a START puts in emu.cfg, as text "key=value" lines, for the tests.
 std::vector<std::string> optionsFor(const lobby::StartInfo& info, const std::string& hostAddress);

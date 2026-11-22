@@ -83,6 +83,7 @@ namespace
 {
 
 constexpr size_t MaxFrame = 2048;
+constexpr size_t MaxSnapFrame = SnapChunk + 512;	// SNAP: a piece of a state and its header
 const uint8_t Magic[4] = { 'T', 'C', 'V', 'L' };
 enum : uint8_t { KindBeacon = 1, KindQuery = 2 };
 
@@ -183,13 +184,18 @@ bool FrameParser::feed(const uint8_t *data, size_t size, std::vector<Frame>& out
 	while (buffer.size() - pos >= 2)
 	{
 		const size_t len = buffer[pos] | (buffer[pos + 1] << 8);
-		if (len < 1 || len > MaxFrame)
+		if (len < 1 || len > MaxSnapFrame)
 			return false;
+		if (buffer.size() - pos >= 3)
+		{
+			// only a piece of a state is longer than a message
+			const uint8_t t = buffer[pos + 2];
+			if (t < (uint8_t)MsgType::Hello || t > (uint8_t)MsgType::SnapOk || (len > MaxFrame && t != (uint8_t)MsgType::Snap))
+				return false;
+		}
 		if (buffer.size() - pos < 2 + len)
 			break;
 		const uint8_t type = buffer[pos + 2];
-		if (type < (uint8_t)MsgType::Hello || type > (uint8_t)MsgType::Start)
-			return false;
 		Frame f;
 		f.type = (MsgType)type;
 		f.payload.assign(buffer.begin() + pos + 3, buffer.begin() + pos + 2 + len);
@@ -318,6 +324,7 @@ std::vector<uint8_t> encode(const StartInfo& m)
 	w.u8(m.inputDelay);
 	w.u32(m.sessionId);
 	w.settings(m.settings);
+	w.str(m.snapshot);
 	return w.b;
 }
 
@@ -339,7 +346,50 @@ bool decode(const std::vector<uint8_t>& p, StartInfo& m)
 	m.inputDelay = r.u8();
 	m.sessionId = r.u32();
 	m.settings = r.settings();
+	m.snapshot = cleanText(r.str());
 	return r.ok && m.localIndex < count;
+}
+
+std::vector<uint8_t> encode(const SnapPiece& m)
+{
+	Writer w;
+	w.u8(m.players);
+	w.str(m.id);
+	w.u32(m.total);
+	w.u32(m.offset);
+	w.bytes(m.bytes.data(), m.bytes.size());
+	return w.b;
+}
+
+bool decode(const std::vector<uint8_t>& p, SnapPiece& m)
+{
+	Reader r(p);
+	m = SnapPiece();
+	m.players = r.u8();
+	m.id = cleanText(r.str());
+	m.total = r.u32();
+	m.offset = r.u32();
+	if (!r.ok || m.players < 2 || m.players > MaxPlayers || m.id.empty() || m.total == 0 || m.total > SnapMax
+			|| m.offset > m.total || p.size() - r.i > m.total - m.offset)
+		return false;
+	m.bytes.assign(p.begin() + r.i, p.end());
+	return true;
+}
+
+std::vector<uint8_t> encodeSnapOk(uint8_t players, const std::string& id)
+{
+	Writer w;
+	w.u8(players);
+	w.str(id);
+	return w.b;
+}
+
+bool decodeSnapOk(const std::vector<uint8_t>& p, uint8_t& players, std::string& id)
+{
+	Reader r(p);
+	players = r.u8();
+	id = cleanText(r.str());
+	return r.ok && players >= 2 && players <= MaxPlayers && !id.empty();
 }
 
 std::vector<uint8_t> encode(const Beacon& m)
@@ -672,6 +722,9 @@ struct Lobby::Impl
 		uint16_t lobbyPort = 0;		// its standby lobby port
 		Clock::time_point lastRx = Clock::now();
 		Clock::time_point accepted = Clock::now();
+		// host: the match start states sent to it and the ones it holds whole, by player count (ids)
+		std::array<std::string, MaxPlayers + 1> snapSent, snapOk;
+		Clock::time_point snapSentAt;
 	};
 	using ConnPtr = std::shared_ptr<Conn>;
 
@@ -729,6 +782,21 @@ struct Lobby::Impl
 	Clock::time_point handoverEnd;
 	bool hosting = false;
 	bool started = false;
+	// match start states by player count: offered (Lobby::offerSnapshot), received whole from a host, and
+	// the one arriving now
+	struct Snap
+	{
+		std::string id;
+		std::shared_ptr<const std::vector<uint8_t>> data;
+	};
+	std::array<Snap, MaxPlayers + 1> offers, received;
+	struct Arriving
+	{
+		std::string id;
+		std::vector<uint8_t> data;
+		size_t got = 0;
+	};
+	std::array<Arriving, MaxPlayers + 1> arriving;
 	bool beaconRunning = false;
 	bool tickRunning = false;
 	Clock::time_point lastPing = Clock::now();
@@ -1123,6 +1191,10 @@ struct Lobby::Impl
 		hostId = last.lobbyId;
 		settings = last.settings;
 		revision = last.revision;
+		// the states the old host sent: the others most likely hold them already
+		for (int n = 2; n <= MaxPlayers; n++)
+			if (!offers[n].data && received[n].data)
+				offers[n] = received[n];
 		slotNames = {};
 		slotReady = {};
 		for (auto& s : slots)
@@ -1363,6 +1435,15 @@ struct Lobby::Impl
 			kept[slot].on = false;
 			send(c, MsgType::Welcome, encodeWelcome((uint8_t)slot));
 			publishState();
+			sendSnaps(c);
+			break;
+		}
+		case MsgType::SnapOk:
+		{
+			uint8_t players;
+			std::string id;
+			if (c->slot >= 0 && decodeSnapOk(f.payload, players, id))
+				c->snapOk[players] = id;
 			break;
 		}
 		case MsgType::Ready:
@@ -1381,6 +1462,58 @@ struct Lobby::Impl
 		default:	// Ping (its arrival is what counts); anything else is not for a host
 			break;
 		}
+	}
+
+	// host: the match start states this player has not been sent yet (queued behind the messages before them;
+	// a few MB go in about a second over a LAN)
+	void sendSnaps(const ConnPtr& c)
+	{
+		if (!hosting || !c || c->closed || c->slot < 0)
+			return;
+		for (int n = 2; n <= MaxPlayers; n++)
+		{
+			const Snap& o = offers[n];
+			if (!o.data || c->snapSent[n] == o.id)
+				continue;
+			c->snapSent[n] = o.id;
+			c->snapOk[n].clear();
+			c->snapSentAt = Clock::now();
+			SnapPiece piece;
+			piece.players = (uint8_t)n;
+			piece.id = o.id;
+			piece.total = (uint32_t)o.data->size();
+			for (size_t at = 0; at < o.data->size(); at += SnapChunk)
+			{
+				piece.offset = (uint32_t)at;
+				piece.bytes.assign(o.data->begin() + at, o.data->begin() + std::min(o.data->size(), at + SnapChunk));
+				send(c, MsgType::Snap, encode(piece));
+			}
+		}
+	}
+
+	// joiner: a piece of a state; whole, it is kept and the host told
+	void snapPiece(const ConnPtr& c, const SnapPiece& piece)
+	{
+		Arriving& a = arriving[piece.players];
+		if (piece.offset == 0 || a.id != piece.id || a.data.size() != piece.total)
+		{
+			a.id = piece.id;
+			a.data.assign(piece.total, 0);
+			a.got = 0;
+		}
+		if (piece.offset != a.got)
+		{
+			// (not in order: never over TCP) start again with the next state sent
+			a = Arriving();
+			return;
+		}
+		std::copy(piece.bytes.begin(), piece.bytes.end(), a.data.begin() + piece.offset);
+		a.got += piece.bytes.size();
+		if (a.got < a.data.size())
+			return;
+		received[piece.players] = { a.id, std::make_shared<const std::vector<uint8_t>>(std::move(a.data)) };
+		a = Arriving();
+		send(c, MsgType::SnapOk, encodeSnapOk(piece.players, piece.id));
 	}
 
 	void closeLater(const ConnPtr& c)
@@ -1476,6 +1609,17 @@ struct Lobby::Impl
 			});
 			break;
 		}
+		case MsgType::Snap:
+		{
+			SnapPiece piece;
+			if (!decode(f.payload, piece))
+			{
+				onDisconnect(c);
+				return;
+			}
+			snapPiece(c, piece);
+			break;
+		}
 		case MsgType::Start:
 		{
 			StartInfo info;
@@ -1565,6 +1709,16 @@ struct Lobby::Impl
 			why = "Waiting for the players to be ready";
 			return false;
 		}
+		// the state the match starts from is still on its way to a player (about a second on a LAN; a minute at
+		// most, then the match starts the long way)
+		if (offers[n].data)
+			for (int i = 0; i < MaxPlayers; i++)
+				if (i != hostSlot && slots[i] && slots[i]->snapSent[n] == offers[n].id && slots[i]->snapOk[n] != offers[n].id
+						&& Clock::now() - slots[i]->snapSentAt < std::chrono::seconds(60))
+				{
+					why = "Sending the match to the players";
+					return false;
+				}
 		why.clear();
 		return true;
 	}
@@ -1732,6 +1886,14 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 		base.settings = impl->settings;
 		for (int i : order)
 			base.peers.push_back({ i == hostSlot ? std::string() : s.players[i].address, s.players[i].ggpoPort });
+		// the state the match starts from, when every joiner holds it whole
+		const int n = (int)order.size();
+		const Impl::Snap& offer = impl->offers[n];
+		bool all = offer.data != nullptr;
+		for (int i : order)
+			all = all && (i == hostSlot || impl->slots[i]->snapOk[n] == offer.id);
+		if (all)
+			base.snapshot = offer.id;
 		impl->started = true;
 		for (size_t k = 0; k < order.size(); k++)
 		{
@@ -1745,6 +1907,31 @@ bool Lobby::start(uint8_t inputDelay, std::string& error)
 				impl->send(impl->slots[order[k]], MsgType::Start, encode(mine));
 		}
 		return true;
+	});
+}
+
+void Lobby::offerSnapshot(int players, const std::string& id, std::vector<uint8_t> data)
+{
+	if (players < 2 || players > MaxPlayers)
+		return;
+	auto shared = data.empty() || data.size() > SnapMax || id.empty() ? nullptr
+			: std::make_shared<const std::vector<uint8_t>>(std::move(data));
+	impl->run([&] {
+		impl->offers[players] = { shared ? id : std::string(), shared };
+		for (const auto& c : impl->slots)
+			impl->sendSnaps(c);
+	});
+}
+
+std::shared_ptr<const std::vector<uint8_t>> Lobby::snapshot(int players, const std::string& id)
+{
+	if (players < 2 || players > MaxPlayers || id.empty())
+		return nullptr;
+	return impl->run([&]() -> std::shared_ptr<const std::vector<uint8_t>> {
+		for (const Impl::Snap *s : { &impl->offers[players], &impl->received[players] })
+			if (s->data && s->id == id)
+				return s->data;
+		return nullptr;
 	});
 }
 

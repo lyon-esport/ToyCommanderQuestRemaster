@@ -7,8 +7,10 @@
 	Copyright 2026 mikermak. This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
 #include "xr_panel.h"
+#ifndef XR_PANEL_PAINT_ONLY		// (tcvr: the offline menu preview builds the painting alone)
 #include "rend/gles/gles.h"
 #include "rend/gles/glcache.h"
+#endif
 #include "oslib/resources.h"
 #include "log/Log.h"
 
@@ -40,9 +42,6 @@ std::unique_ptr<u8[]> fontData;
 stbtt_fontinfo font;
 bool fontTried, fontLoaded;
 
-GLuint program, texture;
-GLuint quadVao, quadVbo;
-GLint uMvp = -1;
 std::vector<u8> pixels;
 std::string shown;			// what the picture says now
 // tcvr: the picture blend/fill/text draw on: the panel's (Width x Height), or the label's
@@ -50,9 +49,14 @@ std::vector<u8> *canvas = &pixels;
 int canvasW = Width, canvasH = Height;
 // tcvr: the small head-locked label (drawLabel)
 constexpr int LabelW = 512, LabelH = 96;
-GLuint labelTexture;
 std::vector<u8> labelPixels;
 std::string labelShown;
+
+#ifndef XR_PANEL_PAINT_ONLY
+GLuint program, texture;
+GLuint quadVao, quadVbo;
+GLint uMvp = -1;
+GLuint labelTexture;
 
 void logGlErrors()
 {
@@ -65,6 +69,7 @@ void logGlErrors()
 	for (GLenum error; (error = glGetError()) != GL_NO_ERROR && logged < 10; logged++)
 		ERROR_LOG(RENDERER, "VR panel OpenGL error 0x%04x", error);
 }
+#endif
 
 bool loadFont()
 {
@@ -95,24 +100,59 @@ void fill(int x0, int y0, int x1, int y1, const glm::vec3& colour, float alpha =
 			blend(x, y, colour, alpha);
 }
 
-// One line, centred, its baseline at y.
-void text(const std::string& s, float px, int y, const glm::vec3& colour)
+// tcvr: the code points of a UTF-8 text (a broken byte counts as itself)
+std::vector<int> codepoints(const std::string& s)
+{
+	std::vector<int> out;
+	for (size_t i = 0; i < s.size();)
+	{
+		const u8 c = (u8)s[i];
+		int n = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+		int cp = n == 0 ? c : c & (0x3F >> n);
+		bool ok = true;
+		for (int k = 1; k <= n; k++)
+		{
+			if (i + k >= s.size() || ((u8)s[i + k] & 0xC0) != 0x80)
+			{
+				ok = false;
+				break;
+			}
+			cp = (cp << 6) | ((u8)s[i + k] & 0x3F);
+		}
+		if (!ok)
+		{
+			cp = c;
+			n = 0;
+		}
+		out.push_back(cp);
+		i += n + 1;
+	}
+	return out;
+}
+
+float widthOf(const std::vector<int>& cps, float px)
 {
 	const float scale = stbtt_ScaleForPixelHeight(&font, px);
 	float width = 0.f;
-	for (size_t i = 0; i < s.size(); i++)
+	for (size_t i = 0; i < cps.size(); i++)
 	{
 		int advance, bearing;
-		stbtt_GetCodepointHMetrics(&font, (u8)s[i], &advance, &bearing);
+		stbtt_GetCodepointHMetrics(&font, cps[i], &advance, &bearing);
 		width += advance * scale;
-		if (i + 1 < s.size())
-			width += scale * stbtt_GetCodepointKernAdvance(&font, (u8)s[i], (u8)s[i + 1]);
+		if (i + 1 < cps.size())
+			width += scale * stbtt_GetCodepointKernAdvance(&font, cps[i], cps[i + 1]);
 	}
-	float x = (canvasW - width) * 0.5f;
+	return width;
+}
+
+// One line from x (its left edge), its baseline at y.
+void textFrom(const std::vector<int>& cps, float px, float x, int y, const glm::vec3& colour)
+{
+	const float scale = stbtt_ScaleForPixelHeight(&font, px);
 	std::vector<u8> glyph;
-	for (size_t i = 0; i < s.size(); i++)
+	for (size_t i = 0; i < cps.size(); i++)
 	{
-		const int c = (u8)s[i];
+		const int c = cps[i];
 		int advance, bearing, x0, y0, x1, y1;
 		stbtt_GetCodepointHMetrics(&font, c, &advance, &bearing);
 		stbtt_GetCodepointBitmapBoxSubpixel(&font, c, scale, scale, x - std::floor(x), 0.f, &x0, &y0, &x1, &y1);
@@ -126,9 +166,135 @@ void text(const std::string& s, float px, int y, const glm::vec3& colour)
 					blend((int)std::floor(x) + x0 + gx, y + y0 + gy, colour, glyph[(size_t)gy * w + gx] / 255.f);
 		}
 		x += advance * scale;
-		if (i + 1 < s.size())
-			x += scale * stbtt_GetCodepointKernAdvance(&font, c, (u8)s[i + 1]);
+		if (i + 1 < cps.size())
+			x += scale * stbtt_GetCodepointKernAdvance(&font, c, cps[i + 1]);
 	}
+}
+
+// One line, centred, its baseline at y.
+void text(const std::string& s, float px, int y, const glm::vec3& colour)
+{
+	const std::vector<int> cps = codepoints(s);
+	textFrom(cps, px, (canvasW - widthOf(cps, px)) * 0.5f, y, colour);
+}
+
+// tcvr: a placed text, wrapped if it has a width
+void placedText(const PanelText& t)
+{
+	std::vector<std::string> lines;
+	if (t.maxWidth <= 0.f)
+		lines.push_back(t.text);
+	else
+	{
+		std::string line, word;
+		auto flush = [&]() {
+			if (word.empty())
+				return;
+			const std::string tryLine = line.empty() ? word : line + ' ' + word;
+			if (!line.empty() && widthOf(codepoints(tryLine), t.px) > t.maxWidth)
+			{
+				lines.push_back(line);
+				line = word;
+			}
+			else
+				line = tryLine;
+			word.clear();
+		};
+		for (char c : t.text)
+		{
+			if (c == ' ')
+				flush();
+			else if (c == '\n')
+			{
+				flush();
+				lines.push_back(line);
+				line.clear();
+			}
+			else
+				word += c;
+		}
+		flush();
+		if (!line.empty())
+			lines.push_back(line);
+	}
+	float y = t.y;
+	for (const std::string& l : lines)
+	{
+		const std::vector<int> cps = codepoints(l);
+		const float w = widthOf(cps, t.px);
+		const float x = t.align == 1 ? t.x - w * 0.5f : t.align == 2 ? t.x - w : t.x;
+		textFrom(cps, t.px, x, (int)std::lround(y), t.colour);
+		y += t.px * 1.3f;
+	}
+}
+
+// tcvr: how much of the pixel at (px, py) a rounded box covers (its signed distance, smoothed over a pixel)
+float boxDistance(float px, float py, float x0, float y0, float x1, float y1, float r)
+{
+	const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
+	const float hx = (x1 - x0) * 0.5f, hy = (y1 - y0) * 0.5f;
+	r = std::min(r, std::min(hx, hy));
+	const float qx = std::abs(px - cx) - hx + r, qy = std::abs(py - cy) - hy + r;
+	const float ox = std::max(qx, 0.f), oy = std::max(qy, 0.f);
+	return std::sqrt(ox * ox + oy * oy) + std::min(std::max(qx, qy), 0.f) - r;
+}
+
+void shape(const PanelShape& s)
+{
+	if (s.kind == PanelShape::Triangle)
+	{
+		if (s.fill.a <= 0.f)
+			return;
+		const float xs[3] { s.x0, s.x1, s.x2 }, ys[3] { s.y0, s.y1, s.y2 };
+		const int bx0 = (int)std::floor(std::min({ xs[0], xs[1], xs[2] })) - 1, bx1 = (int)std::ceil(std::max({ xs[0], xs[1], xs[2] })) + 1;
+		const int by0 = (int)std::floor(std::min({ ys[0], ys[1], ys[2] })) - 1, by1 = (int)std::ceil(std::max({ ys[0], ys[1], ys[2] })) + 1;
+		const float area = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (ys[1] - ys[0]) * (xs[2] - xs[0]);
+		const float sign = area < 0.f ? -1.f : 1.f;
+		for (int y = by0; y <= by1; y++)
+			for (int x = bx0; x <= bx1; x++)
+			{
+				const float px = x + 0.5f, py = y + 0.5f;
+				float inside = 1e9f;
+				for (int e = 0; e < 3; e++)
+				{
+					const int f = (e + 1) % 3;
+					const float ex = xs[f] - xs[e], ey = ys[f] - ys[e];
+					const float len = std::sqrt(ex * ex + ey * ey);
+					if (len <= 0.f)
+						continue;
+					inside = std::min(inside, sign * (ex * (py - ys[e]) - ey * (px - xs[e])) / len);
+				}
+				const float cover = std::clamp(inside + 0.5f, 0.f, 1.f);
+				blend(x, y, glm::vec3(s.fill), s.fill.a * cover);
+			}
+		return;
+	}
+	const int bx0 = (int)std::floor(s.x0) - 1, bx1 = (int)std::ceil(s.x1) + 1;
+	const int by0 = (int)std::floor(s.y0) - 1, by1 = (int)std::ceil(s.y1) + 1;
+	for (int y = by0; y <= by1; y++)
+		for (int x = bx0; x <= bx1; x++)
+		{
+			const float px = x + 0.5f, py = y + 0.5f;
+			const float d = boxDistance(px, py, s.x0, s.y0, s.x1, s.y1, s.radius);
+			const float outer = std::clamp(0.5f - d, 0.f, 1.f);
+			if (outer <= 0.f)
+				continue;
+			if (s.fill.a > 0.f)
+				blend(x, y, glm::vec3(s.fill), s.fill.a * outer);
+			if (s.borderPx > 0.f && s.border.a > 0.f)
+			{
+				const float inner = std::clamp(0.5f - (d + s.borderPx), 0.f, 1.f);
+				float cover = outer - inner;
+				if (s.dashed)
+				{
+					// dashes along the edge nearest to the pixel
+					const bool horizontal = std::min(py - s.y0, s.y1 - py) < std::min(px - s.x0, s.x1 - px);
+					if (((int)((horizontal ? px : py) / 18.f)) % 2 != 0)
+						cover = 0.f;
+				}
+				blend(x, y, glm::vec3(s.border), s.border.a * cover);
+			}
+		}
 }
 
 // The panel's picture into pixels (panel.imageWidth x panel.imageHeight, top row first).
@@ -178,11 +344,16 @@ void paint(const Panel& panel, std::vector<u8>& out)
 	}
 	if (!panel.footer.empty())
 		text(panel.footer, h * 0.042f, h - h * 28 / 448, glm::vec3(0.55f));
+	for (const PanelShape& s : panel.shapes)
+		shape(s);
+	for (const PanelText& t : panel.texts)
+		placedText(t);
 	canvas = &pixels;
 	canvasW = Width;
 	canvasH = Height;
 }
 
+#ifndef XR_PANEL_PAINT_ONLY
 bool initGl()
 {
 	if (program != 0)
@@ -237,18 +408,16 @@ void main()
 	return true;
 }
 
+#endif
+
 }	// namespace
 
+#ifndef XR_PANEL_PAINT_ONLY
 void drawPanel(const glm::mat4& viewProj, const Panel& panel)
 {
 	if (!loadFont() || !initGl())
 		return;
-	// what it says, the bar in steps of half a percent
-	std::string says;
-	for (const PanelLine& line : panel.lines)
-		says += line.text + '\n';
-	says += panel.footer + '\n' + std::to_string(panel.progress < 0.f ? -1 : (int)(panel.progress * 200.f))
-			+ '\n' + std::to_string(panel.imageWidth) + 'x' + std::to_string(panel.imageHeight) + ' ' + std::to_string(panel.highlight);
+	const std::string says = panelKey(panel);
 	glActiveTexture(GL_TEXTURE0);
 	glcache.BindTexture(GL_TEXTURE_2D, texture);
 	if (says != shown)
@@ -341,6 +510,42 @@ void drawLabel(const glm::mat4& mvp, const std::string& s, float widthMetres)
 	glcache.BindTexture(GL_TEXTURE_2D, 0);
 }
 
+#endif
+
+std::string panelKey(const Panel& panel)
+{
+	std::string key;
+	char buf[96];
+	for (const PanelLine& line : panel.lines)
+	{
+		snprintf(buf, sizeof(buf), "|%.3f %d,%d,%d ", line.size, (int)(line.colour.r * 255.f), (int)(line.colour.g * 255.f), (int)(line.colour.b * 255.f));
+		key += buf + line.text + '\n';
+	}
+	key += panel.footer + '\n' + std::to_string(panel.progress < 0.f ? -1 : (int)(panel.progress * 200.f))
+			+ '\n' + std::to_string(panel.imageWidth) + 'x' + std::to_string(panel.imageHeight) + ' ' + std::to_string(panel.highlight);
+	for (const PanelShape& s : panel.shapes)
+	{
+		snprintf(buf, sizeof(buf), "\nS%d %.0f %.0f %.0f %.0f %.0f %.0f %.0f ", (int)s.kind, s.x0, s.y0, s.x1, s.y1, s.x2, s.y2, s.radius);
+		key += buf;
+		snprintf(buf, sizeof(buf), "%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.1f %d", s.fill.r, s.fill.g, s.fill.b, s.fill.a,
+				s.border.r, s.border.g, s.border.b, s.border.a, s.borderPx, (int)s.dashed);
+		key += buf;
+	}
+	for (const PanelText& t : panel.texts)
+	{
+		snprintf(buf, sizeof(buf), "\nT%.0f %.0f %.1f %.2f %.2f %.2f %d %.0f ", t.x, t.y, t.px, t.colour.r, t.colour.g, t.colour.b, t.align, t.maxWidth);
+		key += buf + t.text;
+	}
+	return key;
+}
+
+float panelTextWidth(const std::string& text, float px)
+{
+	if (!loadFont())
+		return text.size() * px * 0.5f;
+	return widthOf(codepoints(text), px);
+}
+
 void paintPanelImage(const Panel& panel, std::vector<u8>& out)
 {
 	if (!loadFont())
@@ -365,6 +570,7 @@ void paintPanelImage(const Panel& panel, std::vector<u8>& out)
 	}
 }
 
+#ifndef XR_PANEL_PAINT_ONLY
 void termPanel()
 {
 	if (labelTexture != 0)
@@ -382,5 +588,7 @@ void termPanel()
 	uMvp = -1;
 	shown.clear();
 }
+
+#endif
 
 }

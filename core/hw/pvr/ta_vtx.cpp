@@ -10,6 +10,7 @@
 #include "Renderer_if.h"
 #include "cfg/option.h"
 #include "rend/vr_reproject.h"
+#include "rend/vr/mp_ownview.h"
 
 #include <algorithm>
 #include <utility>
@@ -1182,6 +1183,8 @@ static void parseRenderPass(RenderPass& pass, const RenderPass& previousPass, re
 	}
 	// hotd2-vr: the game's own 2D shot marker goes while its polygons are still whole
 	vr::dropShotMarker(ctx, pass, previousPass);
+	// tcvr: two-player split screen, the local player's HUD by the band's edges (own view)
+	vr::ownViewPlaceHud(ctx, pass, previousPass);
 	if (primRestart)
 	{
 		makePrimRestartIndex(ctx.global_param_op, previousPass.op_count, pass.op_count, true, ctx);
