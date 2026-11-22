@@ -48,6 +48,12 @@ int flycast_init(int argc, char* argv[]);
 void flycast_term();
 void dc_exit();
 void dc_savestate(int index = 0, const u8 *pngData = nullptr, u32 pngSize = 0);
+// tcvr: the whole machine state as bytes (the emulator stopped, or between two frames), a savestate file made
+// of such bytes, and one loaded (the multiplayer: a match that starts from a saved state, the player's own
+// game kept during a match). The same file format as the savestates.
+bool dc_serializeAll(std::vector<u8>& out);
+bool dc_writeStateFile(const std::string& path, const std::vector<u8>& state);
+bool dc_loadStateFile(const std::string& path);
 void dc_loadstate(int index = 0);
 time_t dc_getStateCreationDate(int index);
 void dc_getStateScreenshot(int index, std::vector<u8>& pngData);

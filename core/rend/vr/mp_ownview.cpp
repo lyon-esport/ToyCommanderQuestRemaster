@@ -173,9 +173,18 @@ void noteMatch(const rend_context& ctx, int count, const View *views, int clipPl
 // height). The 2D is scaled up by the smaller ratio only (x1 for a band), so its parts would stay in
 // a strip across the middle of the plane: each 2D polygon is moved instead so that its centre takes
 // the same place on the whole screen as in the band (the top of the band to the top of the screen),
-// at its own size. Only this picture's vertices are changed (the renderer's copy, after the frame
-// was made): nothing the game reads.
-void placeHudByEdge(rend_context& ctx, const glm::vec4& view)
+// at its own size. Only this picture's vertices are changed (the renderer's copy): nothing the game
+// reads.
+//
+// Done at parse time, while every polygon still has its own run of vertices (pp.first, pp.count index
+// ctx.verts there; once the index is made they index ctx.idx and merged strips share runs: moving by
+// them, as the first version did after the parse, moved other polygons' vertices, half a bar here, an
+// icon there, a different mix in each picture: the HUD that shook in two-player matches).
+//
+// Only what is near the band's edges goes with them (gauges, icons, counters). What the game puts
+// over the 3D view near its middle (the lock-on mark on a target, the sight) stays where it is drawn:
+// the 3D is rebuilt about the same centre at the same scale, so it stays on what it marks.
+void placeHudByEdge(rend_context& ctx, const glm::vec4& view, const RenderPass& pass, const RenderPass& previousPass)
 {
 	int width, height;
 	getPvrFramebufferSize(ctx, width, height);
@@ -184,13 +193,16 @@ void placeHudByEdge(rend_context& ctx, const glm::vec4& view)
 	if (std::abs(ratio.x - ratio.y) < 0.1f * scale)
 		return;		// a quarter (4 players, 3): scaled up evenly already
 	const glm::vec2 centre(view.x + view.z * 0.5f, view.y + view.w * 0.5f);
+	const glm::vec2 half(view.z * 0.5f, view.w * 0.5f);
 	// shown at (p - centre) * scale: a centre c goes where (c - centre) * ratio is wanted
 	const glm::vec2 move = ratio / scale - 1.f;		// (0, 1) for a band
 	const float hudW = config::VrHudW;
 	auto onPlane = [hudW](const Vertex& v) { return v.z > 0.f && std::abs(1.f / v.z - hudW) < 0.002f; };
-	for (const std::vector<PolyParam> *list : { &ctx.global_param_op, &ctx.global_param_pt, &ctx.global_param_tr })
-		for (const PolyParam& pp : *list)
+	auto list = [&](std::vector<PolyParam>& polys, u32 from, u32 to) {
+		to = std::min<u32>(to, (u32)polys.size());
+		for (u32 n = from; n < to; n++)
 		{
+			const PolyParam& pp = polys[n];
 			if (pp.count < 3 || pp.first + pp.count > ctx.verts.size())
 				continue;
 			glm::vec2 lo(1e9f), hi(-1e9f);
@@ -204,13 +216,23 @@ void placeHudByEdge(rend_context& ctx, const glm::vec4& view)
 			}
 			if (!flat)
 				continue;
-			const glm::vec2 delta = ((lo + hi) * 0.5f - centre) * move;
+			const glm::vec2 offset = (lo + hi) * 0.5f - centre;
+			// 0 in the middle 40% of the band, 1 from 70% out, smooth between (per axis)
+			const glm::vec2 out = glm::clamp((glm::abs(offset) / half - 0.4f) / 0.3f, 0.f, 1.f);
+			const glm::vec2 weight = out * out * (3.f - 2.f * out);
+			const glm::vec2 delta = offset * move * weight;
+			if (delta.x == 0.f && delta.y == 0.f)
+				continue;
 			for (u32 i = pp.first; i < pp.first + pp.count; i++)
 			{
 				ctx.verts[i].x += delta.x;
 				ctx.verts[i].y += delta.y;
 			}
 		}
+	};
+	list(ctx.global_param_op, previousPass.op_count, pass.op_count);
+	list(ctx.global_param_pt, previousPass.pt_count, pass.pt_count);
+	list(ctx.global_param_tr, previousPass.tr_count, pass.tr_count);
 }
 
 }	// namespace
@@ -269,10 +291,30 @@ bool ownViewKeep(rend_context& ctx)
 		const View& v = views[player];
 		ctx.tcvrView = glm::vec4(v.rect);
 		ctx.tcvrViewFocal = v.focal;
-		placeHudByEdge(ctx, ctx.tcvrView);
+		// (its HUD was placed at parse time: ownViewPlaceHud)
 	}
 	stats.tick(local, count);
 	return keep;
+}
+
+void ownViewPlaceHud(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass)
+{
+	if (ctx.isRTT || !config::VrReproject)
+		return;
+	const int local = ownViewPlayer();
+	if (local < 0)
+		return;
+	const int count = (int)ReadMem32_nommu(PlayerCount);
+	if (count != 2 || local >= count || ReadMem32_nommu(MultiplayerFlag) == 0)
+		return;		// (only the two-player bands are not the screen's shape)
+	View views[4];
+	for (int i = 0; i < count; i++)
+		views[i] = readView(i);
+	// the picture's own part of the screen (as ownViewKeep; the framebuffer clip is set before the parse)
+	const int player = byClip(rectOf(ctx.fbClip), views, count);
+	if (player != local)
+		return;		// another player's picture (not shown), or a page for everybody
+	placeHudByEdge(ctx, glm::vec4(views[player].rect), pass, previousPass);
 }
 
 }

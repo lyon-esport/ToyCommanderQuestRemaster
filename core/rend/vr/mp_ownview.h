@@ -17,6 +17,7 @@
 #include <glm/glm.hpp>
 
 struct rend_context;
+struct RenderPass;
 
 namespace vr
 {
@@ -30,5 +31,10 @@ int ownViewPlayer();
 // ctx.tcvrView / tcvrViewFocal for the local player's picture (width 0 otherwise). Returns
 // false for another player's picture in split screen: not to be shown.
 bool ownViewKeep(rend_context& ctx);
+
+// At parse time, for each render pass (before the index is made: every polygon has its own vertices):
+// two-player split screen, the local player's picture: its HUD placed by the band's edges onto the
+// whole screen (see placeHudByEdge).
+void ownViewPlaceHud(rend_context& ctx, const RenderPass& pass, const RenderPass& previousPass);
 
 }
