@@ -645,6 +645,12 @@ bool inMatch()
 	return active && config::GGPOEnable;
 }
 
+bool backFromMatch()
+{
+	reloadDoneIfRunning();
+	return active || reloading != (int)Reload::None || reloadWanted != (int)Reload::None || clearPending;
+}
+
 std::string leaveMatch(const std::string& why)
 {
 	if (!active && reloading == (int)Reload::None)
@@ -1446,6 +1452,8 @@ std::string udpCommand(const char *cmd)
 	}
 	if (sscanf(cmd, "READY %u", &n) == 1)
 	{
+		if (n != 0 && backFromMatch())
+			return "MPR error not back from the last match yet";
 		l.setReady(n != 0);
 		return stateLine();
 	}

@@ -510,6 +510,11 @@ void change(const Entry& e, int step)
 	if (e.action == Action::MpReady)
 	{
 		const bool ready = step > 0;
+		if (ready && tcvr::match::backFromMatch())
+		{
+			setStatus("Wait a moment: the game is coming back from the last match");
+			return;
+		}
 		if (ready != mpReady)
 		{
 			mpReady = ready;

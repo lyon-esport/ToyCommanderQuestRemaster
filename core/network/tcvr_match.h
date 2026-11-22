@@ -46,6 +46,10 @@ void setPlayerName(const std::string& name);
 void poll();
 // True while this run of the game is a match.
 bool inMatch();
+// This copy is in a match or on its way back from one (its game not loaded again yet): it cannot say it is
+// ready for the next match. A START taken then met the ending match's netplay session still open on the
+// same port (verification mismatch, "GGPO error", the next match never started).
+bool backFromMatch();
 // The netplay gave up on a player (it left, or its network dropped). With 3 or 4 players the match goes on
 // while another player is still there (the gone player's pad is neutral from then on, the same on every copy):
 // a notice says who left. Otherwise (2 players, or this copy is alone now) the next poll() ends the match:
