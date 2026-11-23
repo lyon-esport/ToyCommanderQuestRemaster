@@ -1056,6 +1056,7 @@ u64 EMSCRIPTEN_KEEPALIVE wasm_div1(u32 a, u32 bU, u32 T) {
 // PC and the Quest follow it (they set the host FPU's rounding mode). WebAssembly only rounds to
 // nearest, so while a netplay session runs the float ops that round go through the SHIL fallback
 // (wasm_emit.h) and are computed here exactly, then truncated.
+static_assert(offsetof(Sh4Context, fpscr) == CTX_FPSCR, "wasm_emit.h CTX_FPSCR");
 static inline bool fly_np_rtz()
 {
 	return g_fly_netplay && Sh4cntx.fpscr.RM == 1;
@@ -5613,9 +5614,12 @@ static void emitBlockFuncBody(WasmModuleBuilder& b, RuntimeBlockInfo* block) {
 	// Locals: 5 fixed i32 scratch + N cached register i32s + 1 i64 scratch
 	u32 i32Count = LOCAL_FIXED_I32_COUNT + cache.localCount();
 	u32 i64Count = 1;
-	u32 groupCounts[2] = { i32Count, i64Count };
-	u8 groupTypes[2] = { WASM_TYPE_I32, WASM_TYPE_I64 };
-	b.emitLocals(2, groupCounts, groupTypes);
+	// tcvr: + 4 f64 and 2 i32 scratch for the online round-to-zero float ops (wasm_emit.h)
+	u32 groupCounts[4] = { i32Count, i64Count, RTZ_F64_LOCALS, RTZ_I32_LOCALS };
+	u8 groupTypes[4] = { WASM_TYPE_I32, WASM_TYPE_I64, WASM_TYPE_F64, WASM_TYPE_I32 };
+	b.emitLocals(4, groupCounts, groupTypes);
+	cache._rtzF64LocalIdx = 2 + i32Count + i64Count;
+	cache._rtzI32LocalIdx = cache._rtzF64LocalIdx + RTZ_F64_LOCALS;
 	cache._tmp64LocalIdx = 2 + i32Count;  // i64 local after all i32s
 
 	// Prologue: load cached registers from ctx memory into WASM locals
@@ -5908,9 +5912,12 @@ static bool buildMultiBlockModule(WasmModuleBuilder& b,
 	// Locals: 5 fixed i32 scratch + N cached regs + 1 dispatch index + 1 i64 scratch
 	u32 i32Count = LOCAL_FIXED_I32_COUNT + cache.localCount() + 1;
 	u32 i64Count = 1;
-	u32 groupCounts[2] = { i32Count, i64Count };
-	u8 groupTypes[2] = { WASM_TYPE_I32, WASM_TYPE_I64 };
-	b.emitLocals(2, groupCounts, groupTypes);
+	// tcvr: + 4 f64 and 2 i32 scratch for the online round-to-zero float ops (wasm_emit.h)
+	u32 groupCounts[4] = { i32Count, i64Count, RTZ_F64_LOCALS, RTZ_I32_LOCALS };
+	u8 groupTypes[4] = { WASM_TYPE_I32, WASM_TYPE_I64, WASM_TYPE_F64, WASM_TYPE_I32 };
+	b.emitLocals(4, groupCounts, groupTypes);
+	cache._rtzF64LocalIdx = 2 + i32Count + i64Count;
+	cache._rtzI32LocalIdx = cache._rtzF64LocalIdx + RTZ_F64_LOCALS;
 	cache._tmp64LocalIdx = 2 + i32Count;  // i64 local after all i32s
 
 	// Prologue: load all cached registers
@@ -6424,9 +6431,12 @@ static bool buildRegionModule(WasmModuleBuilder& b,
 
 	u32 i32Count = LOCAL_FIXED_I32_COUNT + cache.localCount() + 1;
 	u32 i64Count = 1;
-	u32 groupCounts[2] = { i32Count, i64Count };
-	u8 groupTypes[2] = { WASM_TYPE_I32, WASM_TYPE_I64 };
-	b.emitLocals(2, groupCounts, groupTypes);
+	// tcvr: + 4 f64 and 2 i32 scratch for the online round-to-zero float ops (wasm_emit.h)
+	u32 groupCounts[4] = { i32Count, i64Count, RTZ_F64_LOCALS, RTZ_I32_LOCALS };
+	u8 groupTypes[4] = { WASM_TYPE_I32, WASM_TYPE_I64, WASM_TYPE_F64, WASM_TYPE_I32 };
+	b.emitLocals(4, groupCounts, groupTypes);
+	cache._rtzF64LocalIdx = 2 + i32Count + i64Count;
+	cache._rtzI32LocalIdx = cache._rtzF64LocalIdx + RTZ_F64_LOCALS;
 	cache._tmp64LocalIdx = 2 + i32Count;
 
 	// Prologue: unified register loads

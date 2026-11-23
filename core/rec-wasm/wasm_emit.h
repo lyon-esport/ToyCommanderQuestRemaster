@@ -72,6 +72,10 @@ constexpr u32 LOCAL_TMP3 = 4;
 constexpr u32 LOCAL_TMP4 = 5;
 constexpr u32 LOCAL_TMP5 = 6;
 constexpr u32 LOCAL_FIXED_I32_COUNT = 5;  // TMP through TMP5
+// tcvr: extra locals declared after the i64 scratch for the online round-to-zero float ops
+constexpr u32 RTZ_F64_LOCALS = 4;
+constexpr u32 RTZ_I32_LOCALS = 2;
+constexpr u32 CTX_FPSCR = 0x158;  // offsetof(Sh4Context, fpscr), checked in rec_wasm.cpp
 
 // ============================================================
 // Register Cache — maps Sh4Context offsets to WASM locals
@@ -142,6 +146,9 @@ struct RegCache {
 	// i64 scratch local index (set by compile() after all i32 locals are allocated)
 	u32 _tmp64LocalIdx = 0;
 	u32 tmp64Local() const { return _tmp64LocalIdx; }
+	// tcvr: scratch for the online round-to-zero float ops (set by compile(), see emitRtz*)
+	u32 _rtzF64LocalIdx = 0;
+	u32 _rtzI32LocalIdx = 0;
 };
 
 // ============================================================
@@ -439,6 +446,268 @@ static bool g_emitting_chain = false;
 // table lives in sh4_rom.cpp: f32_x2 sin_table[0x10000]).
 extern "C" u32 fly_sin_table_addr();
 
+// ============================================================
+// tcvr: online round-to-zero float ops
+// ============================================================
+// The SH4's FPSCR.RM = 1 (round to zero, which games set) is followed on the PC and the Quest by
+// the host FPU's rounding mode. WebAssembly only rounds to nearest, so online the float ops that
+// round compute the exact or correctly rounded f64 result and truncate it to f32 when RM = 1,
+// branch-free (RM = 0 gives the usual round-to-nearest result: f64 then f32 double rounding is
+// exact for + - * / sqrt). Same results as the C helpers fly_*_rtz in rec_wasm.cpp, checked
+// against the x86 FPU by tcvr/tools/fp-rtz-check.
+struct RtzLocals {
+	u32 s, a, bb, e;   // f64
+	u32 rm, r;         // i32: rm = 1 when FPSCR.RM == 1, r = scratch
+};
+
+static inline RtzLocals rtzLocals(const RegCache& cache) {
+	RtzLocals l;
+	l.s = cache._rtzF64LocalIdx; l.a = l.s + 1; l.bb = l.s + 2; l.e = l.s + 3;
+	l.rm = cache._rtzI32LocalIdx; l.r = l.rm + 1;
+	return l;
+}
+
+// rm = (fpscr & 3) == 1
+static inline void emitRtzLoadRm(WasmModuleBuilder& b, const RegCache& cache, const RtzLocals& l) {
+	s32 local = cache.getLocal(CTX_FPSCR);
+	if (local >= 0)
+		b.op_local_get((u32)local);
+	else {
+		b.op_local_get(LOCAL_CTX);
+		b.op_i32_load(CTX_FPSCR);
+	}
+	b.op_i32_const(3);
+	b.op_i32_and();
+	b.op_i32_const(1);
+	b.op_i32_eq();
+	b.op_local_set(l.rm);
+}
+
+// f64 in local src -> f32 on the stack, truncated when rm (rounded to nearest otherwise)
+static inline void emitRtzToF32(WasmModuleBuilder& b, const RtzLocals& l, u32 src) {
+	b.op_local_get(src);
+	b.op_f32_demote_f64();
+	b.op_i32_reinterpret_f32();
+	b.op_local_tee(l.r);
+	b.op_local_get(l.r);
+	b.op_f32_reinterpret_i32();
+	b.op_f64_promote_f32();
+	b.op_f64_abs();
+	b.op_local_get(src);
+	b.op_f64_abs();
+	b.op_f64_gt();          // rounded away from zero
+	b.op_local_get(l.rm);
+	b.op_i32_and();
+	b.op_i32_sub();         // one f32 step back toward zero
+	b.op_f32_reinterpret_i32();
+}
+
+// l.s = l.a + (f64 on the stack), rounded toward zero in f64 when rm (TwoSum error term)
+static inline void emitRtzAddF64(WasmModuleBuilder& b, const RtzLocals& l) {
+	b.op_local_set(l.e);            // e = b operand for now
+	b.op_local_get(l.a);
+	b.op_local_get(l.e);
+	b.op_f64_add();
+	b.op_local_set(l.s);            // s = a + b
+	b.op_local_get(l.s);
+	b.op_local_get(l.a);
+	b.op_f64_sub();
+	b.op_local_set(l.bb);           // bb = s - a
+	b.op_local_get(l.a);
+	b.op_local_get(l.s);
+	b.op_local_get(l.bb);
+	b.op_f64_sub();
+	b.op_f64_sub();                 // a - (s - bb)
+	b.op_local_get(l.e);
+	b.op_local_get(l.bb);
+	b.op_f64_sub();                 // b - bb
+	b.op_f64_add();
+	b.op_local_set(l.e);            // e = exact error (NaN when an input is inf/NaN)
+	b.op_local_get(l.s);
+	b.op_i64_reinterpret_f64();
+	b.op_local_get(l.e); b.op_f64_const(0.0); b.op_f64_lt();
+	b.op_local_get(l.s); b.op_f64_const(0.0); b.op_f64_gt();
+	b.op_i32_and();
+	b.op_local_get(l.e); b.op_f64_const(0.0); b.op_f64_gt();
+	b.op_local_get(l.s); b.op_f64_const(0.0); b.op_f64_lt();
+	b.op_i32_and();
+	b.op_i32_or();                  // s was rounded away from zero
+	b.op_local_get(l.rm);
+	b.op_i32_and();
+	b.op_i64_extend_i32_u();
+	b.op_i64_sub();
+	b.op_f64_reinterpret_i64();
+	b.op_local_set(l.s);
+}
+
+// push (f64)param
+static inline void emitRtzLoadF64(WasmModuleBuilder& b, const shil_param& p) {
+	emitLoadParamF32(b, p);
+	b.op_f64_promote_f32();
+}
+
+// rd = rs1 + (neg ? -rs2 : rs2)
+static inline void emitRtzFadd(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache, bool neg) {
+	RtzLocals l = rtzLocals(cache);
+	emitRtzLoadRm(b, cache, l);
+	emitRtzLoadF64(b, op.rs1);
+	b.op_local_set(l.a);
+	emitRtzLoadF64(b, op.rs2);
+	if (neg)
+		b.op_f64_neg();         // a - b = a + (-b), signed zeros included
+	emitRtzAddF64(b, l);
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+static inline void emitRtzFmul(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	emitRtzLoadRm(b, cache, l);
+	emitRtzLoadF64(b, op.rs1);
+	emitRtzLoadF64(b, op.rs2);
+	b.op_f64_mul();             // exact
+	b.op_local_set(l.s);
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+static inline void emitRtzFdiv(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	emitRtzLoadRm(b, cache, l);
+	emitRtzLoadF64(b, op.rs1);
+	emitRtzLoadF64(b, op.rs2);
+	b.op_f64_div();
+	b.op_local_set(l.s);
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+static inline void emitRtzFsqrt(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	emitRtzLoadRm(b, cache, l);
+	emitRtzLoadF64(b, op.rs1);
+	b.op_f64_sqrt();
+	b.op_local_set(l.s);
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+// rd = 1 / sqrt(rs1), each step rounded like the fallback (sqrt to f32, then the division)
+static inline void emitRtzFsrra(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	emitRtzLoadRm(b, cache, l);
+	emitRtzLoadF64(b, op.rs1);
+	b.op_f64_sqrt();
+	b.op_local_set(l.s);
+	b.op_f64_const(1.0);
+	emitRtzToF32(b, l, l.s);
+	b.op_f64_promote_f32();
+	b.op_f64_div();
+	b.op_local_set(l.s);
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+// tcvr-fp2 fmac: rd = rs1 + f32(rs2 * rs3), both steps in the current rounding mode
+static inline void emitRtzFmac(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	emitRtzLoadRm(b, cache, l);
+	emitRtzLoadF64(b, op.rs2);
+	emitRtzLoadF64(b, op.rs3);
+	b.op_f64_mul();
+	b.op_local_set(l.s);
+	emitRtzLoadF64(b, op.rs1);
+	b.op_local_set(l.a);
+	emitRtzToF32(b, l, l.s);
+	b.op_f64_promote_f32();
+	emitRtzAddF64(b, l);
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+static inline void emitRtzCvtI2F(WasmModuleBuilder& b, const shil_opcode& op, RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	emitRtzLoadRm(b, cache, l);
+	emitLoadParamCached(b, op.rs1, cache);
+	b.op_f64_convert_i32_s();   // exact
+	b.op_local_set(l.s);
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+// push the product (f64)x[i] * (f64)y[i]; x from ctx at xoff or from an i32 local (bits) when xLocal >= 0
+static inline void emitRtzProduct(WasmModuleBuilder& b, s32 xLocal, u32 xoff, u32 yoff) {
+	if (xLocal >= 0) {
+		b.op_local_get((u32)xLocal);
+		b.op_f32_reinterpret_i32();
+	} else {
+		b.op_local_get(LOCAL_CTX);
+		b.op_f32_load(xoff);
+	}
+	b.op_f64_promote_f32();
+	b.op_local_get(LOCAL_CTX);
+	b.op_f32_load(yoff);
+	b.op_f64_promote_f32();
+	b.op_f64_mul();             // exact
+}
+
+// fipr: rd = sum of 4 exact products, added in order in f64 (toward zero when rm), then to f32
+static inline void emitRtzFipr(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	u32 off1 = op.rs1.reg_offset(), off2 = op.rs2.reg_offset();
+	emitRtzLoadRm(b, cache, l);
+	emitRtzProduct(b, -1, off1, off2);
+	b.op_local_set(l.a);
+	for (u32 i = 1; i < 4; i++) {
+		emitRtzProduct(b, -1, off1 + i * 4, off2 + i * 4);
+		emitRtzAddF64(b, l);
+		if (i < 3) {
+			b.op_local_get(l.s);
+			b.op_local_set(l.a);
+		}
+	}
+	b.op_local_get(LOCAL_CTX);
+	emitRtzToF32(b, l, l.s);
+	emitStoreRdF32(b, op.rd);
+}
+
+// ftrv: fn[col] = sum_j fn[j] * fm[j*4 + col], same rounding as fipr (rd == rs1: inputs saved first)
+static inline void emitRtzFtrv(WasmModuleBuilder& b, const shil_opcode& op, const RegCache& cache) {
+	RtzLocals l = rtzLocals(cache);
+	u32 voff = op.rs1.reg_offset();
+	u32 moff = op.rs2.reg_offset();
+	const u32 in[4] = { LOCAL_TMP2, LOCAL_TMP3, LOCAL_TMP4, LOCAL_TMP5 };
+	emitRtzLoadRm(b, cache, l);
+	for (u32 j = 0; j < 4; j++) {
+		b.op_local_get(LOCAL_CTX);
+		b.op_f32_load(voff + j * 4);
+		b.op_i32_reinterpret_f32();
+		b.op_local_set(in[j]);
+	}
+	for (u32 col = 0; col < 4; col++) {
+		emitRtzProduct(b, (s32)in[0], 0, moff + col * 4);
+		b.op_local_set(l.a);
+		for (u32 j = 1; j < 4; j++) {
+			emitRtzProduct(b, (s32)in[j], 0, moff + (j * 4 + col) * 4);
+			emitRtzAddF64(b, l);
+			if (j < 3) {
+				b.op_local_get(l.s);
+				b.op_local_set(l.a);
+			}
+		}
+		b.op_local_get(LOCAL_CTX);
+		emitRtzToF32(b, l, l.s);
+		b.op_f32_store(voff + col * 4);
+	}
+}
+
 static bool emitShilOp(WasmModuleBuilder& b, const shil_opcode& op,
                         RuntimeBlockInfo* block, u32 opIndex, RegCache& cache) {
 #if FLY_FORCE_FALLBACK_MASK != 0
@@ -449,15 +718,20 @@ static bool emitShilOp(WasmModuleBuilder& b, const shil_opcode& op,
 	if ((FLY_FORCE_FALLBACK_MASK) & flyOpCategoryBit((u32)op.op))
 		return false;
 #endif
-	// tcvr: online, the float ops that round go to the SHIL fallback (rec_wasm.cpp), which follows
-	// the SH4's round-to-zero mode as the PC and the Quest do (WebAssembly only rounds to nearest)
+	// tcvr: online, the float ops that round follow the SH4's round-to-zero mode (emitRtz* above)
 	if (config::GGPOEnable)
 		switch (op.op)
 		{
-		case shop_fadd: case shop_fsub: case shop_fmul: case shop_fdiv: case shop_fsqrt:
-		case shop_fmac: case shop_fsrra: case shop_fipr: case shop_ftrv:
-		case shop_cvt_i2f_n: case shop_cvt_i2f_z:
-			return false;
+		case shop_fadd: emitRtzFadd(b, op, cache, false); return true;
+		case shop_fsub: emitRtzFadd(b, op, cache, true); return true;
+		case shop_fmul: emitRtzFmul(b, op, cache); return true;
+		case shop_fdiv: emitRtzFdiv(b, op, cache); return true;
+		case shop_fsqrt: emitRtzFsqrt(b, op, cache); return true;
+		case shop_fmac: emitRtzFmac(b, op, cache); return true;
+		case shop_fsrra: emitRtzFsrra(b, op, cache); return true;
+		case shop_fipr: emitRtzFipr(b, op, cache); return true;
+		case shop_ftrv: emitRtzFtrv(b, op, cache); return true;
+		case shop_cvt_i2f_n: case shop_cvt_i2f_z: emitRtzCvtI2F(b, op, cache); return true;
 		default:
 			break;
 		}

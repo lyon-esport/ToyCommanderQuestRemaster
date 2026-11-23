@@ -428,6 +428,24 @@ public:
 	void op_f64_mul()            { emitByte(wop::f64_mul); }
 	void op_f64_promote_f32()    { emitByte(wop::f64_promote_f32); }
 	void op_f32_demote_f64()     { emitByte(wop::f32_demote_f64); }
+	// tcvr: f64 ops for the online round-to-zero float path (wasm_emit.h emitRtz*)
+	void op_f64_sub()            { emitByte(0xA1); }
+	void op_f64_div()            { emitByte(0xA3); }
+	void op_f64_sqrt()           { emitByte(0x9F); }
+	void op_f64_abs()            { emitByte(0x99); }
+	void op_f64_neg()            { emitByte(0x9A); }
+	void op_f64_lt()             { emitByte(0x63); }
+	void op_f64_gt()             { emitByte(0x64); }
+	void op_f64_convert_i32_s()  { emitByte(0xB7); }
+	void op_i64_reinterpret_f64() { emitByte(0xBD); }
+	void op_f64_reinterpret_i64() { emitByte(0xBF); }
+	void op_f64_const(double val) {
+		emitByte(0x44);
+		u8 raw[8];
+		memcpy(raw, &val, 8);
+		for (int i = 0; i < 8; i++)
+			bytes.push_back(raw[i]);
+	}
 
 	// Conversions
 	void op_i32_trunc_f32_s()    { emitByte(wop::i32_trunc_f32_s); }
