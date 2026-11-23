@@ -1465,11 +1465,14 @@ ChannelEx ChannelEx::Chans[64];
 
 #define Chans ChannelEx::Chans
 
+static void resetCdda();
+
 void init()
 {
 	ChannelEx::initAll();
 	beep.init();
 	dsp::init();
+	resetCdda();
 }
 
 void term()
@@ -1548,6 +1551,15 @@ void vmuBeep(int on, int period)
 constexpr int CDDA_SIZE = 2352 / 2;
 static s16 cdda_sector[CDDA_SIZE];
 static u32 cdda_index = CDDA_SIZE;
+
+// tcvr: the CD audio phase starts over with every hard AICA reset. Left from the game before, a
+// game loaded again in the running app (a multiplayer match) fetched its CD audio sectors at a
+// different moment on each copy, and the game saw the GD-ROM progress one step apart (desync).
+static void resetCdda()
+{
+	memset(cdda_sector, 0, sizeof(cdda_sector));
+	cdda_index = CDDA_SIZE;
+}
 
 void AICA_Sample()
 {

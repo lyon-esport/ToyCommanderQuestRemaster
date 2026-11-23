@@ -8,6 +8,7 @@
 #if defined(__ANDROID__) && HOST_CPU == CPU_ARM
 #include <fenv.h>
 #endif
+#include "cfg/option.h"
 
 Sh4RCB* p_sh4rcb;
 
@@ -58,6 +59,11 @@ static u32 old_dn = 0xFF;
 
 static void setHostRoundingMode(u32 roundingMode, u32 denorm2zero)
 {
+	// tcvr: online, subnormal numbers are kept on every host (the SH4 DN bit is ignored): the
+	// float model all players share (Quest, PC, and a WebAssembly build that cannot flush
+	// them). See docs/multiplayer/PC-crossplay-analysis.md.
+	if (config::GGPOEnable)
+		denorm2zero = 0;
 	if (old_rm != roundingMode || old_dn != denorm2zero)
 	{
 		old_rm = roundingMode;
@@ -84,7 +90,7 @@ static void setHostRoundingMode(u32 roundingMode, u32 denorm2zero)
 				temp|=(3<<13);
 
 			if (denorm2zero == 1)	// denormals are considered 0
-				temp|=(1<<15);
+				temp|=(1<<15) | (1<<6);	// tcvr: flush results (FTZ) and inputs (DAZ), like arm64 FZ and MSVC's _DN_FLUSH
 			asm("ldmxcsr %0" : : "m"(temp));
     #elif HOST_CPU==CPU_ARM
 		static const unsigned int offMask = 0x04086060;

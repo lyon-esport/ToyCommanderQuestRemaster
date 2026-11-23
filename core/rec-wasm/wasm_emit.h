@@ -8,6 +8,7 @@
 #include "hw/sh4/dyna/shil.h"
 #include "hw/sh4/dyna/blockmanager.h"
 #include "hw/sh4/dyna/decoder.h"
+#include "cfg/option.h"
 #include <unordered_map>
 
 // Differential-validator memory-write logging flag (see rec_wasm.cpp). Default
@@ -1297,6 +1298,20 @@ static bool emitShilOp(WasmModuleBuilder& b, const shil_opcode& op,
 		// f32.mul+f32.add double-rounded EVERY op (1-ULP drift vs reference,
 		// caught by the bridge-shadow differential 2026-07-17). The SHIL
 		// fallback computes the same f64 expression — bit-identical paths.
+		if (config::GGPOEnable)
+		{
+			// tcvr: online every host follows the float model "tcvr-fp2" (core/network/ggpo.cpp):
+			// no fused multiply-add, the product rounded to f32 then the sum, as the x64 and
+			// arm64 recompilers do online. The SHIL fallback (rec_wasm.cpp) does the same.
+			b.op_local_get(LOCAL_CTX);
+			emitLoadParamF32(b, op.rs1);        // fn
+			emitLoadParamF32(b, op.rs2);        // f0
+			emitLoadParamF32(b, op.rs3);        // fm
+			b.op_f32_mul();
+			b.op_f32_add();
+			emitStoreRdF32(b, op.rd);
+			return true;
+		}
 		b.op_local_get(LOCAL_CTX);
 		emitLoadParamF32(b, op.rs1);        // fn (accumulator)
 		b.op_f64_promote_f32();

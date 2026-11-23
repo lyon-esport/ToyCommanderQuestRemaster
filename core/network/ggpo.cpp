@@ -160,6 +160,7 @@ static bool keyboardGame;
 static bool mouseGame;
 static int inputSize;
 static FILE *syncLog;		// HOTD2VR_SYNCLOG (save_game_state)
+static std::string syncLogPath;	// tcvr: HOTD2VR_SYNCLOG, else the option hotd2vr.SyncLog (the headset has no environment)
 static struct { int frames, saves, rollbacks; } netStats;	// nextFrame's 5 s log
 static struct { s16 x, y; } heldAim;	// the local light gun's position as last sent (nextFrame)
 static void (*chatCallback)(int playerNum, const std::string& msg);
@@ -636,7 +637,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 				{
 					if (out != nullptr)
 						fclose(out);
-					out = fopen((std::string(getenv("HOTD2VR_SYNCLOG")) + ".region").c_str(), "wb");
+					out = fopen((syncLogPath + ".region").c_str(), "wb");
 					outOf = syncLog;
 				}
 				if (out != nullptr)
@@ -650,7 +651,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 		}
 	// and with HOTD2VR_SYNCPAGES set: main RAM per 64 KB page, to <synclog>.pages (where a
 	// difference is, when it shows up in a run that can't be repeated)
-	if (syncLog != nullptr && getenv("HOTD2VR_SYNCPAGES") != nullptr)
+	if (syncLog != nullptr && (getenv("HOTD2VR_SYNCPAGES") != nullptr || config::NetplaySyncPages))
 	{
 		static FILE *pages;
 		static FILE *pagesOf;
@@ -658,7 +659,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 		{
 			if (pages != nullptr)
 				fclose(pages);
-			pages = fopen((std::string(getenv("HOTD2VR_SYNCLOG")) + ".pages").c_str(), "w");
+			pages = fopen((syncLogPath + ".pages").c_str(), "w");
 			pagesOf = syncLog;
 		}
 		if (pages != nullptr)
@@ -674,7 +675,8 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	// and with HOTD2VR_SYNCDUMP=frame[,frame...]: that frame's saved state and RAM to
 	// <synclog>.<frame>.state/.ram (again after a rollback, so the last one stays)
 	if (syncLog != nullptr)
-		if (const char *frames = getenv("HOTD2VR_SYNCDUMP"))
+		if (const char *frames = getenv("HOTD2VR_SYNCDUMP") != nullptr ? getenv("HOTD2VR_SYNCDUMP")
+				: !config::NetplaySyncDump.get().empty() ? config::NetplaySyncDump.get().c_str() : nullptr)
 			for (const char *p = frames; *p != '\0'; )
 			{
 				char *end;
@@ -683,7 +685,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 					break;
 				if (f == frame)
 				{
-					const std::string base = std::string(getenv("HOTD2VR_SYNCLOG")) + "." + std::to_string(frame);
+					const std::string base = syncLogPath + "." + std::to_string(frame);
 					if (FILE *out = fopen((base + ".state").c_str(), "wb")) { fwrite(*buffer, 1, *len, out); fclose(out); }
 					if (FILE *out = fopen((base + ".ram").c_str(), "wb")) { fwrite(&mem_b[0], 1, RAM_SIZE, out); fclose(out); }
 				}
@@ -900,8 +902,27 @@ void startSession(int localPort, int localPlayerNum)
 	cb.log_game_state  = log_game_state;
 	cb.on_message      = on_message;
 
-	if (const char *path = getenv("HOTD2VR_SYNCLOG"); path != nullptr && syncLog == nullptr)
-		syncLog = fopen(path, "w");
+	if (syncLog == nullptr)
+	{
+		// tcvr: on a headset (no environment variables) the option hotd2vr.SyncLog names the
+		// file, relative to the app's data folder: a Quest and a PC compare their logs
+		if (const char *path = getenv("HOTD2VR_SYNCLOG"); path != nullptr)
+			syncLogPath = path;
+		else if (!config::NetplaySyncLog.get().empty())
+		{
+			syncLogPath = config::NetplaySyncLog.get();
+			const bool absolute = syncLogPath[0] == '/' || syncLogPath[0] == '\\' || (syncLogPath.size() > 1 && syncLogPath[1] == ':');
+			if (!absolute)
+				syncLogPath = get_writable_data_path(syncLogPath);
+		}
+		else
+			syncLogPath.clear();
+		if (!syncLogPath.empty())
+		{
+			syncLog = fopen(syncLogPath.c_str(), "w");
+			NOTICE_LOG(NETWORK, "GGPO sync log: %s%s", syncLogPath.c_str(), syncLog == nullptr ? " (could not open)" : "");
+		}
+	}
 	heldAim = {};
 	gonePlayers = 0;
 	for (auto& handle : playerHandles)
@@ -993,18 +1014,24 @@ void startSession(int localPort, int localPlayerNum)
 					devMd5.add(type);
 				}
 		devMd5.getDigest(devices);
+		{
+			// (each port's main device and its two slots, for a refusal: 0 controller, 1 VMU, 10 none)
+			std::string ports;
+			if (settings.platform.isConsole())
+				for (int i = 0; i < MAPLE_PORTS; i++)
+				{
+					auto type = [&](int j) { return MapleDevices[i][j] != nullptr ? (int)MapleDevices[i][j]->get_device_type() : (int)MDT_None; };
+					ports += strprintf("%s%d.%d.%d", i ? " " : "", type(5), type(0), type(1));
+				}
+			NOTICE_LOG(NETWORK, "GGPO verif: ports %s", ports.c_str());
+		}
 		MD5Sum vrMd5;
 		vr::netplayDigest(vrMd5);
 		vrMd5.getDigest(vrWrites);
-		// The CPU: arm64 (the Quest) and x64 don't round the same. The arm64 dynarec does
-		// fmac fused (x64 doesn't online), and its compiler may fuse multiply-adds in the
-		// C code the dynarecs fall back to (fipr, ftrv). Until that's made the same, a
-		// Quest and a PC don't play together.
-#if defined(__aarch64__) || defined(_M_ARM64)
-		const char arch[] = "arm64";
-#else
-		const char arch[] = "other";
-#endif
+		// The float model, not the CPU: online every host computes the SH4's floats the same
+		// way (no fused multiply-add, subnormals kept, see PC-crossplay-analysis.md), so a
+		// Quest (arm64) and a PC (x64) may play together. Bump it whenever that changes.
+		const char arch[] = "tcvr-fp2";
 		if (config::NetplayTestAnyCpu)
 		{
 			// a test: the two sides may differ (and will drift apart)

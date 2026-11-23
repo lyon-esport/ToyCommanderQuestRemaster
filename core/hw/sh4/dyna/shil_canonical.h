@@ -138,9 +138,16 @@ shil_compile( \
 
 #if SHIL_MODE==1
 
+// tcvr: each product rounded to double, then added in this order, on every CPU: the
+// compiler must not fuse a multiply and an add (clang does by default on arm64, MSVC
+// doesn't on x64), or a Quest and a PC round differently online. The build passes
+// -ffp-contract=off too (CMakeLists.txt).
 template<int Stride = 1>
 static inline float innerProduct(const float *f1, const float *f2)
 {
+#ifdef __clang__
+#pragma clang fp contract(off)
+#endif
 	const double f = (double)f1[0] * f2[Stride * 0]
 				   + (double)f1[1] * f2[Stride * 1]
 				   + (double)f1[2] * f2[Stride * 2]

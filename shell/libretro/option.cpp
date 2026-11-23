@@ -243,5 +243,8 @@ Option<int> VrUpscaleCache("", 0);
 OptionString GGPOPeers("", "");
 Option<int> GGPOPlayer("", 0);
 Option<bool> NetplayTestAnyCpu("", false);
+OptionString NetplaySyncLog("", "");
+Option<bool> NetplaySyncPages("", false);
+OptionString NetplaySyncDump("", "");
 
 } // namespace config

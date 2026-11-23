@@ -879,7 +879,7 @@ static void setRotation()
 	environ_cb(RETRO_ENVIRONMENT_SET_ROTATION, &rotation);
 }
 
-static void update_variables(bool first_startup)
+static void update_variables_frontend(bool first_startup)
 {
 	bool wasThreadedRendering = config::ThreadedRendering;
 	bool prevRotateScreen = rotate_screen;
@@ -903,7 +903,7 @@ static void update_variables(bool first_startup)
 			per_content_vmus = 2;
 	}
 	if (!first_startup && per_content_vmus != previous_per_content_vmus
-			&& settings.platform.isConsole())
+			&& settings.platform.isConsole() && !config::GGPOEnable)
 	{
 		// Recreate the VMUs so that the save location is taken into account.
 		// Don't do this at startup because we don't know the system type yet
@@ -1308,6 +1308,20 @@ static void update_variables(bool first_startup)
 		// must *not* be changed once a game is started
 		config::EmulateBBA.override(emulateBba);
 		dreampotato::update();
+	}
+}
+
+// tcvr: online, the settings Emulator::loadGame forces (they change what the emulated machine does)
+// stay forced when the frontend sends its options again: its values would replace them at a moment
+// that differs from copy to copy
+static void update_variables(bool first_startup)
+{
+	update_variables_frontend(first_startup);
+	if (config::GGPOEnable)
+	{
+		config::FastGDRomLoad.override(false);
+		config::DynarecEnabled.override(true);
+		config::Sh4Clock.override(200);
 	}
 }
 
@@ -2002,6 +2016,24 @@ void retro_run()
 	first_run = false;
 }
 
+// tcvr: online, every copy plugs in the same devices, as tcvr_match.cpp does for a lobby match
+// (GGPO's check hashes them): a controller with a VMU for each player, nothing in the other
+// ports. Applied over the frontend's own port choices each time the devices are made.
+static void netplayDevices()
+{
+	if (!config::GGPOEnable)
+		return;
+	const std::string& peers = config::GGPOPeers.get();
+	const int players = std::clamp((int)std::count(peers.begin(), peers.end(), ',') + 1, 2, 4);
+	for (int port = 0; port < 4; port++)
+	{
+		const bool used = port < players;
+		config::MapleMainDevices[port].override(used ? MDT_SegaController : MDT_None);
+		config::MapleExpansionDevices[port][0].override(used ? MDT_SegaVMU : MDT_None);
+		config::MapleExpansionDevices[port][1].override(MDT_None);
+	}
+}
+
 #ifdef __EMSCRIPTEN__
 // tcvr: the browser build: netplay from the page's address (test page, before the lobby):
 // ?peers=<address:port>,<address:port>[,...] (in player order) &player=<0-3> [&delay=<frames>]
@@ -2023,6 +2055,7 @@ static void netplayFromPage()
 	config::GGPOPlayer.override(player);
 	config::GGPODelay.override(delay);
 	NOTICE_LOG(NETWORK, "Netplay from the page: player %d of %s, delay %d", player + 1, peers, delay);
+	netplayDevices();
 }
 #endif
 
@@ -3345,6 +3378,11 @@ void retro_set_controller_port_device(unsigned in_port, unsigned device)
 static void refresh_devices(bool first_startup)
 {
    devices_need_refresh = false;
+   netplayDevices();
+   // (online the devices are the match's, made when the game loads: a change from the frontend
+   // would reconnect them at a moment that differs from copy to copy)
+   if (config::GGPOEnable && !first_startup)
+      return;
 
    if (!first_startup)
    {

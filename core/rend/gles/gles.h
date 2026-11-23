@@ -570,6 +570,8 @@ struct OpenGLRenderer : Renderer
 	bool Render() override;
 	// hotd2-vr: draw the kept frame into the current headset eye (vr::xr::currentEye())
 	void RenderVrEye(int width, int height);
+	// tcvr: the kept frame drawn flat into the output picture and read back (the arena picture tour)
+	bool GrabVrFrameFlat(std::vector<u8>& rgb, int& width, int& height);
 
 	void RenderFramebuffer(const FramebufferInfo& info) override;
 

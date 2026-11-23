@@ -82,12 +82,16 @@ enum class Reload { None, IntoMatch, BackToLobby };
 std::atomic<int> reloadWanted { (int)Reload::None };	// for the render thread
 std::atomic<int> reloading { (int)Reload::None };		// until the game runs again
 std::chrono::steady_clock::time_point reloadSince;
+// The game was loaded (gate()) since the reload was asked for. The old game still runs for a moment after
+// the ask (until the render thread unloads it): running alone does not mean the reload is done.
+std::atomic<bool> loadedSinceReload { false };
 std::string endLine;									// why the last match ended, for the menu
 
 std::string restart(Reload kind)
 {
 	WARN_LOG(NETWORK, "MP RESTART in the running app (%s)", kind == Reload::IntoMatch ? "into the match" : "back to the lobby");
 	reloadSince = std::chrono::steady_clock::now();
+	loadedSinceReload = false;
 	reloading = (int)kind;
 	reloadWanted = (int)kind;
 	return kind == Reload::IntoMatch ? "Starting the match..." : "Back to the lobby...";
@@ -119,7 +123,7 @@ std::atomic<bool> offersDirty { true };		// offer the states on disk to the lobb
 std::string matchStateBase;					// the match's "<game>.state.net" (startMatch)
 std::mutex ownGameMutex;
 std::string ownGamePath;					// the player's own game, kept for the end of the match ("" none)
-std::shared_ptr<std::atomic<bool>> ownGameWritten;	// (written by a thread)
+std::shared_ptr<std::atomic<int>> ownGameWritten;	// (written by a thread: 0 writing, 1 written, -1 failed)
 
 std::string md5Hex(const std::vector<uint8_t>& data)
 {
@@ -228,18 +232,41 @@ void keepOwnGame()
 	if (!dc_serializeAll(*state))
 		return;
 	const std::string path = hostfs::getSavestatePath(-1, true) + ".back";
-	auto done = std::make_shared<std::atomic<bool>>(false);
+	auto done = std::make_shared<std::atomic<int>>(0);
 	ownGamePath = path;
 	ownGameWritten = done;
 	std::thread([state, path, done] {
 		if (dc_writeStateFile(path, *state))
 		{
-			*done = true;
-			NOTICE_LOG(NETWORK, "MP: the player's own game is kept during the match");
+			*done = 1;
+			NOTICE_LOG(NETWORK, "MP: the player's own game is kept");
 		}
 		else
+		{
+			*done = -1;
 			WARN_LOG(NETWORK, "MP: the player's own game could not be kept");
+		}
 	}).detach();
+}
+
+// The kept game loaded (at a game load), and its file removed. False: none kept, or it failed.
+bool loadOwnGame()
+{
+	std::string path;
+	bool written = false;
+	{
+		std::lock_guard<std::mutex> lock(ownGameMutex);
+		if (ownGamePath.empty())
+			return false;
+		path = ownGamePath;
+		written = ownGameWritten && *ownGameWritten == 1;
+		ownGamePath.clear();
+		ownGameWritten.reset();
+	}
+	const bool ok = written && dc_loadStateFile(path);
+	nowide::remove(path.c_str());
+	NOTICE_LOG(NETWORK, "MP: %s", ok ? "the player's own game is back" : "the player's own game could not come back: the game starts again");
+	return ok;
 }
 
 void startMatch(const lobby::View& v)
@@ -547,6 +574,17 @@ static std::string endMatch(const std::string& why)
 	return why;
 }
 
+// The game runs again after a reload: the reload is done.
+static void reloadDoneIfRunning()
+{
+	if (reloading != (int)Reload::None && reloadWanted == (int)Reload::None && loadedSinceReload && emu.running())
+	{
+		NOTICE_LOG(NETWORK, "MP: the game runs again (%.1f s)",
+				std::chrono::duration<float>(std::chrono::steady_clock::now() - reloadSince).count());
+		reloading = (int)Reload::None;
+	}
+}
+
 void poll()
 {
 	if (active)
@@ -567,16 +605,7 @@ void poll()
 		restart(Reload::BackToLobby);
 		return;
 	}
-	if (reloading != (int)Reload::None)
-	{
-		// the game runs again: the reload is done
-		if (reloadWanted == (int)Reload::None && emu.running())
-		{
-			NOTICE_LOG(NETWORK, "MP: the game runs again (%.1f s)",
-					std::chrono::duration<float>(std::chrono::steady_clock::now() - reloadSince).count());
-			reloading = (int)Reload::None;
-		}
-	}
+	reloadDoneIfRunning();
 	std::unique_lock<std::mutex> lock(mutex);
 	if (begun || !theOne)
 		return;
@@ -587,6 +616,21 @@ void poll()
 	const lobby::View v = l->view();
 	if (v.phase != lobby::Phase::Started)
 		return;
+	// A START that comes while this copy is still on its way back from the last match (a late "leave match"
+	// just before the host started the next one) waits until the game runs again. Taken at once, the unload
+	// of the match that ended switched the new match's netplay off again (clearNetplay): this copy started
+	// from the power-on, alone, while the others loaded the match start state, and waited for them forever.
+	if (reloading != (int)Reload::None || reloadWanted != (int)Reload::None || clearPending)
+	{
+		static std::chrono::steady_clock::time_point told;
+		const auto now = std::chrono::steady_clock::now();
+		if (now - told > std::chrono::seconds(2))
+		{
+			NOTICE_LOG(NETWORK, "MP START: waits until the game is back from the last match");
+			told = now;
+		}
+		return;
+	}
 	{
 		std::lock_guard<std::mutex> g(mutex);
 		if (begun)
@@ -601,12 +645,23 @@ bool inMatch()
 	return active && config::GGPOEnable;
 }
 
+bool backFromMatch()
+{
+	reloadDoneIfRunning();
+	return active || reloading != (int)Reload::None || reloadWanted != (int)Reload::None || clearPending;
+}
+
 std::string leaveMatch(const std::string& why)
 {
 	if (!active && reloading == (int)Reload::None)
 		return "Not in a match";
 	endMatch(why.empty() ? "You left the match" : why);
 	return restart(Reload::BackToLobby);
+}
+
+bool reloadBusy()
+{
+	return reloading != (int)Reload::None || reloadWanted != (int)Reload::None;
 }
 
 bool reloadNow()
@@ -650,6 +705,7 @@ bool gameStopped(const std::string& message)
 			: "The match is over: " + (message.empty() ? std::string("the network dropped") : message));
 	// the caller loads the game again (single player); the panel says so meanwhile
 	reloadSince = std::chrono::steady_clock::now();
+	loadedSinceReload = false;
 	reloading = (int)Reload::BackToLobby;
 	reloadWanted = (int)Reload::None;
 	return true;
@@ -735,6 +791,7 @@ static void resetWatch();
 
 void gate()
 {
+	loadedSinceReload = true;
 	const int marker = config::VrMpMarker;
 	// The first game load of this run of the app: a "match over" mark from an earlier run is stale (that run's
 	// lobby is gone with it; the menu opened by itself on Multiplayer with "The match is over" at each start).
@@ -779,25 +836,36 @@ void gate()
 
 bool restoreOwnGame()
 {
-	std::string path;
-	bool written = false;
-	{
-		std::lock_guard<std::mutex> lock(ownGameMutex);
-		if (reloading != (int)Reload::BackToLobby || ownGamePath.empty())
-			return false;
-		path = ownGamePath;
-		written = ownGameWritten && *ownGameWritten;
-		ownGamePath.clear();
-		ownGameWritten.reset();
-	}
-	const bool ok = written && dc_loadStateFile(path);
-	nowide::remove(path.c_str());
-	NOTICE_LOG(NETWORK, "MP: %s", ok ? "the player's own game is back" : "the player's own game could not come back: the game starts again");
-	return ok;
+	if (reloading != (int)Reload::BackToLobby)
+		return false;
+	return loadOwnGame();
+}
+
+bool keepPlayerGame()
+{
+	keepOwnGame();
+	std::lock_guard<std::mutex> lock(ownGameMutex);
+	return !ownGamePath.empty();
+}
+
+int playerGameKept()
+{
+	std::lock_guard<std::mutex> lock(ownGameMutex);
+	if (ownGamePath.empty() || !ownGameWritten)
+		return -1;
+	return *ownGameWritten;
+}
+
+bool restorePlayerGame()
+{
+	return loadOwnGame();
 }
 
 bool takeReturn()
 {
+	// (called with the game running, just before the menu opens on the lobby and pauses it: the reload is
+	// done, even if poll() looked a moment before the game ran; paused, it never would be, and a START waits)
+	reloadDoneIfRunning();
 	if (!config::VrMpReturn)
 		return false;
 	saveBool(config::VrMpReturn, false);
@@ -1389,6 +1457,8 @@ std::string udpCommand(const char *cmd)
 	}
 	if (sscanf(cmd, "READY %u", &n) == 1)
 	{
+		if (n != 0 && backFromMatch())
+			return "MPR error not back from the last match yet";
 		l.setReady(n != 0);
 		return stateLine();
 	}

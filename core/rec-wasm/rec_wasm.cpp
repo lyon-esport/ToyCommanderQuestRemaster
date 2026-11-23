@@ -1259,7 +1259,14 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 		// — see wasm_emit.h shop_fmac). std::fma differed in double-rounding
 		// tie cases; bridge-shadow requires bit-identical paths.
 		float fn = readF32(op.rs1), f0 = readF32(op.rs2), fm = readF32(op.rs3);
-		writeF32(op.rd, (float)((double)fn + (double)f0 * (double)fm));
+		if (config::GGPOEnable)
+		{
+			// online: float model "tcvr-fp2", product rounded then the sum (see wasm_emit.h)
+			volatile float prod = f0 * fm;
+			writeF32(op.rd, fn + prod);
+		}
+		else
+			writeF32(op.rd, (float)((double)fn + (double)f0 * (double)fm));
 		break;
 	}
 	case shop_fsrra: {

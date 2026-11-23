@@ -46,6 +46,10 @@ void setPlayerName(const std::string& name);
 void poll();
 // True while this run of the game is a match.
 bool inMatch();
+// This copy is in a match or on its way back from one (its game not loaded again yet): it cannot say it is
+// ready for the next match. A START taken then met the ending match's netplay session still open on the
+// same port (verification mismatch, "GGPO error", the next match never started).
+bool backFromMatch();
 // The netplay gave up on a player (it left, or its network dropped). With 3 or 4 players the match goes on
 // while another player is still there (the gone player's pad is neutral from then on, the same on every copy):
 // a notice says who left. Otherwise (2 players, or this copy is alone now) the next poll() ends the match:
@@ -62,6 +66,8 @@ std::string leaveMatch(const std::string& why = "");
 // Matches start and end inside the running app: the game is loaded again with the netplay options on
 // (or off). True once when the render thread should do that now (gui_start_game, mainui.cpp).
 bool reloadNow();
+// True while a match's game load (start or end) is asked for or not yet running again.
+bool reloadBusy();
 // The game stopped with an error (gui_stop_game): in a match, or while one starts, this ends the match,
 // and true says the caller must load the game again in single player (not show an error nobody sees in
 // the headset). False: not a match, the caller goes on as usual.
@@ -92,6 +98,13 @@ void gate();
 // At the game load after a match (emulator.cpp, where a savestate would load): the player's own game as it was
 // before the match, kept at its start. False: none kept (the game starts from its power-on).
 bool restoreOwnGame();
+// The same for other uses of the game (the arena picture tour, tcvr_arena_pics.h). keepPlayerGame: the render
+// thread, the game stops and its state is written by a thread; false: nothing kept (no game, netplay on).
+// playerGameKept: 1 written, 0 still writing, -1 none or failed. restorePlayerGame: at a game load, the kept
+// game loaded and its file removed; false: none (the game starts from its power-on).
+bool keepPlayerGame();
+int playerGameKept();
+bool restorePlayerGame();
 // True once after a match has ended: the menu should open on its Multiplayer page.
 bool takeReturn();
 

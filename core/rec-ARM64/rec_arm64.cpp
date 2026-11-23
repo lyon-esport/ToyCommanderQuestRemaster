@@ -44,6 +44,7 @@ using namespace vixl::aarch64;
 #include "hw/mem/addrspace.h"
 #include "oslib/virtmem.h"
 #include "emulator.h"
+#include "cfg/option.h"
 
 struct DynaRBI : RuntimeBlockInfo
 {
@@ -265,10 +266,12 @@ public:
 		regalloc.DoAlloc(block);
 
 		// scheduler
+		// tcvr: the time slice ends when the counter reaches 0 (not below), as in the x64 recompiler and the
+		// interpreter: a netplay frame must end at the same emulated cycle on a Quest and on a PC
 		Ldr(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
 		Cmp(w1, 0);
 		Label cycles_remaining;
-		B(&cycles_remaining, pl);
+		B(&cycles_remaining, gt);
 		Mov(w0, block->vaddr);
 		GenCall(arm64_intc_sched);
 		Mov(w1, w0);
@@ -877,7 +880,15 @@ public:
 				break;
 
 			case shop_fmac:
-				Fmadd(regalloc.MapVRegister(op.rd), regalloc.MapVRegister(op.rs3), regalloc.MapVRegister(op.rs2), regalloc.MapVRegister(op.rs1));
+				if (config::GGPOEnable)
+				{
+					// tcvr: online, a multiply then an add (two roundings), as the x64 recompiler
+					// does: a Quest and a PC must compute the same bits (PC-crossplay-analysis.md)
+					Fmul(s0, regalloc.MapVRegister(op.rs3), regalloc.MapVRegister(op.rs2));
+					Fadd(regalloc.MapVRegister(op.rd), regalloc.MapVRegister(op.rs1), s0);
+				}
+				else
+					Fmadd(regalloc.MapVRegister(op.rd), regalloc.MapVRegister(op.rs3), regalloc.MapVRegister(op.rs2), regalloc.MapVRegister(op.rs1));
 				break;
 
 			case shop_fsrra:
@@ -1470,8 +1481,9 @@ public:
 		//
 		Bind(&no_update);				// next_pc _MUST_ be on w29
 
-		Ldr(w0, MemOperand(x28, offsetof(Sh4Context, CpuRunning)));
-		Cbz(w0, &end_mainloop);
+		// tcvr: no CpuRunning check here: a stop is seen only at the end of the time slice, after the
+		// scheduler ran (intc_sched), as the x64 recompiler and the interpreter do. Stop() zeroes the
+		// cycle counter, so the next block ends the slice at once.
 		if (!mmu_enabled())
 		{
 			Sub(x2, x28, offsetof(Sh4RCB, cntx));
@@ -1516,11 +1528,14 @@ public:
 		// Add timeslice to cycle counter
 		Add(w1, w1, SH4_TIMESLICE);
 		Str(w1, sh4_context_mem_operand(&sh4ctx.cycle_counter));
+		Mov(x29, lr);				// Save link register in case we return
+		// tcvr: the scheduler first, then the stop check (x64 and interpreter order); the pc of the
+		// interrupt, if one was taken, is in the context for the next run
+		GenCallRuntime(UpdateSystem_INTC);
+		Mov(w2, w0);
 		Ldr(w0, sh4_context_mem_operand(&sh4ctx.CpuRunning));
 		Cbz(w0, &end_mainloop);
-		Mov(x29, lr);				// Save link register in case we return
-		GenCallRuntime(UpdateSystem_INTC);
-		Cbnz(w0, &do_interrupts);
+		Cbnz(w2, &do_interrupts);
 		Mov(lr, x29);
 		Ldr(w0, sh4_context_mem_operand(&sh4ctx.cycle_counter));
 		Ret();

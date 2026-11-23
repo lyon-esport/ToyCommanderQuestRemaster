@@ -375,7 +375,9 @@ try {
 		$opt = Peek $peer 0x8C0A5AC8 12		# active environment, mode, room
 		if ($null -eq $page -or $null -eq $slots -or $null -eq $opt) { Check $false "$($peer.Name): PEEK answered"; continue }
 		$bits = [BitConverter]::ToUInt32($page, 0)
-		Check (($bits -band 0x4000) -ne 0 -and ($bits -band 0x10000) -eq 0) ("{0}: on the team and vehicle page (menu bits {1})" -f $peer.Name, ($reads -join ' '))
+		# (since PR 53 the setup takes the match on into the arena: the log says so)
+		$arena = [regex]::Match($log, 'MP SETUP: the arena is on screen[^\r\n]*')
+		Check $arena.Success ("{0}: in the arena: {1}" -f $peer.Name, $(if ($arena.Success) { $arena.Value } else { "no 'the arena is on screen' line (menu bits $($reads -join ' '))" }))
 		$states = @(for ($i = 0; $i -lt 4; $i++) { [BitConverter]::ToUInt32($slots, $i * 0x28 + 8) })
 		$joined = @($states | Select-Object -First $Players | Where-Object { $_ -ge 2 }).Count
 		$want = if ($killed) { $Players - 1 } else { $Players }	# (a copy killed early never joins the page)
