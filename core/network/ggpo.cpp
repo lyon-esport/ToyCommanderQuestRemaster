@@ -380,7 +380,7 @@ static bool advance_frame(int)
 // page deltas only restore what the page watcher saw being written, so a write it missed
 // (another mapping, a DMA) shows here, on one copy, the first time it happens.
 static std::unordered_map<int, std::vector<u8>> ramCopies;
-#if FEAT_AREC == DYNAREC_JIT
+#if FEAT_AREC == DYNAREC_JIT || defined(ARM7_REC_TIMING_MODEL)
 static std::unordered_map<int, u32> armFlushes;	// per saved frame: the ARM7 recompiler's flushCount
 #endif
 
@@ -543,7 +543,7 @@ static bool load_game_state(unsigned char *buffer, int len)
 					again[at], again[at + 1], again[at + 2], again[at + 3], again[at + 4], again[at + 5], again[at + 6], again[at + 7]);
 		}
 	}
-#if FEAT_AREC == DYNAREC_JIT
+#if FEAT_AREC == DYNAREC_JIT || defined(ARM7_REC_TIMING_MODEL)
 	// hotd2-vr: the ARM7's compiled code comes from sound RAM and is only dropped when the
 	// ARM is reset (a new sound driver). A rollback across that reset ran the new driver's
 	// code at the old one's addresses.
@@ -709,7 +709,7 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	}, frame, *buffer, *len, &mem_b[0], RAM_SIZE);
 #endif
 	keepRamCopy(frame);
-#if FEAT_AREC == DYNAREC_JIT
+#if FEAT_AREC == DYNAREC_JIT || defined(ARM7_REC_TIMING_MODEL)
 	armFlushes[frame] = aica::arm::recompiler::flushCount;
 	for (auto it = armFlushes.begin(); it != armFlushes.end(); )
 		it = it->first < frame - 16 || it->first > frame ? armFlushes.erase(it) : std::next(it);

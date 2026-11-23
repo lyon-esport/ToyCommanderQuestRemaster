@@ -1,6 +1,8 @@
 #include "arm7.h"
 #include "arm_mem.h"
 #include "arm7_rec.h"
+#include "cfg/option.h"
+#include <unordered_map>
 
 namespace aica::arm
 {
@@ -74,8 +76,131 @@ static void runInterpreter(u32 CycleCount)
 	}
 }
 
+#ifdef ARM7_REC_TIMING_MODEL
+//
+// tcvr: online, the ARM7 runs with the ARM7 recompiler's timing, as on the PC and the Quest, so
+// that every player's sound CPU (and through it the game) stays identical. Each opcode runs in
+// the interpreter, but the clock is the recompiler's: blocks of up to 32 opcodes decoded once
+// (and kept until the next flush, like compiled code) by the recompiler's own decoder, their
+// cycles taken at block entry, interpreter cycles only for the opcodes it hands to the
+// interpreter, and the FIQ and the end of the time slice checked between blocks only
+// (arm7_rec.cpp compile() and run(), arm7_rec_x64.cpp generateMainLoop()).
+//
+namespace recompiler {
+
+u32 flushCount;
+
+struct ModelOp
+{
+	u32 addr;
+	u32 opcode;
+	bool fallback;
+	bool setsPc;
+	bool conditional;
+};
+struct ModelBlock
+{
+	u32 cycles = 0;
+	u32 endPc = 0;		// armNextPC when the block ends without a branch (32 opcodes)
+	std::vector<ModelOp> ops;
+};
+static std::unordered_map<u32, ModelBlock> modelBlocks;
+static bool modelFlushPending;
+
+void flush()
+{
+	flushCount++;
+	// dropped at the next block dispatch: a flush can come from inside a running block
+	modelFlushPending = true;
+}
+
+static const ModelBlock& modelCompile(u32 pc)
+{
+	ModelBlock& block = modelBlocks[pc & (ARAM_SIZE_MAX - 4)];
+	block = ModelBlock();
+	for (u32 ops = 0; ops < 32; ops++)
+	{
+		u32 opcode = *(u32*)&aica_ram[pc & ARAM_MASK];
+		ModelOp op{ pc, opcode, false, false, false };
+		bool nop;
+		block.cycles += modelDecode(opcode, pc, op.fallback, op.setsPc, op.conditional, nop);
+		pc += 4;
+		if (opcode == 0 || opcode == 0x41474553 || nop)	// andeq r0, r0, r0 and 'SEGA' are skipped
+			continue;
+		block.ops.push_back(op);
+		if (op.setsPc)
+			return block;
+	}
+	block.endPc = pc;
+	return block;
+}
+
+// one opcode in the interpreter, its cycles
+static u32 modelInterpret(u32 opcode)
+{
+	u32 clockTicks = 0;
+
+#define NO_OPCODE_READ
+#ifndef _MSC_VER
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#endif
+#include "arm-new.h"
+#ifndef _MSC_VER
+#pragma GCC diagnostic pop
+#endif
+#undef NO_OPCODE_READ
+
+	return clockTicks;
+}
+
+static void modelRunSample()
+{
+	reg[CYCL_CNT].I += ARM_CYCLES_PER_SAMPLE;
+	while ((int)reg[CYCL_CNT].I > 0)
+	{
+		if (modelFlushPending)
+		{
+			modelBlocks.clear();
+			modelFlushPending = false;
+		}
+		if (reg[INTR_PEND].I)
+		{
+			CPUFiq();
+			continue;
+		}
+		auto it = modelBlocks.find(armNextPC & (ARAM_SIZE_MAX - 4));
+		const ModelBlock& block = it != modelBlocks.end() ? it->second : modelCompile(armNextPC);
+		reg[CYCL_CNT].I -= block.cycles;
+		bool branched = false;
+		for (const ModelOp& op : block.ops)
+		{
+			if (op.setsPc && op.conditional)
+				armNextPC = op.addr + 4;	// if not taken
+			reg[15].I = op.addr + 8;
+			u32 ticks = modelInterpret(op.opcode);
+			if (op.fallback)
+				reg[CYCL_CNT].I -= ticks;
+			if (op.setsPc)
+				branched = true;
+		}
+		if (!branched)
+			armNextPC = block.endPc;
+	}
+}
+
+} // namespace recompiler
+#endif
+
 void avoidRaceCondition()
 {
+#ifdef ARM7_REC_TIMING_MODEL
+	if (config::GGPOEnable)
+	{
+		reg[CYCL_CNT].I = std::max((int)reg[CYCL_CNT].I, 50);
+		return;
+	}
+#endif
 	arm7ClockTicks = std::min(arm7ClockTicks, -50);
 }
 
@@ -83,6 +208,15 @@ void run(u32 samples)
 {
 	for (u32 i = 0; i < samples; i++)
 	{
+#ifdef ARM7_REC_TIMING_MODEL
+		if (config::GGPOEnable)
+		{
+			if (Arm7Enabled)
+				recompiler::modelRunSample();
+			timeStep();
+			continue;
+		}
+#endif
 		runInterpreter(ARM_CYCLES_PER_SAMPLE);
 		timeStep();
 	}
@@ -285,7 +419,7 @@ static void CPUUndefinedException()
 void reset()
 {
 	INFO_LOG(AICA_ARM, "AICA ARM Reset");
-#if FEAT_AREC != DYNAREC_NONE
+#if FEAT_AREC != DYNAREC_NONE || defined(ARM7_REC_TIMING_MODEL)
 	recompiler::flush();
 #endif
 	aica_interr = false;

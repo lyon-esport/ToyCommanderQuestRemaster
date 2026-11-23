@@ -434,6 +434,10 @@ void compile();
 void *getMemOp(bool load, bool byte);
 template<u32 Pd> void DYNACALL MSR_do(u32 v, u32 mask);
 void DYNACALL interpret(u32 opcode);
+#ifdef ARM7_REC_TIMING_MODEL
+// tcvr: compile()'s view of one opcode (arm7_rec.cpp), for the browser's timing model (arm7.cpp)
+u32 modelDecode(u32 opcode, u32 pc, bool& fallback, bool& setsPc, bool& conditional, bool& nop);
+#endif
 
 extern u8* icPtr;
 extern u8* ICache;

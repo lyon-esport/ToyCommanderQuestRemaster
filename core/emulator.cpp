@@ -969,7 +969,7 @@ void Emulator::loadstate(Deserializer& deser)
 		custom_texture.terminate();
 		custom_texture.init();
 	}
-#if FEAT_AREC == DYNAREC_JIT
+#if FEAT_AREC == DYNAREC_JIT || defined(ARM7_REC_TIMING_MODEL)
 	aica::arm::recompiler::flush();
 #endif
 	mmu_flush_table();

@@ -31,6 +31,8 @@
 	#define FEAT_SHREC DYNAREC_JIT
 	#define FEAT_AREC DYNAREC_NONE
 	#define FEAT_DSPREC DYNAREC_NONE
+	// tcvr: online, the ARM7 interpreter follows the ARM7 recompiler's timing (hw/arm7/arm7.cpp)
+	#define ARM7_REC_TIMING_MODEL 1
 #elif defined(__x86_64__) || defined(_M_X64)
 	#define HOST_CPU CPU_X64
 #elif defined(__i386__) || defined(_M_IX86)

@@ -19,7 +19,9 @@
 
 #include "build.h"
 
-#if	FEAT_AREC != DYNAREC_NONE
+// tcvr: the browser build (no ARM7 recompiler) compiles the decoder below too: online it runs the
+// ARM7 with this recompiler's timing (arm7.cpp, recModel), so its sound CPU matches the PC and Quest
+#if	FEAT_AREC != DYNAREC_NONE || defined(ARM7_REC_TIMING_MODEL)
 
 #include "arm7_rec.h"
 #include "arm7.h"
@@ -39,12 +41,15 @@ namespace aica::arm
 
 #define arm_printf(...) DEBUG_LOG(AICA_ARM, __VA_ARGS__)
 
+#if FEAT_AREC != DYNAREC_NONE
 void (*arm_compilecode)();
 arm_mainloop_t arm_mainloop;
+#endif
 extern u8 cpuBitsSet[256];
 
 namespace recompiler {
 
+#if FEAT_AREC != DYNAREC_NONE
 u8* icPtr;
 u8* ICache;
 void (*EntryPoints[ARAM_SIZE_MAX / 4])();
@@ -52,6 +57,8 @@ void (*EntryPoints[ARAM_SIZE_MAX / 4])();
 DECLARE_CODE_CACHE(ARM7_TCB, ICacheSize)
 
 ptrdiff_t rx_offset;
+
+#endif
 
 #pragma pack(push,1)
 union ArmOpBits
@@ -481,6 +488,22 @@ static ArmOp decodeArmOp(u32 opcode, u32 arm_pc)
 	return op;
 }
 
+#if FEAT_AREC == DYNAREC_NONE
+// tcvr: what compile() needs from one opcode, for the browser's timing model (arm7.cpp)
+u32 modelDecode(u32 opcode, u32 pc, bool& fallback, bool& setsPc, bool& conditional, bool& nop)
+{
+	ArmOp op = decodeArmOp(opcode, pc);
+	fallback = op.op_type == ArmOp::FALLBACK;
+	setsPc = (op.flags & ArmOp::OP_SETS_PC) != 0;
+	conditional = op.condition != ArmOp::AL;
+	// MSR/MRS forms the recompiler does not support become a no-op (decodeArmOp)
+	ArmOpBits bits(opcode);
+	nop = !fallback && op.op_type == ArmOp::MOV && bits.op_group == 0
+			&& bits.op_type >= (u32)ArmOp::TST && bits.op_type <= (u32)ArmOp::CMN && bits.set_flags == 0
+			&& (bits.full & 0x0FBF0FFF) != 0x010F0000 && (bits.full & 0x0DB0F000) != 0x0120F000;
+	return op.cycles;
+}
+#else
 static void block_ssa_pass()
 {
 	std::array<u32, RN_ARM_REG_COUNT> versions{};
@@ -731,8 +754,10 @@ void *getMemOp(bool Load, bool Byte)
 	}
 }
 
+#endif // FEAT_AREC == DYNAREC_NONE
 } // namespace recompiler
 
+#if FEAT_AREC != DYNAREC_NONE
 // Run a timeslice of arm7
 
 void run(u32 samples)
@@ -753,5 +778,6 @@ void avoidRaceCondition()
 	arm_Reg[CYCL_CNT].I = std::max((int)arm_Reg[CYCL_CNT].I, 50);
 }
 
-} // namespace aica::arm
 #endif // FEAT_AREC != DYNAREC_NONE
+} // namespace aica::arm
+#endif // FEAT_AREC != DYNAREC_NONE || ARM7_REC_TIMING_MODEL
