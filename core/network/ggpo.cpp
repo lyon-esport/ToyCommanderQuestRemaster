@@ -106,8 +106,8 @@ static void getLocalInput(MapleInputState inputState[4])
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 void wasm_jit_ram_restored(u32 offset);	// core/rec-wasm/rec_wasm.cpp
-extern bool dc_serializeLogSections;	// core/serialize.cpp
 #endif
+extern bool dc_serializeLogSections;	// core/serialize.cpp
 
 namespace ggpo
 {
@@ -694,6 +694,20 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 				}
 				p = *end == ',' ? end + 1 : end;
 			}
+#ifdef __EMSCRIPTEN__
+	// the page's ?syncdump=frame[,frame...]: that frame's saved state and main RAM to the server
+	// (dumps/p<player>.<frame>.state/.ram, again after a rollback, so the last one stays), as the
+	// PC build's hotd2vr.SyncDump, to compare a browser with a PC byte by byte
+	EM_ASM({
+		var d = new URLSearchParams(location.search).get('syncdump');
+		if (!d || d.split(',').map(Number).indexOf($0) < 0) return;
+		var p = new URLSearchParams(location.search).get('player') | 0;
+		var post = (k, a, n) => fetch('/dump?p=' + p + '&f=' + $0 + '&k=' + k,
+			{ method: 'POST', body: HEAPU8.slice(a, a + n) }).catch(() => {});
+		post('state', $1, $2);
+		post('ram', $3, $4);
+	}, frame, *buffer, *len, &mem_b[0], RAM_SIZE);
+#endif
 	keepRamCopy(frame);
 #if FEAT_AREC == DYNAREC_JIT
 	armFlushes[frame] = aica::arm::recompiler::flushCount;

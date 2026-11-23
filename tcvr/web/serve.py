@@ -58,6 +58,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if u.path == "/dump":
+            # a netplay test aid (page ?syncdump=frame,...): a frame's saved state or main RAM,
+            # to dumps/p<player>.<frame>.<state|ram> (as the PC build's hotd2vr.SyncDump)
+            n = int(self.headers.get("Content-Length", "0"))
+            data = self.rfile.read(min(n, 40 * 1024 * 1024))
+            q = urllib.parse.parse_qs(u.query)
+            p, f, k = int(q.get("p", ["0"])[0]), int(q.get("f", ["0"])[0]), q.get("k", ["ram"])[0]
+            if k not in ("ram", "state"):
+                self.send_error(400)
+                return
+            os.makedirs(os.path.join(HERE, "dumps"), exist_ok=True)
+            with open(os.path.join(HERE, "dumps", "p%d.%d.%s" % (p, f, k)), "wb") as out:
+                out.write(data)
+            self.send_response(204)
+            self.end_headers()
+            return
         if u.path != "/report":
             self.send_error(404)
             return

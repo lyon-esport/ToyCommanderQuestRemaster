@@ -302,6 +302,14 @@ int wasm_prof_exec_count();
 // Block info storage for SHIL fallback
 // ============================================================
 static std::unordered_map<u32, RuntimeBlockInfo*> blockByVaddr;
+static bool fly_np_intr_after(u32 vaddr)
+{
+	auto it = blockByVaddr.find(vaddr);
+	if (it == blockByVaddr.end() || it->second == nullptr)
+		return true;	// (unknown: take it, as before)
+	const u32 bt = (u32)it->second->BlockType;
+	return bt == BET_StaticIntr || bt == BET_DynamicIntr;
+}
 static std::unordered_map<u32, u32> blockExecCount;   // PC → execution count (per mainloop)
 
 // ============================================================
@@ -668,6 +676,11 @@ static inline void primeDispatchEntry(u32 vaddr, u32 sh4_code_size, u32 table_id
 // promises), so in a netplay session they are off: every block compiles before it runs.
 // Set at each mainloop entry from config::GGPOEnable.
 static bool g_fly_netplay = false;
+// tcvr: online, interrupts are taken where the x64 recompiler takes them (a netplay frame must
+// be the same on a PC, a Quest and a browser): after a block that ends in an interrupt check
+// (an SR write: BET_StaticIntr/BET_DynamicIntr) and at the end of the time slice, never after
+// any block. True when an interrupt is to be taken after the block at vaddr.
+static bool fly_np_intr_after(u32 vaddr);
 static bool g_defer_runtime = FLY_DEFER_ON;
 #define FLY_FRAME_BUDGET_MS 24.0
 static double g_frame_start_ms = 0;   // stamped at mainloop entry
@@ -4655,7 +4668,7 @@ static int c_dispatch_loop(u32 ctx_ptr, u32 ram_base) {
 		}
 #endif
 
-		if (ctx.interrupt_pend) {
+		if (ctx.interrupt_pend && (!g_fly_netplay || fly_np_intr_after(pc))) {
 #if FLY_INLINE_DISPATCH
 			// Variant A: deliver inline (exactly like clean_dispatch_loop)
 			// instead of returning result 3 to the mainloop.
@@ -5604,7 +5617,8 @@ static void emitBlockFuncBody(WasmModuleBuilder& b, RuntimeBlockInfo* block) {
 	// through most of the timeslice but preserves scheduler event timing
 	// to within ~32 cycles precision.
 	// Emits: if (cycle_counter > 32) cycle_counter = 32;
-	if (is_idle_loop) {
+	// (tcvr: not online, where the cycles a loop runs must be the x64 recompiler's)
+	if (is_idle_loop && !g_fly_netplay) {
 		auto emitSoftFastForward = [&]() {
 			b.op_local_get(LOCAL_CTX);
 			b.op_i32_load(ctx_off::CYCLE_COUNTER);
@@ -8318,7 +8332,8 @@ public:
 								// delivered one block late (systematic timing skew
 								// during compile storms, prime suspect for the v5
 								// soak-time graphics divergence).
-								if (fly_bridged && sh4ctx->interrupt_pend)
+								if (g_fly_netplay ? (sh4ctx->interrupt_pend && fly_np_intr_after(miss_pc))
+										: (fly_bridged && sh4ctx->interrupt_pend))
 									UpdateINTC();
 								blockExecs++;
 								g_wasm_block_count++;
@@ -8383,7 +8398,8 @@ public:
 									}
 									// ★ v6: per-block interrupt check for bridged blocks
 									// (see found-branch comment).
-									if (fly_cold_bridged && sh4ctx->interrupt_pend)
+									if (g_fly_netplay ? (sh4ctx->interrupt_pend && fly_np_intr_after(miss_pc))
+											: (fly_cold_bridged && sh4ctx->interrupt_pend))
 										UpdateINTC();
 									blockExecs++;
 									g_wasm_block_count++;
