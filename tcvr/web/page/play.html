@@ -8,7 +8,7 @@
   :root { color-scheme: dark; --bg: #111; --panel: #1c1c1c; --line: #333; --text: #ddd; --dim: #999; --accent: #f0b429; --ok: #5ac46e; --bad: #e36060; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; }
   #wrap { display: flex; gap: 16px; justify-content: center; padding: 16px; flex-wrap: wrap; }
-  #game { width: min(960px, calc(100vw - 364px)); min-width: 480px; max-width: 100%; aspect-ratio: 4 / 3; }
+  #game { width: min(960px, calc(100vw - 400px)); min-width: 480px; max-width: 100%; aspect-ratio: 4 / 3; }
   #mp { width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; align-self: flex-start; }
   #mp h2 { margin: 0 0 10px; font-size: 16px; }
   #mp .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
@@ -22,6 +22,12 @@
   #mp .dim { color: var(--dim); font-size: 12px; }
   #mp .ready { color: var(--ok); }
   #mp .msg { color: var(--bad); margin: 6px 0; }
+  #start { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #000; border: 1px solid var(--line); border-radius: 8px; text-align: center; padding: 16px; box-sizing: border-box; }
+  #start h1 { margin: 0; font-size: 26px; }
+  #start button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 6px; padding: 10px 18px; font: inherit; font-size: 16px; cursor: pointer; }
+  #start button.main { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  #start button:disabled { opacity: .5; cursor: default; }
+  #start .dim { color: var(--dim); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -36,6 +42,8 @@
 // host's settings (core/network/tcvr_match.cpp), exactly as on the other players' copies.
 const params = new URLSearchParams(location.search);
 const MATCH = params.get('peers');
+const GAME_URL = params.get('elf') ? '/disc/test.elf' : '/disc/ToyCommander.chd';	// ?elf=1: cloud checks without the game
+const CORE_URL = 'data/cores/tcvr-wasm.data';
 window._tcvrSyncAll = params.get('syncall') === '1';	// tests: the core keeps a RAM hash per frame (as index.html)
 let cid = '';
 try { cid = sessionStorage.getItem('tcvrCid') || ''; } catch (e) {}
@@ -51,7 +59,8 @@ function bootEmulator() {
   window.EJS_player = '#game';
   window.EJS_core = 'tcvr';
   window.EJS_gameName = 'Toy Commander (Europe)';
-  window.EJS_gameUrl = params.get('elf') ? '/disc/test.elf' : '/disc/ToyCommander.chd';	// ?elf=1: cloud checks without the game
+  window.EJS_gameUrl = GAME_URL;
+  window.EJS_cacheConfig = { enabled: true, cacheMaxSizeMB: 4096, cacheMaxAgeMins: 60 * 24 * 365 };	// the downloaded game stays a year (start screen: Clean storage)
   window.EJS_pathtodata = 'data/';
   window.EJS_startOnLoaded = true;
   window.EJS_threads = false;
@@ -102,7 +111,7 @@ async function goToMatch(v) {
 
 async function lobbyLoop() {
   if (!window._tcvrIdentity) {
-    render('<span class="dim">Starting the game...</span>');
+    render('<span class="dim">The multiplayer games show here once the game has started.</span>');
     return;
   }
   let v;
@@ -144,6 +153,73 @@ async function lobbyLoop() {
   }
 }
 
+// Start screen: the game files (disc image and emulator) are downloaded once and kept by the browser
+// (EmulatorJS cache, IndexedDB 'EmulatorJS-Cache'). The player chooses to download them, or to play when
+// they are already there, or to clean that storage.
+const CACHE_DB = 'EmulatorJS-Cache';
+const mb = (n) => (n / 1048576).toFixed(0) + ' MB';
+async function headSize(url) {
+  try { const r = await fetch(url, { method: 'HEAD' }); return +(r.headers.get('Content-Length') || 0); } catch (e) { return 0; }
+}
+async function cachedFiles() {
+  // never create the database here: EmulatorJS creates it with its stores on first use
+  try {
+    if (indexedDB.databases) {
+      const dbs = await indexedDB.databases();
+      if (!dbs.some((d) => d.name === CACHE_DB)) return { game: 0, core: 0, total: 0 };
+    }
+    const db = await new Promise((ok, no) => {
+      const rq = indexedDB.open(CACHE_DB);
+      rq.onupgradeneeded = () => { rq.transaction.abort(); };
+      rq.onsuccess = () => ok(rq.result);
+      rq.onerror = () => no(rq.error);
+    });
+    try {
+      if (!db.objectStoreNames.contains('cache')) return { game: 0, core: 0, total: 0 };
+      const items = await new Promise((ok, no) => {
+        const rq = db.transaction('cache', 'readonly').objectStore('cache').getAll();
+        rq.onsuccess = () => ok(rq.result || []);
+        rq.onerror = () => no(rq.error);
+      });
+      const find = (end) => items.filter((i) => String(i.url || '').endsWith(end)).reduce((n, i) => n + (i.fileSize || 0), 0);
+      return { game: find(GAME_URL.split('/').pop()), core: find(CORE_URL.split('/').pop()), total: items.reduce((n, i) => n + (i.fileSize || 0), 0) };
+    } finally { db.close(); }
+  } catch (e) { return { game: 0, core: 0, total: 0 }; }
+}
+function cleanStorage() {
+  return new Promise((ok) => {
+    const rq = indexedDB.deleteDatabase(CACHE_DB);
+    rq.onsuccess = rq.onerror = () => ok();
+    rq.onblocked = () => ok();
+  });
+}
+async function startScreen() {
+  const game = document.getElementById('game');
+  game.innerHTML = '<div id="start"><h1>Toy Commander</h1><div class="dim">Checking the game files...</div></div>';
+  const box = document.getElementById('start');
+  const [gameSize, coreSize, have] = await Promise.all([headSize(GAME_URL), headSize(CORE_URL), cachedFiles()]);
+  const ready = have.game > 0 && (!gameSize || have.game >= gameSize);
+  const need = (ready ? 0 : gameSize) + (have.core > 0 ? 0 : coreSize);
+  let html = '<h1>Toy Commander</h1>';
+  if (ready) {
+    html += `<div>The game files are already on this device (${mb(have.total)}).</div>` +
+      `<button class="main" id="go">Play</button>`;
+  } else {
+    html += `<div>This device needs the game files first: ${need ? mb(need) : 'size unknown'}.<br><span class="dim">They are downloaded once from this local server and kept by the browser.</span></div>` +
+      `<button class="main" id="go">Download game files${need ? ' (' + mb(need) + ')' : ''}</button>`;
+  }
+  html += have.total ? `<button id="clean">Clean storage (${mb(have.total)})</button><div class="dim">Removes the downloaded game files from this browser.</div>` : '';
+  box.innerHTML = html;
+  document.getElementById('go').onclick = () => { game.innerHTML = ''; bootEmulator(); };
+  const clean = document.getElementById('clean');
+  if (clean) clean.onclick = async () => {
+    clean.disabled = true;
+    clean.textContent = 'Cleaning...';
+    await cleanStorage();
+    startScreen();
+  };
+}
+
 if (MATCH) {
   // a match: the host's start state first (raw bytes for the core), then the game
   render('<b>Match</b><div class="dim">Starting with the other players...</div><div class="row"><button id="back">Back to the lobby</button></div>');
@@ -154,7 +230,7 @@ if (MATCH) {
     .catch(() => {})
     .finally(bootEmulator);
 } else {
-  bootEmulator();
+  startScreen();	// a match page starts at once: the player already chose on the lobby page
   setInterval(() => { if (document.activeElement && document.activeElement.tagName === 'INPUT') return; lobbyLoop(); }, 1000);
 }
 </script>
