@@ -473,10 +473,14 @@ static bool load_game_state(unsigned char *buffer, int len)
 			memcpy(memwatch::ramWatcher.getMemPage(pair.first), &pair.second.data[0], PAGE_SIZE);
 			// (hotd2-vr: the code compiled from what was there drops, as for a write the
 			// game makes; otherwise newer code could run over the restored older bytes)
-			bm_RamWriteAccess(pair.first);
 #ifdef __EMSCRIPTEN__
+			// (the browser's JIT keeps its own block table: bm_RamWriteAccess would free blocks
+			// that table still points to, and they crash a few seconds later. The JIT re-checks
+			// the code on pages whose generation moved instead.)
 			for (u32 at = 0; at < PAGE_SIZE; at += 4096)
 				::wasm_jit_ram_restored(pair.first + at);
+#else
+			bm_RamWriteAccess(pair.first);
 #endif
 		}
 		for (const auto& pair : pages.vram)
