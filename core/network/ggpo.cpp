@@ -570,6 +570,9 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	netStats.saves++;
 	verify(!emu.getSh4Executor()->IsCpuRunning());
 	lastSavedFrame = frame;
+#ifdef __EMSCRIPTEN__
+	EM_ASM({ window._tcvrNetFrame = $0; }, frame);	// (the test page times its button presses on it)
+#endif
 	// TODO this is way too much memory
 	size_t allocSize = settings.platform.isNaomi() ? 20_MB : 10_MB;
 	*buffer = (unsigned char *)malloc(allocSize);

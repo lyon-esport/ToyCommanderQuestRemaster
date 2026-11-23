@@ -122,7 +122,17 @@ window.EJS_onGameStart = () => {
   // speed = vblanks emulated per second when the core reports them (59.94 = full speed; a game
   // drawing 30 pictures/s shows 30 in "fps" at full speed), else pictures per second
   let lastVbl;
-  const gameFrame = () => Math.round(guestF + lastFps * (performance.now() - lastUpd) / 1000);
+  // netplay (?peers=...): the match's frame from the core (frame 0 = the copies start together), and each
+  // page plays only its own player: a route entry for player N is pressed by the page with &player=N,
+  // on its own pad 0 (GGPO sends it to the others); entries for players not in the match are skipped
+  const NET = params.get('peers'), ME = +(params.get('player') || 0);
+  const NET_PLAYERS = NET ? NET.split(',').length : 4;
+  const gameFrame = () => NET ? (window._tcvrNetFrame === undefined ? -1 : window._tcvrNetFrame)
+    : Math.round(guestF + lastFps * (performance.now() - lastUpd) / 1000);
+  const press = (p, i, f, hold) => {
+    if (NET) { if (p !== ME || p >= NET_PLAYERS) return; p = 0; }
+    gm.simulateInput(p, i, 1); held.push([f + hold, p, i]);
+  };
   let raf = 0;
   const samples = { menu: [], battle: [] };
   const tickRaf = () => { raf++; requestAnimationFrame(tickRaf); };
@@ -136,8 +146,7 @@ window.EJS_onGameStart = () => {
     if (SCRIPT !== 'battle' || !hudSeen) return;
     while (next < ROUTE.length && f >= ROUTE[next][0]) {
       const [, p, i] = ROUTE[next++];
-      gm.simulateInput(p, i, 1);
-      held.push([f + 9, p, i]);
+      press(p, i, f, 9);
     }
     // in the battle: every player drives and steers left/right in turn, every 2 s of game time
     if (f > BATTLE_FROM) {
@@ -146,7 +155,7 @@ window.EJS_onGameStart = () => {
         window._tcSlot = slot;
         for (let p = 0; p < 4; p++) {
           const dir = ((slot + p) % 2) ? I.LEFT : I.RIGHT;
-          gm.simulateInput(p, dir, 1); held.push([f + 40, p, dir]);
+          press(p, dir, f, 40);
         }
       }
     }
