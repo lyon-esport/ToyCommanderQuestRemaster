@@ -540,6 +540,14 @@ static inline void fly_ram_written(u32 addr, u32 len) {
 			(*g_rwatch_cell[i])++;
 }
 
+// tcvr: netplay rollbacks copy saved RAM pages back with memcpy (core/network/ggpo.cpp), which
+// no write hook sees: bump those pages' generations so the code compiled from them is checked
+// again before it runs (otherwise the newer code could run over the restored older bytes).
+void wasm_jit_ram_restored(u32 offset)
+{
+	g_fly_page_gen[(offset & RAM_MASK) >> 12]++;
+}
+
 static u32 jit_dispatch_table[JIT_TABLE_SIZE];  // PC hash → table index (0 = miss)
 static u32 jit_dispatch_pc[JIT_TABLE_SIZE];    // PC hash → actual PC (collision guard)
 static u32 jit_dispatch_hash[JIT_TABLE_SIZE];  // PC hash → SMC fingerprint (full block hash for RAM, first op for others)

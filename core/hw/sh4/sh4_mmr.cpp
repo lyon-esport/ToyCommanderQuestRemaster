@@ -15,6 +15,7 @@
 
 #include <array>
 #include <map>
+extern bool dc_serializeLogSections;	// core/serialize.cpp
 
 static std::array<u8, 0x2000> OnChipRAM;	// 8 KB
 
@@ -663,30 +664,48 @@ namespace sh4
 
 void serialize(Serializer& ser)
 {
+	auto sect = [&](const char *name) { if (::dc_serializeLogSections) NOTICE_LOG(SAVESTATE, "State part sh4.%s at %u", name, (u32)ser.size()); };
 	ser << OnChipRAM;
 
+	sect("CCN");
 	ser << CCN;
+	sect("UBC");
 	ser << UBC;
+	sect("BSC");
 	ser << BSC;
+	sect("DMAC");
 	ser << DMAC;
+	sect("CPG");
 	ser << CPG;
+	sect("RTC");
 	ser << RTC;
+	sect("INTC");
 	ser << INTC;
+	sect("TMU");
 	ser << TMU;
+	sect("SCI");
 	ser << SCI;
+	sect("SCIF");
 	ser << SCIF;
+	sect("SCIFport");
 	SCIFSerialPort::Instance().serialize(ser);
+	sect("icache");
 	icache.Serialize(ser);
+	sect("ocache");
 	ocache.Serialize(ser);
 
 	if (!ser.rollback())
 		mem_b.serialize(ser);
 
+	sect("interrupts");
 	interrupts_serialize(ser);
 
+	sect("cntx");
 	ser << (*p_sh4rcb).cntx;
 
+	sect("sched");
 	sh4_sched_serialize(ser);
+	sect("end");
 }
 
 void deserialize(Deserializer& deser)
@@ -726,7 +745,10 @@ void deserialize(Deserializer& deser)
 
 	sh4_sched_deserialize(deser);
 	// let the serial port reschedule its callback after the scheduler has been deserialized
-	SCIFSerialPort::Instance().postDeserialize();
+	// (tcvr: not for a netplay rollback: its timer was restored exactly just above, and
+	// rescheduling it from the restored time changed when it fires on this copy only)
+	if (!deser.rollback())
+		SCIFSerialPort::Instance().postDeserialize();
 }
 
 void serialize2(Serializer& ser)

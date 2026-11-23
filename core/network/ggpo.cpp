@@ -105,6 +105,8 @@ static void getLocalInput(MapleInputState inputState[4])
 #include <cstdlib>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+void wasm_jit_ram_restored(u32 offset);	// core/rec-wasm/rec_wasm.cpp
+extern bool dc_serializeLogSections;	// core/serialize.cpp
 #endif
 
 namespace ggpo
@@ -472,6 +474,10 @@ static bool load_game_state(unsigned char *buffer, int len)
 			// (hotd2-vr: the code compiled from what was there drops, as for a write the
 			// game makes; otherwise newer code could run over the restored older bytes)
 			bm_RamWriteAccess(pair.first);
+#ifdef __EMSCRIPTEN__
+			for (u32 at = 0; at < PAGE_SIZE; at += 4096)
+				::wasm_jit_ram_restored(pair.first + at);
+#endif
 		}
 		for (const auto& pair : pages.vram)
 			memcpy(memwatch::vramWatcher.getMemPage(pair.first), &pair.second.data[0], PAGE_SIZE);
@@ -489,6 +495,49 @@ static bool load_game_state(unsigned char *buffer, int len)
 		die("fatal");
 	}
 	checkRestoredRam(frame);
+	if (browserSyncAll())
+	{
+		// does the restored state save back to the same bytes? (a part that doesn't come back
+		// whole makes the copies split after a rollback)
+		std::vector<u8> again(settings.platform.isNaomi() ? 20_MB : 10_MB);
+		Serializer ser(again.data(), again.size(), true);
+		try {
+			ser << frame;
+			dc_serialize(ser);
+		} catch (const Serializer::Exception& e) {
+			WARN_LOG(NETWORK, "Rollback check: save failed: %s", e.what());
+		}
+		size_t at = 0;
+		while (at < std::min<size_t>(ser.size(), len) && again[at] == buffer[at])
+			at++;
+		if (ser.size() == (size_t)len && at == (size_t)len)
+			NOTICE_LOG(NETWORK, "Rollback check: frame %d state round trip exact", frame);
+		else
+		{
+			int last = (int)at, count = 0;
+			for (size_t i = at; i < std::min<size_t>(ser.size(), len); i++)
+				if (again[i] != buffer[i])
+					last = (int)i, count++;
+			{
+				// where each part of the state starts, once
+				static bool logged;
+				if (!logged)
+				{
+					logged = true;
+					std::vector<u8> tmp(again.size());
+					Serializer s2(tmp.data(), tmp.size(), true);
+					s2 << frame;
+					::dc_serializeLogSections = true;
+					dc_serialize(s2);
+					::dc_serializeLogSections = false;
+				}
+			}
+			ERROR_LOG(NETWORK, "Rollback check: frame %d state round trip differs at byte %d of %d (now %d bytes), last at %d, %d bytes differ: was %02x%02x%02x%02x%02x%02x%02x%02x now %02x%02x%02x%02x%02x%02x%02x%02x",
+					frame, (int)at, len, (int)ser.size(), last, count,
+					buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3], buffer[at + 4], buffer[at + 5], buffer[at + 6], buffer[at + 7],
+					again[at], again[at + 1], again[at + 2], again[at + 3], again[at + 4], again[at + 5], again[at + 6], again[at + 7]);
+		}
+	}
 #if FEAT_AREC == DYNAREC_JIT
 	// hotd2-vr: the ARM7's compiled code comes from sound RAM and is only dropped when the
 	// ARM is reset (a new sound driver). A rollback across that reset ran the new driver's

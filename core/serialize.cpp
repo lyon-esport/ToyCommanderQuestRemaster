@@ -1,5 +1,8 @@
 // serialize.cpp : save states
 #include "serialize.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include "types.h"
 #include "hw/aica/aica_if.h"
 #include "hw/holly/sb.h"
@@ -18,12 +21,19 @@
 #include "imgread/common.h"
 #include "achievements/achievements.h"
 
+bool dc_serializeLogSections;
+
 void dc_serialize(Serializer& ser)
 {
 	// hotd2-vr netplay test aid: with HOTD2VR_SYNCLOG set, where each part of a rollback state
 	// starts, logged once (to tell which part differs between two dumped states)
 	static bool sectLogged;
+#ifdef __EMSCRIPTEN__
+	// (browser: when the rollback check finds a state that doesn't save back the same)
+	const bool logSect = dc_serializeLogSections;
+#else
 	const bool logSect = !sectLogged && ser.rollback() && getenv("HOTD2VR_SYNCLOG") != nullptr;
+#endif
 	auto sect = [&](const char *name) { if (logSect) NOTICE_LOG(SAVESTATE, "State part %s at %u", name, (u32)ser.size()); };
 	sect("aica");
 	aica::serialize(ser);

@@ -201,6 +201,17 @@ void sh4_sched_reset(bool hard)
 
 void sh4_sched_serialize(Serializer& ser, int id)
 {
+	// tcvr: a module whose timer was never registered (id -1, e.g. the serial port in the libretro
+	// build) saved the bytes in front of the list (garbage), and loading wrote over them (heap
+	// corruption: browser netplay rollbacks crashed with "memory access out of bounds")
+	if (id < 0 || id >= (int)sch_list.size())
+	{
+		const int tag = 0, start = -1, end = -1;
+		ser << tag;
+		ser << start;
+		ser << end;
+		return;
+	}
 	ser << sch_list[id].tag;
 	ser << sch_list[id].start;
 	ser << sch_list[id].end;
@@ -208,6 +219,14 @@ void sh4_sched_serialize(Serializer& ser, int id)
 
 void sh4_sched_deserialize(Deserializer& deser, int id)
 {
+	if (id < 0 || id >= (int)sch_list.size())
+	{
+		int tag, start, end;
+		deser >> tag;
+		deser >> start;
+		deser >> end;
+		return;
+	}
 	deser >> sch_list[id].tag;
 	deser >> sch_list[id].start;
 	deser >> sch_list[id].end;
