@@ -58,6 +58,11 @@
 #include "hw/sh4/dyna/ngen.h"
 #include "oslib/i18n.h"
 
+#if defined(LIBRETRO) && defined(__EMSCRIPTEN__)
+// tcvr: the browser's lobby match start state, raw (shell/libretro/libretro.cpp netplayFromPage)
+std::vector<u8> tcvrWebMatchState;
+#endif
+
 settings_t settings;
 #ifdef USE_OPENXR
 void (*vrUnsupportedGameHook)(const std::string& gameId);
@@ -699,6 +704,15 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 		EventManager::event(Event::Start);
 		if (!settings.content.path.empty())
 		{
+#if defined(LIBRETRO) && defined(__EMSCRIPTEN__)
+			// tcvr: the browser's lobby match starts from the state the host sent (shell/libretro, tcvrWebMatchState)
+			if (config::GGPOEnable && !tcvrWebMatchState.empty())
+			{
+				Deserializer deser(tcvrWebMatchState.data(), tcvrWebMatchState.size());
+				loadstate(deser);
+				NOTICE_LOG(SAVESTATE, "tcvr: the match starts from the host's start state (%d bytes)", (int)tcvrWebMatchState.size());
+			}
+#endif
 #ifndef LIBRETRO
 			if (config::GGPOEnable)
 				dc_loadstate(-1);

@@ -33,6 +33,8 @@
 #include <sys/time.h>
 #endif
 #include <mutex>
+#include <ctime>
+#include "network/tcvr_match.h"
 
 #ifdef __SWITCH__
 #include <stdlib.h>
@@ -2056,6 +2058,35 @@ static void netplayFromPage()
 	config::GGPODelay.override(delay);
 	NOTICE_LOG(NETWORK, "Netplay from the page: player %d of %s, delay %d", player + 1, peers, delay);
 	netplayDevices();
+
+	// tcvr: a lobby match (the page's lobby, tcvr/web/lobby.py): the host's settings and the players' names,
+	// which the automatic setup enters in the game (core/network/tcvr_match.cpp), and the state the match
+	// starts from (window._tcvrMatchState, raw, fetched by the page before the core started)
+	char setup[64] = {}, names[128] = {};
+	EM_ASM({
+		var p = new URLSearchParams(location.search);
+		stringToUTF8(p.get('mpsetup') || '', $0, $1);
+		stringToUTF8(p.get('mpnames') || '', $2, $3);
+	}, setup, (int)sizeof(setup), names, (int)sizeof(names));
+	extern std::vector<u8> tcvrWebMatchState;
+	tcvrWebMatchState.clear();
+	if (setup[0] == 0)
+		return;
+	const int size = EM_ASM_INT({ return window._tcvrMatchState ? window._tcvrMatchState.length : 0; });
+	if (size > 0)
+	{
+		tcvrWebMatchState.resize(size);
+		EM_ASM({ HEAPU8.set(window._tcvrMatchState, $0); }, tcvrWebMatchState.data());
+	}
+	std::string s = setup;
+	// the setup's fourth field says whether the match starts from a state: only when the state is really here
+	const size_t last = s.rfind(',');
+	if (last != std::string::npos)
+		s = s.substr(0, last) + (size > 0 ? ",1" : ",0");
+	config::VrMpSetup.override(s);
+	config::VrMpNames.override(std::string(names));
+	config::VrMpMarker.override((int)std::time(nullptr) + 120);
+	NOTICE_LOG(NETWORK, "Lobby match from the page: setup %s, names %s, start state %d bytes", s.c_str(), names, size);
 }
 #endif
 
@@ -2072,6 +2103,20 @@ static bool loadGame()
         retro_unload_game();
 		return false;
 	}
+#ifdef __EMSCRIPTEN__
+	{
+		// tcvr: who this copy is, for the page's lobby (the host refuses another app version or disc)
+		const tcvr::lobby::Identity id = tcvr::match::identity();
+		char disc[33] = {};
+		for (int i = 0; i < 16; i++)
+			snprintf(disc + i * 2, 3, "%02x", id.disc[i]);
+		EM_ASM({
+			var o = {};
+			o.version = UTF8ToString($0); o.gameId = UTF8ToString($1); o.disc = UTF8ToString($2); o.inMatch = $3;
+			window._tcvrIdentity = o;
+		}, id.appVersion.c_str(), id.gameId.c_str(), disc, tcvr::match::inMatch() ? 1 : 0);
+	}
+#endif
 
 	return true;
 }

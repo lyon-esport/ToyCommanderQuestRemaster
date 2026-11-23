@@ -9,13 +9,48 @@ Usage:  python serve.py --disc "<path to your .chd>" [--port 8642]
 """
 import argparse, http.server, json, os, sys, time, urllib.parse
 
-import netbridge
+import lobby, netbridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "www")
 
+LOBBIES = lobby.Lobbies(log=lambda m: print(m, flush=True))
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     disc = None
+
+    def send_json(self, obj, code=200):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def lobby_get(self, u):
+        # the LAN lobby for browser players (lobby.py)
+        q = urllib.parse.parse_qs(u.query)
+        cid = q.get("cid", [""])[0][:64]
+        if u.path == "/lobby/games":
+            self.send_json(LOBBIES.games())
+        elif u.path == "/lobby/view" and cid:
+            v = LOBBIES.joiner(cid).get_view()
+            v["peers"] = lobby.peer_list(v)
+            self.send_json(v)
+        elif u.path == "/lobby/snap" and cid:
+            data = LOBBIES.joiner(cid).snapshot(q.get("id", [""])[0])
+            if data is not None:
+                data = lobby.raw_state(data)	# the browser core loads raw state bytes
+            if data is None:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self.send_error(404)
 
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
@@ -41,6 +76,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().translate_path(path)
 
     def do_GET(self):
+        if urllib.parse.urlparse(self.path).path.startswith("/lobby/"):
+            self.lobby_get(urllib.parse.urlparse(self.path))
+            return
         if urllib.parse.urlparse(self.path).path == "/net":
             netbridge.handle_upgrade(self, log=lambda m: print(m, flush=True))	# network play (netbridge.py)
             return
@@ -73,6 +111,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 out.write(data)
             self.send_response(204)
             self.end_headers()
+            return
+        if u.path == "/lobby/cmd":
+            n = int(self.headers.get("Content-Length", "0"))
+            cid = urllib.parse.parse_qs(u.query).get("cid", [""])[0][:64]
+            try:
+                cmd = json.loads(self.rfile.read(min(n, 4096)).decode("utf-8"))
+                ok = bool(cid) and LOBBIES.command(cid, cmd)
+            except (ValueError, KeyError, TypeError):
+                ok = False
+            self.send_json({"ok": ok}, 200 if ok else 400)
             return
         if u.path != "/report":
             self.send_error(404)

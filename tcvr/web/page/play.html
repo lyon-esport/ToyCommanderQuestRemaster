@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toy Commander</title>
+<style>
+  :root { color-scheme: dark; --bg: #111; --panel: #1c1c1c; --line: #333; --text: #ddd; --dim: #999; --accent: #f0b429; --ok: #5ac46e; --bad: #e36060; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; }
+  #wrap { display: flex; gap: 16px; justify-content: center; padding: 16px; flex-wrap: wrap; }
+  #game { width: 960px; max-width: 100%; aspect-ratio: 4 / 3; }
+  #mp { width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; align-self: flex-start; }
+  #mp h2 { margin: 0 0 10px; font-size: 16px; }
+  #mp .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+  #mp input { background: #000; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; font: inherit; }
+  #mp input.name { width: 4em; text-transform: uppercase; }
+  #mp button { background: #2a2a2a; color: var(--text); border: 1px solid #444; border-radius: 4px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  #mp button.main { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  #mp button:disabled { opacity: .5; cursor: default; }
+  #mp ul { list-style: none; padding: 0; margin: 6px 0; }
+  #mp li { padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; margin: 4px 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  #mp .dim { color: var(--dim); font-size: 12px; }
+  #mp .ready { color: var(--ok); }
+  #mp .msg { color: var(--bad); margin: 6px 0; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="game"></div>
+  <div id="mp"><h2>Multiplayer</h2><div id="mpBody" class="dim">Starting the game...</div></div>
+</div>
+<script>
+// Toy Commander in the browser, with the LAN multiplayer of the Quest and PC apps: this page joins a game
+// hosted on a headset or a PC (the local server talks to the lobby for it: tcvr/web/lobby.py). On START the
+// page loads again as a match (?peers=...), from the host's start state, and the game's own setup enters the
+// host's settings (core/network/tcvr_match.cpp), exactly as on the other players' copies.
+const params = new URLSearchParams(location.search);
+const MATCH = params.get('peers');
+let cid = '';
+try { cid = sessionStorage.getItem('tcvrCid') || ''; } catch (e) {}
+if (!cid) {
+  cid = Math.random().toString(36).slice(2, 12);
+  try { sessionStorage.setItem('tcvrCid', cid); } catch (e) {}
+}
+const api = (path) => path + (path.includes('?') ? '&' : '?') + 'cid=' + encodeURIComponent(cid);
+const cmd = (obj) => fetch(api('/lobby/cmd'), { method: 'POST', body: JSON.stringify(obj) }).catch(() => {});
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function bootEmulator() {
+  window.EJS_player = '#game';
+  window.EJS_core = 'tcvr';
+  window.EJS_gameName = 'Toy Commander (Europe)';
+  window.EJS_gameUrl = params.get('elf') ? '/disc/test.elf' : '/disc/ToyCommander.chd';	// ?elf=1: cloud checks without the game
+  window.EJS_pathtodata = 'data/';
+  window.EJS_startOnLoaded = true;
+  window.EJS_threads = false;
+  window.EJS_disableLocalStorage = true;
+  window.EJS_defaultOptions = {
+    'reicast_hle_bios': 'enabled',
+    'reicast_broadcast': 'NTSC',
+    'reicast_internal_resolution': '640x480',
+    'reicast_threaded_rendering': 'disabled',
+    'reicast_alpha_sorting': 'per-strip (fast, least accurate)',
+    'reicast_frame_skipping': 'disabled',
+    'reicast_gdrom_fast_loading': 'enabled',
+    'reicast_enable_dsp': 'disabled',	// online the settings check compares it with the Quest and PC
+  };
+  for (const src of ['tcvrnet.js', 'data/loader.js']) {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = false;
+    document.body.appendChild(s);
+  }
+}
+
+const body = document.getElementById('mpBody');
+const MODES = ['Deathmatch', 'Cat and Mice', 'Capture the Flag'];
+// core/network/tcvr_lobby.cpp RoomNames
+const ROOMS = ['Kitchen and dining room', "Two children's bedrooms", 'Hallway and its mezzanine', "Parent's bedroom",
+  'Garage and tool room', 'Attic', 'Living room and winter garden', 'Cellar'];
+const settingsText = (s) => `${MODES[s.mode] || 'Game'}, ${ROOMS[s.room] || 'room ' + (s.room + 1)}`;
+
+let myName = 'WEB';
+try { myName = localStorage.getItem('tcvrName') || 'WEB'; } catch (e) {}
+let shown = '';
+function render(html) { if (html !== shown) { shown = html; body.innerHTML = html; } }
+
+async function goToMatch(v) {
+  // everything the match page needs is in its address; the start state is fetched again there
+  const st = v.state || { players: [] };
+  const names = st.players.filter((p) => p.present).map((p) => p.name).join(',');
+  const s = v.start.settings;
+  const q = new URLSearchParams({
+    peers: v.peers, player: v.start.localIndex, delay: v.start.inputDelay,
+    mpsetup: `${s.mode},${s.room},${s.points},${v.start.snapshot ? 1 : 0}`, mpnames: names,
+  });
+  if (v.start.snapshot) q.set('snap', v.start.snapshot);
+  if (params.get('elf')) q.set('elf', '1');
+  location.replace(location.pathname + '?' + q.toString());
+}
+
+async function lobbyLoop() {
+  if (!window._tcvrIdentity) {
+    render('<span class="dim">Starting the game...</span>');
+    return;
+  }
+  let v;
+  try { v = await (await fetch(api('/lobby/view'))).json(); } catch (e) { render('<div class="msg">The local server does not answer.</div>'); return; }
+  if (v.phase === 'started' && v.start) { render('<b>The match is starting...</b>'); goToMatch(v); return; }
+  if (v.phase === 'connecting') { render('<span class="dim">Joining the game...</span>'); return; }
+  if (v.phase === 'inLobby' && v.state) {
+    const st = v.state;
+    const players = st.players.map((p, i) => p.present
+      ? `<li><span>${esc(p.name)}${i === st.hostSlot ? ' <span class="dim">(host)</span>' : ''}${i === v.mySlot ? ' <span class="dim">(you)</span>' : ''}</span>` +
+        `<span class="${p.ready || i === st.hostSlot ? 'ready' : 'dim'}">${i === st.hostSlot ? '' : p.ready ? 'Ready' : 'Not ready'}</span></li>`
+      : '').join('');
+    const waiting = v.snapshots.length ? '' : '<div class="dim">Getting the match start from the host...</div>';
+    render(`<div>${esc(settingsText(st.settings))}</div><ul>${players}</ul>${waiting}` +
+      `<div class="row"><button class="main" id="ready">${v.ready ? 'Not ready' : 'Ready'}</button><button id="leave">Leave</button></div>` +
+      `<div class="dim">The host starts the match when everybody is ready.</div>`);
+    document.getElementById('ready').onclick = () => cmd({ op: 'ready', ready: !v.ready }).then(lobbyLoop);
+    document.getElementById('leave').onclick = () => cmd({ op: 'leave' }).then(lobbyLoop);
+    return;
+  }
+  let games = [];
+  try { games = await (await fetch('/lobby/games')).json(); } catch (e) {}
+  const id = window._tcvrIdentity;
+  const list = games.map((g, k) => {
+    const other = g.version !== id.version ? 'another app version' : g.started ? 'playing' : g.players >= g.maxPlayers ? 'full' : '';
+    return `<li><span>${esc(g.hostName)} <span class="dim">${esc(g.modeName)}, ${g.players}/${g.maxPlayers}</span></span>` +
+      (other ? `<span class="dim">${other}</span>` : `<button class="main" data-k="${k}">Join</button>`) + '</li>';
+  }).join('');
+  const msg = v.phase === 'refused' || v.phase === 'hostLeft' || v.phase === 'failed' ? `<div class="msg">${esc(v.message)}</div>` : '';
+  render(`${msg}<div class="row">Your name <input class="name" id="name" maxlength="3" value="${esc(myName)}"></div>` +
+    (list ? `<ul>${list}</ul>` : '<div class="dim">Looking for games on this network... Create a game on a headset or a PC.</div>') +
+    `<div class="row"><input id="addr" placeholder="Address" size="14"><button id="ask">Find</button></div>`);
+  const nameInput = document.getElementById('name');
+  nameInput.onchange = () => { myName = (nameInput.value || 'WEB').toUpperCase().slice(0, 3); try { localStorage.setItem('tcvrName', myName); } catch (e) {} };
+  document.getElementById('ask').onclick = () => cmd({ op: 'query', address: document.getElementById('addr').value.trim() });
+  for (const b of body.querySelectorAll('button[data-k]')) {
+    const g = games[+b.dataset.k];
+    b.onclick = () => cmd({ op: 'join', address: g.address, port: g.lobbyPort, name: myName, version: id.version, disc: id.disc }).then(lobbyLoop);
+  }
+}
+
+if (MATCH) {
+  // a match: the host's start state first (raw bytes for the core), then the game
+  render('<b>Match</b><div class="dim">Starting with the other players...</div><div class="row"><button id="back">Back to the lobby</button></div>');
+  document.getElementById('back').onclick = async () => { await cmd({ op: 'matchOver' }); location.replace(location.pathname + (params.get('elf') ? '?elf=1' : '')); };
+  const snap = params.get('snap');
+  (snap ? fetch(api('/lobby/snap?id=' + encodeURIComponent(snap))).then((r) => r.ok ? r.arrayBuffer() : null) : Promise.resolve(null))
+    .then((buf) => { if (buf) window._tcvrMatchState = new Uint8Array(buf); })
+    .catch(() => {})
+    .finally(bootEmulator);
+} else {
+  bootEmulator();
+  setInterval(() => { if (document.activeElement && document.activeElement.tagName === 'INPUT') return; lobbyLoop(); }, 1000);
+}
+</script>
+</body>
+</html>

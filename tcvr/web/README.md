@@ -18,7 +18,10 @@ along; the headset code is left out.
 | `gl_override.js` | `glGetString` for WebGL (from flycast-wasm, fixed: `GL_EXTENSIONS` lists the WebGL extensions; the original made RetroArch's GL init fail with "Invalid enum") |
 | `patches/emulatorjs-cache-large-files.patch` | EmulatorJS fix: the 500+ MB disc read back from one Blob failed at random in Chromium (NotReadableError) |
 | `page/index.html` | Test page (EmulatorJS): speed counter from the emulator's own emulated-frame count, scripted 4-pad route to a 4-player battle, log forwarding |
-| `serve.py` | Local test server on 127.0.0.1 with the COOP/COEP headers, serves the disc from a local path, collects results |
+| `serve.py` | Local server with the COOP/COEP headers, serves the disc from a local path, collects results, and runs the lobby and the network bridge for the pages |
+| `netbridge.py` | The page's UDP (GGPO netplay) through the server, over a WebSocket (`/net`) |
+| `lobby.py` | A browser player in the app's LAN lobby (`core/network/tcvr_lobby.h`, joiner side), for `play.html` over `/lobby/...`; `test_lobby.py` tests it |
+| `page/play.html` | The player's page: the game, and a Multiplayer panel that lists the games hosted on the LAN by headsets and PCs, joins one, and starts the match with the others |
 
 ## Pinned versions
 
@@ -50,6 +53,17 @@ serve.py                  python serve.py --disc <your own disc image>
 Open `http://localhost:8642/?core=fork&script=battle`. `?script=none` leaves the pads to you,
 `?elf=1` loads `/disc/test.elf` instead of the disc (checks without the game). The disc image is
 never in git and never on a public server.
+
+## Playing with headsets and PCs on the LAN
+
+`python serve.py --disc <your own disc image> --host 0.0.0.0`, then each browser player opens
+`http://<server PC address>:8642/play.html`. A headset or a PC creates the game (Multiplayer, Create
+game); it shows up in the page's Multiplayer panel, Join, Ready, and the host starts the match. The page
+then loads again as the match: the host's match start state, the same automatic setup as on the
+other copies, GGPO through the server. Back to the lobby with the button under the panel.
+
+Every copy in a match must be built from the same commit: the host refuses another app version
+(`git describe --tags`, so build from a full clone with the tags, not a shallow one).
 
 ## Known gaps (next steps)
 
