@@ -449,6 +449,18 @@ static bool emitShilOp(WasmModuleBuilder& b, const shil_opcode& op,
 	if ((FLY_FORCE_FALLBACK_MASK) & flyOpCategoryBit((u32)op.op))
 		return false;
 #endif
+	// tcvr: online, the float ops that round go to the SHIL fallback (rec_wasm.cpp), which follows
+	// the SH4's round-to-zero mode as the PC and the Quest do (WebAssembly only rounds to nearest)
+	if (config::GGPOEnable)
+		switch (op.op)
+		{
+		case shop_fadd: case shop_fsub: case shop_fmul: case shop_fdiv: case shop_fsqrt:
+		case shop_fmac: case shop_fsrra: case shop_fipr: case shop_ftrv:
+		case shop_cvt_i2f_n: case shop_cvt_i2f_z:
+			return false;
+		default:
+			break;
+		}
 	switch (op.op) {
 
 	// ---- Tier 1: Integer ALU ----

@@ -1052,6 +1052,61 @@ u64 EMSCRIPTEN_KEEPALIVE wasm_div1(u32 a, u32 bU, u32 T) {
 }
 
 
+// tcvr: online, the SH4's round-to-zero mode (FPSCR.RM = 1, which games set) is followed as the
+// PC and the Quest follow it (they set the host FPU's rounding mode). WebAssembly only rounds to
+// nearest, so while a netplay session runs the float ops that round go through the SHIL fallback
+// (wasm_emit.h) and are computed here exactly, then truncated.
+static inline bool fly_np_rtz()
+{
+	return g_fly_netplay && Sh4cntx.fpscr.RM == 1;
+}
+// a double that holds the exact result or the nearest one with no float between (see the callers)
+// -> the float toward zero
+static inline float fly_f32_rtz(double s)
+{
+	float r = (float)s;
+	if (std::fabs((double)r) > std::fabs(s))
+	{
+		u32 bits;
+		memcpy(&bits, &r, 4);
+		bits--;		// one step toward zero (sign and magnitude)
+		memcpy(&r, &bits, 4);
+	}
+	return r;
+}
+// a + b on doubles, rounded toward zero (the x64 PC's C code under the host's round-to-zero mode)
+static inline double fly_f64_add_rtz(double a, double b)
+{
+	double s = a + b;
+	if (!std::isfinite(s))
+		return s;
+	const double bb = s - a;
+	const double e = (a - (s - bb)) + (b - bb);	// exact: a + b = s + e
+	if (e != 0 && ((e < 0) != (s < 0)))
+	{
+		u64 bits;
+		memcpy(&bits, &s, 8);
+		bits--;
+		memcpy(&s, &bits, 8);
+	}
+	return s;
+}
+// the f32 ops: products of floats are exact in a double; a quotient or a square root of floats
+// that isn't exact is never within a double's rounding of a float, so truncating the nearest
+// double gives the truncated exact result
+static inline float fly_f32_add_rtz(float a, float b) { return fly_f32_rtz(fly_f64_add_rtz(a, b)); }
+static inline float fly_f32_mul_rtz(float a, float b) { return fly_f32_rtz((double)a * (double)b); }
+static inline float fly_f32_div_rtz(float a, float b) { return fly_f32_rtz((double)a / (double)b); }
+static inline float fly_f32_sqrt_rtz(float a) { return fly_f32_rtz(std::sqrt((double)a)); }
+// fipr / ftrv as shil_canonical.h's innerProduct on the PC: double products, summed in order
+static inline float fly_inner_rtz(const float *f1, const float *f2, int stride)
+{
+	double sum = (double)f1[0] * f2[0];
+	for (int i = 1; i < 4; i++)
+		sum = fly_f64_add_rtz(sum, (double)f1[i] * f2[stride * i]);
+	return fly_f32_rtz(sum);
+}
+
 void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 	g_shil_fb_call_count++;
 	// Skip remaining ops after a deferred exception (block should abort)
@@ -1272,7 +1327,9 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 		// — see wasm_emit.h shop_fmac). std::fma differed in double-rounding
 		// tie cases; bridge-shadow requires bit-identical paths.
 		float fn = readF32(op.rs1), f0 = readF32(op.rs2), fm = readF32(op.rs3);
-		if (config::GGPOEnable)
+		if (fly_np_rtz())
+			writeF32(op.rd, fly_f32_add_rtz(fn, fly_f32_mul_rtz(f0, fm)));
+		else if (config::GGPOEnable)
 		{
 			// online: float model "tcvr-fp2", product rounded then the sum (see wasm_emit.h)
 			volatile float prod = f0 * fm;
@@ -1284,12 +1341,20 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 	}
 	case shop_fsrra: {
 		float val = readF32(op.rs1);
-		writeF32(op.rd, 1.0f / sqrtf(val));
+		if (fly_np_rtz())
+			writeF32(op.rd, fly_f32_div_rtz(1.0f, fly_f32_sqrt_rtz(val)));
+		else
+			writeF32(op.rd, 1.0f / sqrtf(val));
 		break;
 	}
 	case shop_fipr: {
 		// 4-element dot product with double accumulation (matches canonical)
 		u32 off1 = op.rs1.reg_offset(), off2 = op.rs2.reg_offset();
+		if (fly_np_rtz())
+		{
+			writeF32(op.rd, fly_inner_rtz((float*)((u8*)&ctx + off1), (float*)((u8*)&ctx + off2), 1));
+			break;
+		}
 		double sum = 0;
 		for (int i = 0; i < 4; i++) {
 			float a = *(float*)((u8*)&ctx + off1 + i * 4);
@@ -1307,6 +1372,13 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 		float vin[4];
 		for (int j = 0; j < 4; j++)
 			vin[j] = *(float*)((u8*)&ctx + voff + j * 4);
+		if (fly_np_rtz())
+		{
+			const float *m = (float*)((u8*)&ctx + moff);
+			for (int i = 0; i < 4; i++)
+				*(float*)((u8*)&ctx + doff + i * 4) = fly_inner_rtz(vin, m + i, 4);
+			break;
+		}
 		for (int i = 0; i < 4; i++) {
 			double sum = 0;
 			for (int j = 0; j < 4; j++) {
@@ -1595,16 +1667,16 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 		break;
 	// FPU basic ops
 	case shop_fadd:
-		writeF32(op.rd, readF32(op.rs1) + readF32(op.rs2));
+		writeF32(op.rd, fly_np_rtz() ? fly_f32_add_rtz(readF32(op.rs1), readF32(op.rs2)) : readF32(op.rs1) + readF32(op.rs2));
 		break;
 	case shop_fsub:
-		writeF32(op.rd, readF32(op.rs1) - readF32(op.rs2));
+		writeF32(op.rd, fly_np_rtz() ? fly_f32_add_rtz(readF32(op.rs1), -readF32(op.rs2)) : readF32(op.rs1) - readF32(op.rs2));
 		break;
 	case shop_fmul:
-		writeF32(op.rd, readF32(op.rs1) * readF32(op.rs2));
+		writeF32(op.rd, fly_np_rtz() ? fly_f32_mul_rtz(readF32(op.rs1), readF32(op.rs2)) : readF32(op.rs1) * readF32(op.rs2));
 		break;
 	case shop_fdiv:
-		writeF32(op.rd, readF32(op.rs1) / readF32(op.rs2));
+		writeF32(op.rd, fly_np_rtz() ? fly_f32_div_rtz(readF32(op.rs1), readF32(op.rs2)) : readF32(op.rs1) / readF32(op.rs2));
 		break;
 	case shop_fabs:
 		writeF32(op.rd, fabsf(readF32(op.rs1)));
@@ -1613,7 +1685,7 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 		writeF32(op.rd, -readF32(op.rs1));
 		break;
 	case shop_fsqrt:
-		writeF32(op.rd, sqrtf(readF32(op.rs1)));
+		writeF32(op.rd, fly_np_rtz() ? fly_f32_sqrt_rtz(readF32(op.rs1)) : sqrtf(readF32(op.rs1)));
 		break;
 	case shop_fseteq:
 		writeI32(op.rd, readF32(op.rs1) == readF32(op.rs2) ? 1 : 0);
@@ -1636,7 +1708,7 @@ void EMSCRIPTEN_KEEPALIVE wasm_exec_shil_fb(u32 block_vaddr, u32 op_index) {
 	}
 	case shop_cvt_i2f_n:
 	case shop_cvt_i2f_z:
-		writeF32(op.rd, (float)(s32)readI32(op.rs1));
+		writeF32(op.rd, fly_np_rtz() ? fly_f32_rtz((double)(s32)readI32(op.rs1)) : (float)(s32)readI32(op.rs1));
 		break;
 	case shop_div1: {
 		// SH4 DIV1 — single-step division (matches shil_canonical.h exactly)
