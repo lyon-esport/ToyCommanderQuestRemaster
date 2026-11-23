@@ -8,7 +8,7 @@
   :root { color-scheme: dark; --bg: #111; --panel: #1c1c1c; --line: #333; --text: #ddd; --dim: #999; --accent: #f0b429; --ok: #5ac46e; --bad: #e36060; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; }
   #wrap { display: flex; gap: 16px; justify-content: center; padding: 16px; flex-wrap: wrap; }
-  #game { width: 960px; max-width: 100%; aspect-ratio: 4 / 3; }
+  #game { width: min(960px, calc(100vw - 364px)); min-width: 480px; max-width: 100%; aspect-ratio: 4 / 3; }
   #mp { width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; align-self: flex-start; }
   #mp h2 { margin: 0 0 10px; font-size: 16px; }
   #mp .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
@@ -36,6 +36,7 @@
 // host's settings (core/network/tcvr_match.cpp), exactly as on the other players' copies.
 const params = new URLSearchParams(location.search);
 const MATCH = params.get('peers');
+window._tcvrSyncAll = params.get('syncall') === '1';	// tests: the core keeps a RAM hash per frame (as index.html)
 let cid = '';
 try { cid = sessionStorage.getItem('tcvrCid') || ''; } catch (e) {}
 if (!cid) {
@@ -95,7 +96,7 @@ async function goToMatch(v) {
     mpsetup: `${s.mode},${s.room},${s.points},${v.start.snapshot ? 1 : 0}`, mpnames: names,
   });
   if (v.start.snapshot) q.set('snap', v.start.snapshot);
-  if (params.get('elf')) q.set('elf', '1');
+  for (const k of ['elf', 'syncall']) if (params.get(k)) q.set(k, params.get(k));	// test switches survive the reload
   location.replace(location.pathname + '?' + q.toString());
 }
 
@@ -146,7 +147,7 @@ async function lobbyLoop() {
 if (MATCH) {
   // a match: the host's start state first (raw bytes for the core), then the game
   render('<b>Match</b><div class="dim">Starting with the other players...</div><div class="row"><button id="back">Back to the lobby</button></div>');
-  document.getElementById('back').onclick = async () => { await cmd({ op: 'matchOver' }); location.replace(location.pathname + (params.get('elf') ? '?elf=1' : '')); };
+  document.getElementById('back').onclick = async () => { await cmd({ op: 'matchOver' }); const keep = new URLSearchParams(); for (const k of ['elf', 'syncall']) if (params.get(k)) keep.set(k, params.get(k)); location.replace(location.pathname + (keep.toString() ? '?' + keep : '')); };
   const snap = params.get('snap');
   (snap ? fetch(api('/lobby/snap?id=' + encodeURIComponent(snap))).then((r) => r.ok ? r.arrayBuffer() : null) : Promise.resolve(null))
     .then((buf) => { if (buf) window._tcvrMatchState = new Uint8Array(buf); })
