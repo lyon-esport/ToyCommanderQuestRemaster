@@ -508,6 +508,7 @@ extern OptionString VrMpSetup;
 extern OptionString VrMpNames;
 extern OptionString VrMpEndText;
 extern Option<int> VrMpTestEnd;
+extern Option<bool> VrMpTestNoRooms;
 extern Option<bool> CustomTextures;
 extern Option<bool> PreloadCustomTextures;
 extern Option<bool> DumpTextures;

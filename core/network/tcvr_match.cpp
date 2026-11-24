@@ -1326,11 +1326,21 @@ namespace
 // every copy), once a game is loaded (mask not 0), every room is open.
 void openAllRooms(Event, void *)
 {
-	if (!inMatch())
+	if (!inMatch() || config::VrMpTestNoRooms)
 		return;
 	const u8 mask = addrspace::read8(RoomsMask);
+	static int writes, vblanks;
 	if (mask != 0 && mask != 0xFF)
+	{
 		addrspace::write8(RoomsMask, 0xFF);
+		writes++;
+	}
+	if (++vblanks >= 600)
+	{
+		if (writes > 0)
+			NOTICE_LOG(NETWORK, "MP rooms: opened %d times in the last %d vblanks", writes, vblanks);
+		writes = vblanks = 0;
+	}
 }
 
 // TEST ONLY (vr.MpTestEnd = N, 0 off, never set by the menu): from netplay frame N on, team 1's score is the

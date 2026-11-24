@@ -142,6 +142,7 @@ Option<bool> VrMpReturn("vr.MpReturn", false);
 OptionString VrMpNames("vr.MpNames", "");	// tcvr: the match's player names in player order, "AAA,BBB" (for "BBB left")
 OptionString VrMpEndText("vr.MpEndText", "");	// tcvr: why the last match ended, for the VR menu after the restart
 Option<int> VrMpTestEnd("vr.MpTestEnd", 0);	// tcvr: TEST ONLY (never set by the menu): at this netplay frame team 1 reaches the match limit, the game ends the match (results page); 0 off
+Option<bool> VrMpTestNoRooms("vr.MpTestNoRooms", false);	// tcvr: TEST ONLY (never set by the menu): a match leaves the rooms as the blank card has them (no openAllRooms)
 OptionString VrMpSetup("vr.MpSetup", "");	// tcvr: the match's settings from the lobby, "mode,room,points" (the automatic setup enters them)
 Option<bool> CustomTextures("rend.CustomTextures");
 Option<bool> PreloadCustomTextures("rend.PreloadCustomTextures");

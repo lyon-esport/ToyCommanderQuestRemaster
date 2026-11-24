@@ -234,6 +234,7 @@ Option<bool> VrMpReturn("", false);
 OptionString VrMpNames("", "");	// tcvr: the match's player names in player order, "AAA,BBB" (for "BBB left")
 OptionString VrMpEndText("", "");	// tcvr: why the last match ended, for the VR menu after the restart
 Option<int> VrMpTestEnd("", 0);	// tcvr: TEST ONLY (never set by the menu): at this netplay frame team 1 reaches the match limit, the game ends the match (results page); 0 off
+Option<bool> VrMpTestNoRooms("", false);	// tcvr: TEST ONLY, see core/cfg/option.cpp
 OptionString VrMpSetup("", "");	// tcvr: the match's settings from the lobby, "mode,room,points" (the automatic setup enters them)
 #ifdef USE_OPENXR
 Option<int> VrUpscaleCache("", 2);
