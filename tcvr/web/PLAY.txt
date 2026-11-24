@@ -1,0 +1,24 @@
+Toy Commander in the browser: local network play
+=================================================
+
+ONE COMPUTER RUNS THE SERVER (Windows)
+1. Put this folder anywhere outside AppData, for example in your user folder (TCVR-Web).
+2. Put your own Toy Commander (Europe) disc image in it, named ToyCommander.chd.
+   It never leaves this computer except to the browsers of your own network.
+3. Python 3 must be installed (python.org, tick "Add python.exe to PATH").
+4. Double-click "Start Toy Commander server.cmd". The window shows the addresses to open.
+   Keep the window open while you play; close it to stop the server.
+5. The first time, Windows may ask whether Python can use the network: allow it on private networks.
+   If another device cannot reach the server, run once in an administrator PowerShell:
+     New-NetFirewallRule -DisplayName "Toy Commander server" -Direction Inbound -Protocol TCP -LocalPort 8642,8643 -Action Allow -Profile Private,Domain
+     New-NetFirewallRule -DisplayName "Toy Commander lobby" -Direction Inbound -Protocol UDP -LocalPort 19790 -Action Allow -Profile Private,Domain
+
+EACH PLAYER (computer, tablet or phone on the same network, Chrome or Edge)
+1. Open the https:// address shown in the server window, for example https://<server address>:8643/play.html
+   The browser warns once about the certificate (it is made by your own server): choose Advanced, then Proceed.
+   (The http:// address on port 8642 works too, but tablets and phones then ignore gamepads.)
+2. Type your 3-letter name: your saves are kept on the server under that name, from any device.
+3. "Download game files" the first time (about 540 MB, kept by the browser), then "Play".
+   "Clean storage" removes the downloaded files from that browser.
+4. Multiplayer: create a game on a Quest headset or on the PC version; it shows in the Multiplayer panel.
+   Join, then Ready. The host starts the match.

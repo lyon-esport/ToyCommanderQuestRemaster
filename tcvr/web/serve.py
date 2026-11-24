@@ -191,11 +191,69 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if "/report" not in str(args[0] if args else ""):
             sys.stderr.write("%s\n" % (fmt % args))
 
+def lan_addresses():
+    """This computer's IPv4 addresses that other devices on the network can use."""
+    import socket
+    found = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 9))	# no packet is sent: picks the interface of the default route
+        found.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in found and not ip.startswith("127."):
+                found.append(ip)
+    except OSError:
+        pass
+    return found
+
+def make_certificate(folder, addresses):
+    """A self-signed certificate for this computer's addresses (HTTPS lets browsers use gamepads).
+    Made once, kept in cert/ next to this file; made again when the addresses change."""
+    import datetime, ipaddress, socket
+    cert, key = os.path.join(folder, "cert.pem"), os.path.join(folder, "key.pem")
+    names = os.path.join(folder, "addresses.txt")
+    want = ",".join(sorted(set(addresses + ["127.0.0.1"])))
+    if os.path.isfile(cert) and os.path.isfile(key) and os.path.isfile(names) and open(names).read() == want:
+        return cert, key
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+    except ImportError:
+        return None
+    k = ec.generate_private_key(ec.SECP256R1())
+    host = socket.gethostname()
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Toy Commander local server")])
+    san = [x509.DNSName("localhost"), x509.DNSName(host)] + [x509.IPAddress(ipaddress.ip_address(ip)) for ip in want.split(",")]
+    now = datetime.datetime.now(datetime.timezone.utc)
+    c = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(k.public_key())
+         .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
+         .not_valid_after(now + datetime.timedelta(days=3650))
+         .add_extension(x509.SubjectAlternativeName(san), critical=False)
+         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+         .sign(k, hashes.SHA256()))
+    os.makedirs(folder, exist_ok=True)
+    with open(key, "wb") as f:
+        f.write(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    with open(cert, "wb") as f:
+        f.write(c.public_bytes(serialization.Encoding.PEM))
+    with open(names, "w") as f:
+        f.write(want)
+    return cert, key
+
 def main():
+    import ssl, threading
     ap = argparse.ArgumentParser()
     ap.add_argument("--disc", required=True, help="your own Toy Commander (Europe) disc image (.chd)")
     ap.add_argument("--port", type=int, default=8642)
-    ap.add_argument("--host", default="127.0.0.1", help="address to serve on (default: this PC only)")
+    ap.add_argument("--https-port", type=int, default=8643, help="HTTPS port (0: no HTTPS)")
+    ap.add_argument("--host", default="127.0.0.1", help="address to serve on (default: this PC only; 0.0.0.0: the whole network)")
     a = ap.parse_args()
     if not os.path.isfile(a.disc):
         sys.exit("disc image not found: " + a.disc)
@@ -203,9 +261,24 @@ def main():
     class Server(http.server.ThreadingHTTPServer):
         # several players' pages load at once: the default queue (5) refused some connections
         request_queue_size = 128
+        daemon_threads = True
     srv = Server((a.host, a.port), Handler)
-    srv.daemon_threads = True
-    print("Open http://localhost:%d/ in Chrome or Edge (Ctrl+C to stop)" % a.port, flush=True)
+    addresses = lan_addresses() if a.host == "0.0.0.0" else []
+    print("On this computer: http://localhost:%d/play.html (Ctrl+C to stop)" % a.port, flush=True)
+    for ip in addresses:
+        print("Other devices on the network: http://%s:%d/play.html" % (ip, a.port), flush=True)
+    if a.https_port:
+        made = make_certificate(os.path.join(HERE, "cert"), addresses)
+        if made is None:
+            print("No HTTPS (gamepads on tablets and phones need it): run  python -m pip install cryptography  and start again", flush=True)
+        else:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(*made)
+            tls = Server((a.host, a.https_port), Handler)
+            tls.socket = ctx.wrap_socket(tls.socket, server_side=True)
+            threading.Thread(target=tls.serve_forever, daemon=True).start()
+            for ip in addresses or ["localhost"]:
+                print("With gamepads (the browser warns once about the certificate: choose Advanced, then Proceed): https://%s:%d/play.html" % (ip, a.https_port), flush=True)
     srv.serve_forever()
 
 if __name__ == "__main__":

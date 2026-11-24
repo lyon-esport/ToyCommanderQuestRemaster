@@ -1,0 +1,7 @@
+# made by serve.py when it runs
+cert/
+profiles/
+results.log
+shots/
+dumps/
+__pycache__/
