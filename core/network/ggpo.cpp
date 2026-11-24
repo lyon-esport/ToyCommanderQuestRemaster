@@ -161,7 +161,7 @@ static bool mouseGame;
 static int inputSize;
 static FILE *syncLog;		// HOTD2VR_SYNCLOG (save_game_state)
 static std::string syncLogPath;	// tcvr: HOTD2VR_SYNCLOG, else the option hotd2vr.SyncLog (the headset has no environment)
-static struct { int frames, saves, rollbacks; } netStats;	// nextFrame's 5 s log
+static struct { int frames, saves, rollbacks, timesyncs, aheadSum, barrierWaits, holdBacks; } netStats;	// nextFrame's 5 s log
 static struct { s16 x, y; } heldAim;	// the local light gun's position as last sent (nextFrame)
 static void (*chatCallback)(int playerNum, const std::string& msg);
 
@@ -320,6 +320,8 @@ static bool on_event(GGPOEvent *info)
 	case GGPO_EVENTCODE_TIMESYNC:
 		INFO_LOG(NETWORK, "Timesync: %d frames ahead", info->u.timesync.frames_ahead);
 		timesyncOccurred += 5;
+		netStats.timesyncs++;
+		netStats.aheadSum += info->u.timesync.frames_ahead;
 #ifdef __EMSCRIPTEN__
 		timesyncWait += 1;	// (the browser can't sleep: browserTick holds back one frame)
 #else
@@ -1317,6 +1319,7 @@ static int sendLocalInput(u32 setupPresses)
 			throw FlycastException("GGPO error");
 		}
 		DEBUG_LOG(NETWORK, "ggpo_add_local_input prediction barrier reached");
+		netStats.barrierWaits++;
 #ifdef __EMSCRIPTEN__
 		// tcvr: the browser can't wait here (one thread, the page's): the frame waits instead and
 		// browserTick() tries again on the next tick
@@ -1374,9 +1377,18 @@ bool nextFrame()
 		if (secs >= 5.0)
 		{
 			const int again = netStats.saves - netStats.frames;
-			NOTICE_LOG(NETWORK, "GGPO stats %.1f s: %d frames (%.1f fps), %d rollbacks, %d frames simulated again (%d%%), longest frame %lld ms",
+			NOTICE_LOG(NETWORK, "GGPO stats %.1f s: %d frames (%.1f fps), %d rollbacks, %d frames simulated again (%d%%), longest frame %lld ms, "
+					"%d timesyncs (%d frames ahead in all), %d prediction barrier waits, %d frames held back",
 					secs, netStats.frames, netStats.frames / secs, netStats.rollbacks, std::max(0, again),
-					netStats.frames > 0 ? std::max(0, again) * 100 / netStats.frames : 0, longest);
+					netStats.frames > 0 ? std::max(0, again) * 100 / netStats.frames : 0, longest,
+					netStats.timesyncs, netStats.aheadSum, netStats.barrierWaits, netStats.holdBacks);
+#ifdef __EMSCRIPTEN__
+			// (the page's console has no core log without debug: the test pages read this)
+			EM_ASM({ (window._tcvrNetStats = window._tcvrNetStats || []).push({ secs: $0, frames: $1, rollbacks: $2, again: $3,
+					longest: $4, timesyncs: $5, ahead: $6, barrierWaits: $7, heldBack: $8 }); },
+					secs, netStats.frames, netStats.rollbacks, std::max(0, again), (int)longest,
+					netStats.timesyncs, netStats.aheadSum, netStats.barrierWaits, netStats.holdBacks);
+#endif
 			netStats = {};
 			longest = 0;
 			since = now;
@@ -1467,6 +1479,7 @@ bool browserTick()
 	if (timesyncWait > 0)
 	{
 		timesyncWait--;
+		netStats.holdBacks++;
 		ggpo_idle(ggpoSession, 0);
 		return false;
 	}
