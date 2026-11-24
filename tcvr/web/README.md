@@ -71,3 +71,11 @@ Every copy in a match must be built from the same commit: the host refuses anoth
   browser and routes it through the local server (browsers have no UDP).
 - LAN play needs HTTPS (secure context for SharedArrayBuffer and gamepads): step 4 server.
 - The libretro build has no ImGui: the browser multiplayer menu will be HTML in the page.
+
+## Player profiles
+
+A browser player types a 3-letter name on the start screen. The game's save card (VMU A1, kept by the core in
+`/data/saves` with the `reicast_per_content_vmus = VMU A1` option) is loaded from and saved to the local server
+(`GET/POST /profile?name=ABC`, files in `profiles/ABC.json` next to `serve.py`) every 15 s and when the page is
+left, so a player who comes back gets their saves from any browser or device. Matches use a blank card in memory
+on every player's copy, so only solo play uses the profile. Two players who pick the same name share one profile.

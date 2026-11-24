@@ -28,6 +28,7 @@
   #start button.main { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
   #start button:disabled { opacity: .5; cursor: default; }
   #start .dim { color: var(--dim); font-size: 13px; }
+  #start input { background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 16px; width: 4em; text-transform: uppercase; text-align: center; }
 </style>
 </head>
 <body>
@@ -74,6 +75,7 @@ function bootEmulator() {
     'reicast_frame_skipping': 'disabled',
     'reicast_gdrom_fast_loading': 'enabled',
     'reicast_enable_dsp': 'disabled',	// online the settings check compares it with the Quest and PC
+    'reicast_per_content_vmus': 'VMU A1',	// the game's save card in /data/saves: the player's profile (profiles below)
   };
   for (const src of ['tcvrnet.js', 'data/loader.js']) {
     const s = document.createElement('script');
@@ -153,6 +155,51 @@ async function lobbyLoop() {
   }
 }
 
+// Player profiles: the game's save card (VMU, in /data/saves) is kept by the local server under the player's
+// name (serve.py /profile), so a player who comes back gets it from any browser or device. Matches use a blank
+// card in memory (the same on every player's copy), so only solo play reads and writes the profile.
+const SAVES = '/data/saves';
+let profileName = '';
+let profileSent = '';
+const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+const unb64 = (t) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+function savesFS() { const e = window.EJS_emulator; return e && e.gameManager && e.gameManager.FS; }
+function readSaves(FS) {
+  const files = {};
+  try { for (const f of FS.readdir(SAVES)) if (f !== '.' && f !== '..' && FS.isFile(FS.stat(SAVES + '/' + f).mode)) files[f] = b64(FS.readFile(SAVES + '/' + f)); } catch (e) {}
+  return files;
+}
+async function profileLoad(name) {
+  let prof = { files: {} };
+  try { const r = await fetch('/profile?name=' + encodeURIComponent(name)); if (r.ok) prof = await r.json(); } catch (e) {}
+  // once EmulatorJS has mounted the save folder, before the game starts: this player's files only
+  const hook = setInterval(() => {
+    if (!window.EJS_emulator || !window.EJS_emulator.on) return;
+    clearInterval(hook);
+    window.EJS_emulator.on('saveDatabaseLoaded', (FS) => {
+      try {
+        for (const f of FS.readdir(SAVES)) if (f !== '.' && f !== '..' && FS.isFile(FS.stat(SAVES + '/' + f).mode)) FS.unlink(SAVES + '/' + f);
+        for (const [f, data] of Object.entries(prof.files || {})) FS.writeFile(SAVES + '/' + f, unb64(data));
+        profileSent = JSON.stringify(readSaves(FS));
+        console.log('tcvr profile ' + name + ': ' + Object.keys(prof.files || {}).length + ' file(s) loaded');
+      } catch (e) { console.warn('tcvr profile load', e); }
+    });
+  }, 20);
+  setInterval(() => profileSave(false), 15000);
+  addEventListener('pagehide', () => profileSave(true));
+  addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') profileSave(true); });
+}
+function profileSave(leaving) {
+  const FS = savesFS();
+  if (!profileName || !FS || !window.EJS_emulator.started) return;
+  const body = JSON.stringify(readSaves(FS));
+  if (body === profileSent || body === '{}') return;
+  const payload = '{"files":' + body + '}';
+  const url = '/profile?name=' + encodeURIComponent(profileName);
+  if (leaving && navigator.sendBeacon) { if (navigator.sendBeacon(url, payload)) profileSent = body; return; }
+  fetch(url, { method: 'POST', body: payload }).then((r) => { if (r.ok) profileSent = body; }).catch(() => {});
+}
+
 // Start screen: the game files (disc image and emulator) are downloaded once and kept by the browser
 // (EmulatorJS cache, IndexedDB 'EmulatorJS-Cache'). The player chooses to download them, or to play when
 // they are already there, or to clean that storage.
@@ -208,9 +255,18 @@ async function startScreen() {
     html += `<div>This device needs the game files first: ${need ? mb(need) : 'size unknown'}.<br><span class="dim">They are downloaded once from this local server and kept by the browser.</span></div>` +
       `<button class="main" id="go">Download game files${need ? ' (' + mb(need) + ')' : ''}</button>`;
   }
+  html += `<div class="dim">Your name <input id="pname" maxlength="3" value="${esc(myName)}"> keeps your saves on this server.</div>`;
   html += have.total ? `<button id="clean">Clean storage (${mb(have.total)})</button><div class="dim">Removes the downloaded game files from this browser.</div>` : '';
   box.innerHTML = html;
-  document.getElementById('go').onclick = () => { game.innerHTML = ''; bootEmulator(); };
+  document.getElementById('go').onclick = async () => {
+    const n = (document.getElementById('pname').value || 'WEB').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'WEB';
+    myName = profileName = n;
+    try { localStorage.setItem('tcvrName', n); } catch (e) {}
+    document.getElementById('go').disabled = true;
+    await profileLoad(n);
+    game.innerHTML = '';
+    bootEmulator();
+  };
   const clean = document.getElementById('clean');
   if (clean) clean.onclick = async () => {
     clean.disabled = true;

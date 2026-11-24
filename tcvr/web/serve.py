@@ -7,7 +7,7 @@ Results the page posts to /report are appended to results.log next to this file.
 
 Usage:  python serve.py --disc "<path to your .chd>" [--port 8642]
 """
-import argparse, http.server, json, os, sys, time, urllib.parse
+import argparse, base64, http.server, json, os, re, sys, time, urllib.parse
 
 import lobby, netbridge
 
@@ -15,6 +15,40 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "www")
 
 LOBBIES = lobby.Lobbies(log=lambda m: print(m, flush=True))
+
+# Player profiles: each browser player's save files (the game's VMU) are kept here, on this computer, under
+# the player's 3-letter name, so a player who comes back gets them from any browser or device.
+PROFILES = os.path.join(HERE, "profiles")
+PROFILE_MAX = 4 * 1024 * 1024
+NAME_OK = re.compile(r"^[A-Z0-9]{1,3}$")
+FILE_OK = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+def profile_path(name):
+    return os.path.join(PROFILES, name + ".json") if NAME_OK.match(name or "") else None
+
+def profile_read(name):
+    path = profile_path(name)
+    if path is None or not os.path.isfile(path):
+        return {"files": {}}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def profile_write(name, body):
+    path = profile_path(name)
+    if path is None:
+        return False
+    obj = json.loads(body.decode("utf-8"))
+    files = obj.get("files")
+    if not isinstance(files, dict) or not all(FILE_OK.match(k) and isinstance(v, str) for k, v in files.items()):
+        return False
+    for v in files.values():
+        base64.b64decode(v, validate=True)
+    os.makedirs(PROFILES, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"name": name, "saved": time.strftime("%Y-%m-%d %H:%M:%S"), "files": files}, f)
+    os.replace(tmp, path)
+    return True
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     disc = None
@@ -76,6 +110,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().translate_path(path)
 
     def do_GET(self):
+        if urllib.parse.urlparse(self.path).path == "/profile":
+            name = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name", [""])[0]
+            if profile_path(name) is None:
+                self.send_error(400)
+                return
+            self.send_json(profile_read(name))
+            return
         if urllib.parse.urlparse(self.path).path.startswith("/lobby/"):
             self.lobby_get(urllib.parse.urlparse(self.path))
             return
@@ -111,6 +152,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 out.write(data)
             self.send_response(204)
             self.end_headers()
+            return
+        if u.path == "/profile":
+            n = int(self.headers.get("Content-Length", "0"))
+            name = urllib.parse.parse_qs(u.query).get("name", [""])[0]
+            if n > PROFILE_MAX:
+                self.send_error(413)
+                return
+            try:
+                ok = profile_write(name, self.rfile.read(n))
+            except (ValueError, UnicodeDecodeError, OSError):
+                ok = False
+            self.send_json({"ok": ok}, 200 if ok else 400)
             return
         if u.path == "/lobby/cmd":
             n = int(self.headers.get("Content-Length", "0"))
