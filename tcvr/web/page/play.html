@@ -165,9 +165,29 @@ const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s 
 const unb64 = (t) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
 function savesFS() { const e = window.EJS_emulator; return e && e.gameManager && e.gameManager.FS; }
 function readSaves(FS) {
+  // the core keeps its save card in a folder of its own (Flycast/<game>.A1.bin): one level of folders
   const files = {};
-  try { for (const f of FS.readdir(SAVES)) if (f !== '.' && f !== '..' && FS.isFile(FS.stat(SAVES + '/' + f).mode)) files[f] = b64(FS.readFile(SAVES + '/' + f)); } catch (e) {}
+  const walk = (dir, rel, depth) => {
+    for (const f of FS.readdir(dir)) {
+      if (f === '.' || f === '..') continue;
+      const mode = FS.stat(dir + '/' + f).mode;
+      if (FS.isFile(mode)) files[rel + f] = b64(FS.readFile(dir + '/' + f));
+      else if (FS.isDir(mode) && depth < 1) walk(dir + '/' + f, rel + f + '/', depth + 1);
+    }
+  };
+  try { walk(SAVES, '', 0); } catch (e) {}
   return files;
+}
+function clearSaves(FS) {
+  const walk = (dir, depth) => {
+    for (const f of FS.readdir(dir)) {
+      if (f === '.' || f === '..') continue;
+      const mode = FS.stat(dir + '/' + f).mode;
+      if (FS.isFile(mode)) FS.unlink(dir + '/' + f);
+      else if (FS.isDir(mode) && depth < 1) walk(dir + '/' + f, depth + 1);
+    }
+  };
+  walk(SAVES, 0);
 }
 async function profileLoad(name) {
   let prof = { files: {} };
@@ -178,8 +198,12 @@ async function profileLoad(name) {
     clearInterval(hook);
     window.EJS_emulator.on('saveDatabaseLoaded', (FS) => {
       try {
-        for (const f of FS.readdir(SAVES)) if (f !== '.' && f !== '..' && FS.isFile(FS.stat(SAVES + '/' + f).mode)) FS.unlink(SAVES + '/' + f);
-        for (const [f, data] of Object.entries(prof.files || {})) FS.writeFile(SAVES + '/' + f, unb64(data));
+        clearSaves(FS);
+        for (const [f, data] of Object.entries(prof.files || {})) {
+          const parts = f.split('/');
+          if (parts.length === 2 && !FS.analyzePath(SAVES + '/' + parts[0]).exists) FS.mkdir(SAVES + '/' + parts[0]);
+          FS.writeFile(SAVES + '/' + f, unb64(data));
+        }
         profileSent = JSON.stringify(readSaves(FS));
         console.log('tcvr profile ' + name + ': ' + Object.keys(prof.files || {}).length + ' file(s) loaded');
       } catch (e) { console.warn('tcvr profile load', e); }

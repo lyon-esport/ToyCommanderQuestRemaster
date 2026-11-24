@@ -21,7 +21,7 @@ LOBBIES = lobby.Lobbies(log=lambda m: print(m, flush=True))
 PROFILES = os.path.join(HERE, "profiles")
 PROFILE_MAX = 4 * 1024 * 1024
 NAME_OK = re.compile(r"^[A-Z0-9]{1,3}$")
-FILE_OK = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+FILE_OK = re.compile(r"^([A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}/)?[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$")	# one folder level (the core's Flycast/)
 
 def profile_path(name):
     return os.path.join(PROFILES, name + ".json") if NAME_OK.match(name or "") else None
@@ -191,6 +191,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if "/report" not in str(args[0] if args else ""):
             sys.stderr.write("%s\n" % (fmt % args))
 
+def ipaddress_private_virtual(ip):
+    import ipaddress
+    return ipaddress.ip_address(ip) in ipaddress.ip_network("172.16.0.0/12")	# leakscan:allow (a network range, not an address)
+
 def lan_addresses():
     """This computer's IPv4 addresses that other devices on the network can use."""
     import socket
@@ -205,7 +209,8 @@ def lan_addresses():
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ip = info[4][0]
-            if ip not in found and not ip.startswith("127."):
+            # (Hyper-V/WSL/Docker virtual adapters are 172.16.0.0/12 on this kind of PC: other devices can't reach them)  # leakscan:allow
+            if ip not in found and not ip.startswith("127.") and not ip.startswith("169.254.") and not ipaddress_private_virtual(ip):
                 found.append(ip)
     except OSError:
         pass

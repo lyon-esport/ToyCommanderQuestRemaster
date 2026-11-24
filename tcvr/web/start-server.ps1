@@ -17,11 +17,14 @@ if (-not $py) {
   exit 1
 }
 # HTTPS (gamepads on tablets and phones) needs the cryptography package, installed once
+# (Windows PowerShell 5.1 stops on a native command's error text under "Stop": these two run under "Continue")
+$ErrorActionPreference = "Continue"
 & python -c "import cryptography" 2>$null
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Installing the cryptography package once (for HTTPS)..."
   & python -m pip install --user --quiet cryptography
 }
+$ErrorActionPreference = "Stop"
 $Host.UI.RawUI.WindowTitle = "Toy Commander server (close this window to stop it)"
 & python serve.py --disc $disc --host 0.0.0.0
 Read-Host "The server stopped. Press Enter to close"
