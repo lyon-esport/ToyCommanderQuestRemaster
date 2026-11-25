@@ -8,6 +8,8 @@
   :root { color-scheme: dark; --bg: #111; --panel: #1c1c1c; --line: #333; --text: #ddd; --dim: #999; --accent: #f0b429; --ok: #5ac46e; --bad: #e36060; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px system-ui, sans-serif; }
   #wrap { display: flex; gap: 16px; justify-content: center; padding: 16px; flex-wrap: wrap; }
+  #fs { position: fixed; left: 10px; top: 10px; z-index: 9999; background: rgba(0,0,0,.55); color: #fff; border: 1px solid rgba(255,255,255,.4); border-radius: 8px; padding: 10px 14px; font: 15px system-ui, sans-serif; cursor: pointer; touch-action: manipulation; }
+  #game:fullscreen { width: 100vw; height: 100vh; max-width: none; aspect-ratio: auto; background: #000; }
   #game { width: min(960px, calc(100vw - 400px)); min-width: 480px; max-width: 100%; aspect-ratio: 4 / 3; }
   #mp { width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; align-self: flex-start; }
   #mp h2 { margin: 0 0 10px; font-size: 16px; }
@@ -32,6 +34,7 @@
 </style>
 </head>
 <body>
+<button id="fs" type="button">Full screen</button>
 <div id="wrap">
   <div id="game"></div>
   <div id="mp"><h2>Multiplayer</h2><div id="mpBody" class="dim">Starting the game...</div></div>
@@ -299,6 +302,27 @@ async function startScreen() {
     startScreen();
   };
 }
+
+// Full screen: the game area alone, landscape where the device allows it (tablets and phones).
+// The button hides while in full screen; leaving full screen (Back, swipe, Esc) brings it back.
+(function () {
+  const btn = document.getElementById('fs');
+  const target = document.getElementById('game');
+  const canFs = target.requestFullscreen || target.webkitRequestFullscreen;
+  if (!canFs) { btn.style.display = 'none'; return; }
+  btn.onclick = async () => {
+    try {
+      await (target.requestFullscreen ? target.requestFullscreen({ navigationUI: 'hide' }) : target.webkitRequestFullscreen());
+      try { await screen.orientation.lock('landscape'); } catch (e) {}
+    } catch (e) { console.warn('full screen', e); }
+  };
+  const sync = () => {
+    btn.style.display = (document.fullscreenElement || document.webkitFullscreenElement) ? 'none' : '';
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);	// the emulator sizes its picture to its box
+  };
+  document.addEventListener('fullscreenchange', sync);
+  document.addEventListener('webkitfullscreenchange', sync);
+})();
 
 if (MATCH) {
   // a match: the host's start state first (raw bytes for the core), then the game
