@@ -173,6 +173,7 @@ function hostView(v) {
 
 async function lobbyLoop() {
   if (!window._tcvrIdentity) {
+    fetch(api('/lobby/view')).catch(() => {});	// still here (a game this page hosts stays open while it boots)
     render('<span class="dim">The multiplayer games show here once the game has started.</span>');
     return;
   }
@@ -387,13 +388,29 @@ async function startScreen() {
 
 if (MATCH) {
   // a match: the host's start state first (raw bytes for the core), then the game
-  render('<b>Match</b><div class="dim">Starting with the other players...</div><div class="row"><button id="back">Back to the lobby</button></div>');
-  document.getElementById('back').onclick = async () => { await cmd({ op: 'matchOver' }); const keep = new URLSearchParams(); for (const k of ['elf', 'syncall']) if (params.get(k)) keep.set(k, params.get(k)); location.replace(location.pathname + (keep.toString() ? '?' + keep : '')); };
+  render('<b>Match</b><div class="dim" id="mstate">Starting with the other players...</div><div class="row"><button id="back">Back to the lobby</button></div>');
+  const playing = setInterval(() => {
+    if (!window.EJS_emulator || !window.EJS_emulator.started) return;
+    clearInterval(playing);
+    document.getElementById('mstate').textContent = 'Playing. Back to the lobby leaves the match.';
+  }, 1000);
+  document.getElementById('back').onclick = async () => {
+    await cmd({ op: 'matchOver' });
+    // back in the lobby page at once: the game boots again without the start screen (lobby=1)
+    const keep = new URLSearchParams({ lobby: '1' });
+    for (const k of ['elf', 'syncall']) if (params.get(k)) keep.set(k, params.get(k));
+    location.replace(location.pathname + '?' + keep);
+  };
   const snap = params.get('snap');
   (snap ? fetch(api('/lobby/snap?id=' + encodeURIComponent(snap))).then((r) => r.ok ? r.arrayBuffer() : null) : Promise.resolve(null))
     .then((buf) => { if (buf) window._tcvrMatchState = new Uint8Array(buf); })
     .catch(() => {})
     .finally(bootEmulator);
+} else if (params.get('lobby') === '1') {
+  // back from a match: the player already chose, the game files are here; the same name and profile
+  profileName = myName;
+  profileLoad(myName).finally(() => { document.getElementById('game').innerHTML = ''; bootEmulator(); });
+  setInterval(() => { if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return; lobbyLoop(); }, 1000);
 } else {
   startScreen();	// a match page starts at once: the player already chose on the lobby page
   setInterval(() => { if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return; lobbyLoop(); }, 1000);
