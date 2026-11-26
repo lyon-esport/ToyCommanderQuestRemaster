@@ -25,6 +25,33 @@ if ($LASTEXITCODE -ne 0) {
   & python -m pip install --user --quiet cryptography
 }
 $ErrorActionPreference = "Stop"
+# The internet multiplayer server (tcvr-server, for headsets and PCs playing over the internet) starts too,
+# in its own window, when this computer has it: in a "tcvr-server" folder next to this script, or in the
+# folder named on the first line of internet-server.txt here. It keeps running from its own folder, where
+# its key file lives (the headsets remember that key).
+$inetDir = Join-Path $PSScriptRoot "tcvr-server"
+$inetCfg = Join-Path $PSScriptRoot "internet-server.txt"
+if (Test-Path -LiteralPath $inetCfg) {
+  $line = (Get-Content -LiteralPath $inetCfg -TotalCount 1)
+  if ($line) { $inetDir = $line.Trim().Trim('"') }
+}
+if ($inetDir -like "*.exe") { $inetDir = Split-Path -LiteralPath $inetDir }
+$inetExe = Join-Path $inetDir "tcvr-server.exe"
+if (Test-Path -LiteralPath $inetExe) {
+  if (Get-Process -Name "tcvr-server" -ErrorAction SilentlyContinue) {
+    Write-Host "The internet multiplayer server is already running."
+  } else {
+    $runner = Join-Path $inetDir "run-server.ps1"
+    if (Test-Path -LiteralPath $runner) {
+      Start-Process -FilePath "powershell.exe" -WorkingDirectory $inetDir -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", "`"$runner`"")
+    } else {
+      Start-Process -FilePath $inetExe -WorkingDirectory $inetDir -ArgumentList @(
+        "--port", "19800", "--key", "`"$(Join-Path $inetDir 'tcvr-server.key')`"")
+    }
+    Write-Host "Internet multiplayer server started in its own window (port 19800)."
+  }
+}
 $Host.UI.RawUI.WindowTitle = "Toy Commander server (close this window to stop it)"
 & python serve.py --disc $disc --host 0.0.0.0
 Read-Host "The server stopped. Press Enter to close"

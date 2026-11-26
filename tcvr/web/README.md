@@ -62,6 +62,12 @@ game); it shows up in the page's Multiplayer panel, Join, Ready, and the host st
 then loads again as the match: the host's match start state, the same automatic setup as on the
 other copies, GGPO through the server. Back to the lobby with the button under the panel.
 
+On Windows, "Start Toy Commander server.cmd" (start-server.ps1) does this with one double-click. It also
+starts the internet multiplayer server (tcvr/server, for headsets and PCs playing over the internet) in its
+own window when the computer has it: a `tcvr-server` folder next to the script, or the folder written on the
+first line of `internet-server.txt` (local file, not in git). That server keeps running from its own
+folder, where its key file is.
+
 Every copy in a match must be built from the same commit: the host refuses another app version
 (`git describe --tags`, so build from a full clone with the tags, not a shallow one).
 
