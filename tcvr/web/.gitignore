@@ -6,3 +6,7 @@ shots/
 dumps/
 __pycache__/
 internet-server.txt
+tcvr-host.json
+tcvr-host.json.tmp
+admin-password.txt
+logs/

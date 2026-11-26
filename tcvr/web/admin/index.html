@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toy Commander server admin</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1c2230; --muted: #667085; --line: #e3e6eb;
+  --accent: #2f6fde; --ok: #1f9d55; --bad: #d64545; --warn: #c98a00; --code: #f0f2f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --muted: #9aa3b2; --line: #2c3340;
+          --accent: #6b9bff; --ok: #44c47a; --bad: #ff6b6b; --warn: #f0b429; --code: #232a35; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav button { background: none; border: 0; padding: 7px 12px; border-radius: 6px; color: var(--muted); font: inherit; cursor: pointer; }
+nav button.on { background: var(--code); color: var(--text); font-weight: 600; }
+.grow { flex: 1; }
+main { padding: 20px; max-width: 1300px; margin: 0 auto; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.card h2 { font-size: 15px; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--muted); }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+.muted { color: var(--muted); }
+.err { color: var(--bad); }
+.small { font-size: 12.5px; }
+code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+.cmd { background: var(--code); padding: 6px 8px; border-radius: 6px; word-break: break-all; margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+tr:last-child td { border-bottom: 0; }
+.tablewrap { overflow-x: auto; }
+.stats { display: flex; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; min-width: 150px; }
+.stat b { display: block; font-size: 22px; }
+button.btn { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 12px; font: inherit; cursor: pointer; }
+button.btn.ghost { background: var(--code); color: var(--text); }
+button.btn:disabled { opacity: .5; cursor: default; }
+input, select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+input[type=number] { width: 110px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+#log { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; height: 65vh; overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; }
+#log .t { color: var(--muted); }
+.src { display: inline-block; min-width: 46px; font-weight: 600; }
+.src-mp { color: #8e5cd9; } .src-web { color: #1f8fb3; } .src-admin { color: var(--warn); } .src-host { color: var(--muted); }
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; }
+.kv { display: grid; grid-template-columns: 170px 1fr; gap: 6px 12px; align-items: center; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--code); font-size: 12px; }
+#signin { max-width: 380px; margin: 12vh auto; }
+.hidden { display: none !important; }
+#toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 14px; border-radius: 8px; max-width: 90vw; }
+</style>
+</head>
+<body>
+<div id="signin" class="card hidden">
+  <h2>Toy Commander server admin</h2>
+  <p class="muted small">The password is in the server window, and in <span class="mono">admin-password.txt</span> next to <span class="mono">tcvr_host.py</span>.</p>
+  <form id="loginform" class="row"><input id="pw" type="password" placeholder="Password" autocomplete="current-password" style="flex:1"><button class="btn">Sign in</button></form>
+  <p id="loginerr" class="err small"></p>
+</div>
+
+<div id="app" class="hidden">
+<header>
+  <h1>Toy Commander server</h1>
+  <nav id="tabs">
+    <button data-tab="overview" class="on">Overview</button>
+    <button data-tab="games">Games</button>
+    <button data-tab="players">Players &amp; computers</button>
+    <button data-tab="log">Connection log</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <span class="grow"></span>
+  <span id="updated" class="muted small"></span>
+  <button class="btn ghost" id="logout">Sign out</button>
+</header>
+<main>
+  <section id="tab-overview">
+    <div class="stats" id="stats"></div>
+    <div class="cards" id="services"></div>
+  </section>
+  <section id="tab-games" class="hidden">
+    <p class="muted small">Internet games are the ones on this computer's multiplayer server. Local network games are the ones the web server hears on the network (headsets, PCs and browsers that host a LAN game).</p>
+    <div class="tablewrap"><table><thead><tr><th>Where</th><th>Host</th><th>Players</th><th>Mode</th><th>State</th><th>Access</th><th>For</th></tr></thead><tbody id="games"></tbody></table></div>
+  </section>
+  <section id="tab-players" class="hidden">
+    <div class="tablewrap"><table><thead><tr><th>Connection</th><th>Name</th><th>Address</th><th>Device</th><th>Game</th><th>Link</th><th>Connected</th></tr></thead><tbody id="players"></tbody></table></div>
+  </section>
+  <section id="tab-log" class="hidden">
+    <div class="row" style="margin:0 0 10px">
+      <select id="logsrc"><option value="">Everything</option><option value="mp">Internet multiplayer</option><option value="web">Web browser</option><option value="admin">Admin page</option><option value="host">App</option></select>
+      <input id="logfind" placeholder="Search" style="flex:1; min-width:160px">
+      <label class="small"><input type="checkbox" id="logfollow" checked> Follow</label>
+    </div>
+    <div id="log"></div>
+  </section>
+  <section id="tab-settings" class="hidden">
+    <div class="settings" id="settings"></div>
+  </section>
+</main>
+</div>
+<div id="toast" class="hidden"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let state = null, logAfter = 0, logLines = [], timer = null, editing = false;
+
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function ago(t) {
+  if (!t) return "";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - t));
+  if (s < 60) return s + " s";
+  if (s < 3600) return Math.floor(s / 60) + " min";
+  if (s < 86400) return Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min";
+  return Math.floor(s / 86400) + " d";
+}
+function clock(t) { return new Date(t * 1000).toLocaleString(); }
+function toast(text) { const el = $("toast"); el.textContent = text; el.classList.remove("hidden"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.add("hidden"), 5000); }
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json", "X-TCVR-Admin": "1"}, body: JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  if (r.status === 401) { showSignin(); throw new Error("signin"); }
+  return r.json();
+}
+
+function showSignin() { $("app").classList.add("hidden"); $("signin").classList.remove("hidden"); clearInterval(timer); timer = null; $("pw").focus(); }
+function showApp() { $("signin").classList.add("hidden"); $("app").classList.remove("hidden"); if (!timer) { refresh(); timer = setInterval(refresh, 2000); } }
+
+$("loginform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("loginerr").textContent = "";
+  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json", "X-TCVR-Admin": "1"}, body: JSON.stringify({password: $("pw").value})});
+  const j = await r.json();
+  if (j.ok) { $("pw").value = ""; showApp(); } else $("loginerr").textContent = j.error || "Wrong password";
+});
+$("logout").onclick = async () => { await api("/api/logout", {}); showSignin(); };
+
+$("tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  for (const x of $("tabs").children) x.classList.toggle("on", x === b);
+  for (const s of document.querySelectorAll("main > section")) s.classList.toggle("hidden", s.id !== "tab-" + b.dataset.tab);
+  try { localStorage.setItem("tcvrAdminTab", b.dataset.tab); } catch (e) {}
+  if (b.dataset.tab === "settings") renderSettings(true);
+});
+
+async function refresh() {
+  try {
+    state = await api("/api/state");
+    const lg = await api("/api/log?after=" + logAfter);
+    if (lg.lines.length) { logAfter = lg.lines[lg.lines.length - 1].seq; logLines = logLines.concat(lg.lines).slice(-5000); renderLog(); }
+  } catch (e) { if (e.message !== "signin") $("updated").textContent = "Server not answering"; return; }
+  $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+  renderOverview(); renderGames(); renderPlayers(); renderSettings(false);
+}
+
+function renderOverview() {
+  const inet = state.players.filter(p => p.kind.startsWith("Internet")).length;
+  const web = state.players.filter(p => p.kind.startsWith("Web")).length;
+  $("stats").innerHTML = [
+    ["Games running", state.games.length], ["Internet players", inet], ["Browser players", web],
+    ["App running for", ago(state.settings.app.started)]].map(([k, v]) => `<div class="stat"><span class="muted small">${k}</span><b>${esc(v)}</b></div>`).join("");
+  $("services").innerHTML = state.services.map(s => {
+    const status = s.running ? `<span class="dot ok"></span>` : `<span class="dot ${s.error ? "bad" : ""}"></span>`;
+    const what = s.running ? `Running for ${ago(s.since)}` : (s.enabled ? "Stopped" : "Not started (not in --services)");
+    const btns = s.id === "admin" ? "" : (s.running
+      ? `<button class="btn ghost" data-svc="${s.id}" data-act="restart">Restart</button> <button class="btn ghost" data-svc="${s.id}" data-act="stop">Stop</button>`
+      : `<button class="btn" data-svc="${s.id}" data-act="start">Start</button>`);
+    return `<div class="card"><h2>${status}${esc(s.name)}</h2>
+      <div class="small">${what} · <span class="mono">${esc(s.ports)}</span></div>
+      ${s.error ? `<div class="err small">${esc(s.error)}</div>` : ""}
+      <div class="small" style="margin-top:6px">${s.urls.map(u => `<div class="mono">${esc(u)}</div>`).join("")}</div>
+      <details class="small" style="margin-top:6px"><summary class="muted">Windows Firewall command (PowerShell as administrator)</summary><div class="cmd mono">${esc(s.firewall)}</div></details>
+      <div class="row">${btns}</div></div>`;
+  }).join("");
+}
+$("services").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-svc]"); if (!b) return;
+  b.disabled = true;
+  const r = await api("/api/service", {service: b.dataset.svc, action: b.dataset.act});
+  toast(r.ok ? "Done" : (r.error || "It didn't work"));
+  refresh();
+});
+
+function renderGames() {
+  const rows = state.games.map(g => {
+    const players = g.players.length ? g.players.map(esc).join(", ") : (g.count != null ? g.count + " player" + (g.count === 1 ? "" : "s") : "");
+    const n = g.players.length || g.count || 0;
+    return `<tr><td>${esc(g.where)}${g.address ? `<div class="muted small mono">${esc(g.address)}</div>` : ""}</td><td>${esc(g.host)}</td>
+      <td>${players}${g.max ? ` <span class="muted">(${n}/${g.max})</span>` : ""}</td><td>${esc(g.mode)}</td>
+      <td>${g.started ? '<span class="pill">Match running</span>' : "Lobby"}${g.listed ? "" : ' <span class="muted small">(not listed)</span>'}</td>
+      <td>${g.private ? "Private (PIN)" : "Public"}</td><td>${g.since ? ago(g.since) : ""}</td></tr>`;
+  });
+  $("games").innerHTML = rows.join("") || `<tr><td colspan="7" class="muted">No game right now.</td></tr>`;
+}
+
+function renderPlayers() {
+  const rows = state.players.map(p => `<tr><td>${esc(p.kind)}</td><td>${esc(p.name) || '<span class="muted">-</span>'}</td>
+    <td class="mono">${esc(p.address)}${p.udp ? `<div class="muted small">UDP ${esc(p.udp)}</div>` : ""}</td><td>${esc(p.detail)}</td>
+    <td>${esc(p.game)}</td><td>${esc(p.link)}</td><td title="${esc(clock(p.since))}">${ago(p.since)}${p.last ? `<div class="muted small">last seen ${ago(p.last)} ago</div>` : ""}</td></tr>`);
+  const hs = state.handshaking ? `<tr><td colspan="7" class="muted small">${state.handshaking} connection(s) still saying hello to the internet server</td></tr>` : "";
+  $("players").innerHTML = rows.join("") + hs || `<tr><td colspan="7" class="muted">Nobody connected right now.</td></tr>`;
+}
+
+function renderLog() {
+  const src = $("logsrc").value, find = $("logfind").value.toLowerCase();
+  const el = $("log");
+  const lines = logLines.filter(l => (!src || l.source === src) && (!find || l.text.toLowerCase().includes(find)));
+  el.innerHTML = lines.map(l => `<div><span class="t">${esc(new Date(l.t * 1000).toLocaleString())}</span> <span class="src src-${esc(l.source)}">${esc(l.source)}</span> ${esc(l.text)}</div>`).join("");
+  if ($("logfollow").checked) el.scrollTop = el.scrollHeight;
+}
+$("logsrc").onchange = renderLog; $("logfind").oninput = renderLog;
+
+function field(section, key, value, kind, extra) {
+  const id = `f-${section}-${key}`;
+  if (kind === "select") return `<select id="${id}" data-s="${section}" data-k="${key}">${extra.map(o => `<option ${o === value ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  if (kind === "check") return `<input type="checkbox" id="${id}" data-s="${section}" data-k="${key}" ${value ? "checked" : ""}>`;
+  return `<input type="${kind}" id="${id}" data-s="${section}" data-k="${key}" value="${esc(value)}" ${kind === "text" ? 'style="width:100%"' : ""}>`;
+}
+function yes(b) { return b ? '<span style="color:var(--ok)">found</span>' : '<span class="err">not found</span>'; }
+
+function renderSettings(force) {
+  if (!state || (!force && (editing || $("tab-settings").classList.contains("hidden")))) return;
+  const s = state.settings, mp = s.mp, web = s.web, ad = s.admin, app = s.app;
+  $("settings").innerHTML = `
+  <div class="card"><h2>Internet multiplayer server</h2>
+    <div class="kv">
+      <div>Port (TCP + UDP)</div><div>${field("mp", "port", mp.port, "number")}</div>
+      <div>Games allowed</div><div>${field("mp", "games", mp.games, "select", ["all", "public", "private"])}</div>
+      <div>Max players connected</div><div>${field("mp", "max_clients", mp.max_clients, "number")}</div>
+      <div>Relay budget (KB/s each)</div><div>${field("mp", "relay_kbps", mp.relay_kbps, "number")}</div>
+      <div>More log lines</div><div>${field("mp", "verbose", mp.verbose, "check")}</div>
+      <div>Program folder</div><div>${field("mp", "folder", mp.folder, "text")}<div class="muted small mono">${esc(mp.folder_resolved)} (tcvr-server ${yes(mp.exe_found)})</div></div>
+      <div>Key file</div><div class="mono small">${esc(mp.key_file)}</div>
+      <div>Key fingerprint</div><div class="mono">${esc(mp.fingerprint || "(when running)")}</div>
+      <div>Version</div><div class="mono">${esc(mp.version ? mp.version + " (protocol " + mp.protocol + ")" : "(when running)")}</div>
+    </div>
+    <p class="muted small">With another port than 19800, players enter the address followed by <span class="mono">:port</span>, and the router must forward the new port.</p>
+    <div class="row"><button class="btn" data-save="mp">Save and restart</button></div></div>
+  <div class="card"><h2>Play in a web browser</h2>
+    <div class="kv">
+      <div>HTTP port</div><div>${field("web", "port", web.port, "number")}</div>
+      <div>HTTPS port (0 = none)</div><div>${field("web", "https_port", web.https_port, "number")}</div>
+      <div>Listen on</div><div>${field("web", "listen", web.listen, "text")}<div class="muted small">0.0.0.0 = the whole network, 127.0.0.1 = this computer only</div></div>
+      <div>Disc image</div><div>${field("web", "disc", web.disc, "text")}<div class="muted small mono">${esc(web.disc_resolved)} (${yes(web.disc_found)})</div></div>
+      <div>LAN games port</div><div class="mono">UDP ${esc(web.lobby_udp)} (fixed: the headsets use it)</div>
+      <div>Player profiles</div><div class="mono small">${esc(web.profiles)}</div>
+      <div>Game files</div><div class="mono small">${esc(web.www)}</div>
+    </div>
+    <div class="row"><button class="btn" data-save="web">Save and restart</button></div></div>
+  <div class="card"><h2>Admin page</h2>
+    <div class="kv">
+      <div>Port</div><div>${field("admin", "port", ad.port, "number")}</div>
+      <div>Protocol</div><div>${esc(ad.scheme.toUpperCase())}</div>
+      <div>Who may open it</div><div>${ad.allow === "any" ? "Anyone with the password" : "This computer and the local network, with the password"}<div class="muted small">Changed only in tcvr-host.json ("allow": "lan" or "any")</div></div>
+      <div>Password file</div><div class="mono small">${esc(ad.password_file)}</div>
+      <div>New password</div><div><input id="newpw" type="password" autocomplete="new-password" placeholder="8 characters or more"></div>
+    </div>
+    <div class="row"><button class="btn" data-save="admin">Save port (the page moves)</button><button class="btn ghost" id="setpw">Change password</button></div></div>
+  <div class="card"><h2>This app</h2>
+    <div class="kv">
+      <div>Started with</div><div class="mono">--services ${esc(app.services_at_start)}</div>
+      <div>Running since</div><div>${esc(clock(app.started))}</div>
+      <div>Computer addresses</div><div class="mono">${esc(app.computer_addresses.join(", ") || "-")}</div>
+      <div>Settings file</div><div class="mono small">${esc(app.config_file)}</div>
+      <div>Log folder</div><div class="mono small">${esc(app.log_folder)}</div>
+      <div>Python</div><div class="mono">${esc(app.python)}</div>
+    </div></div>`;
+}
+$("settings").addEventListener("focusin", () => { editing = true; });
+$("settings").addEventListener("focusout", () => { setTimeout(() => { editing = $("settings").contains(document.activeElement); }, 0); });
+$("settings").addEventListener("click", async (e) => {
+  if (e.target.id === "setpw") {
+    const r = await api("/api/password", {password: $("newpw").value});
+    toast(r.ok ? "Password changed" : r.error); if (r.ok) $("newpw").value = "";
+    return;
+  }
+  const b = e.target.closest("button[data-save]"); if (!b) return;
+  const sec = b.dataset.save, body = {[sec]: {}};
+  for (const el of document.querySelectorAll(`[data-s="${sec}"]`))
+    body[sec][el.dataset.k] = el.type === "checkbox" ? el.checked : (el.type === "number" ? Number(el.value) : el.value);
+  b.disabled = true;
+  const r = await api("/api/settings", body);
+  b.disabled = false; editing = false;
+  if (!r.ok) { toast(r.error); return; }
+  if (!r.changed.length) { toast("Nothing changed"); return; }
+  toast("Saved. If devices can't connect, run the firewall command shown on the Overview tab.");
+  if (r.redirect) { setTimeout(() => { location.href = r.redirect.replace("{host}", location.hostname); }, 1500); return; }
+  refresh(); renderSettings(true);
+});
+
+(function start() {
+  let tab = "overview";
+  try { tab = localStorage.getItem("tcvrAdminTab") || tab; } catch (e) {}
+  const b = document.querySelector(`#tabs button[data-tab="${tab}"]`); if (b) b.click();
+  fetch("/api/state").then(r => r.status === 401 ? showSignin() : showApp()).catch(showSignin);
+})();
+</script>
+</body>
+</html>

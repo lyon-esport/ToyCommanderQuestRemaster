@@ -92,3 +92,30 @@ A browser player types a 3-letter name on the start screen. The game's save card
 (`GET/POST /profile?name=ABC`, files in `profiles/ABC.json` next to `serve.py`) every 15 s and when the page is
 left, so a player who comes back gets their saves from any browser or device. Matches use a blank card in memory
 on every player's copy, so only solo play uses the profile. Two players who pick the same name share one profile.
+
+## The server app and its admin page (tcvr_host.py)
+
+`Start Toy Commander server.cmd` runs `tcvr_host.py`, one app for everything the server computer offers:
+
+| Service | `--services` word | Ports (defaults) |
+| --- | --- | --- |
+| Internet multiplayer (runs `tcvr-server` as a child, from `tcvr-server/` next to this file or the folder set in the settings) | `mp` | TCP + UDP 19800 |
+| Play in a web browser (serve.py's server, in the same process) | `web` | TCP 8642 (HTTP), 8643 (HTTPS), UDP 19790 (LAN games, fixed) |
+| Admin page | `admin` | TCP 8644 (HTTPS when the `cryptography` package is there) |
+
+Default: all three. `python tcvr_host.py --services mp,admin` starts only those (the .cmd passes its arguments on).
+
+The admin page shows the connection log of every service (also written to `logs/tcvr-host-<date>.log`), the
+running games (internet games from tcvr-server's `--status` file, LAN games heard on UDP 19790), the connected
+players and computers (headsets and PCs on the internet server, browsers using the web server, with their
+addresses), and every option. Ports and the internet server's options are changed there: the service restarts
+on the new values (and goes back to the old ones if it can't start), and the page shows the Windows Firewall
+command for the new port. A service can be started, stopped or restarted from the Overview tab.
+
+Settings live in `tcvr-host.json`, the admin password in `admin-password.txt` (both next to this file,
+gitignored, made on the first start; the password is shown in the server window). Protection: the password,
+plus the page answers only loopback and private (LAN) addresses unless `tcvr-host.json` has
+`"admin": {"allow": "any"}`. Note that a home router may show forwarded internet traffic as its own LAN
+address, so never forward the admin port on the router.
+
+Tests: `python test_tcvr_host.py` (admin API, password, LAN-only check, settings checks).
