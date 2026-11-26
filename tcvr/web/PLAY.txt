@@ -22,3 +22,15 @@ EACH PLAYER (computer, tablet or phone on the same network, Chrome or Edge)
    "Clean storage" removes the downloaded files from that browser.
 4. Multiplayer: create a game on a Quest headset or on the PC version; it shows in the Multiplayer panel.
    Join, then Ready. The host starts the match.
+
+THE ADMIN PAGE (on the server computer, or any device of the same network)
+1. The server window shows the admin page's address, for example https://localhost:8644/, and its password
+   (also kept in admin-password.txt in this folder).
+2. Open it, accept the certificate warning once (Advanced, then Proceed), type the password.
+3. Tabs: Overview (each service, its addresses, start/stop), Games, Players & computers, Connection log, Settings.
+   Settings changes the ports: the service restarts on the new port. The Overview tab then shows the
+   Windows Firewall command for the new port (run it in an administrator PowerShell).
+4. To start only some services, run in a PowerShell in this folder:
+     & ".\Start Toy Commander server.cmd" --services "mp,admin"
+   (mp = internet multiplayer, web = play in a browser, admin = admin page; default: all three)
+
