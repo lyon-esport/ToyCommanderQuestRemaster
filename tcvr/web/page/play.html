@@ -80,6 +80,26 @@ function bootEmulator() {
     'reicast_enable_dsp': 'disabled',	// online the settings check compares it with the Quest and PC
     'reicast_per_content_vmus': 'VMU A1',	// the game's save card in /data/saves: the player's profile (profiles below)
   };
+  // Xbox-style pads: each face button gives the Dreamcast button of the same name, as in the PC app
+  // (EmulatorJS slots follow the libretro pad, which the core turns around: B slot = DC A, A slot = DC B,
+  // Y slot = DC X, X slot = DC Y). Triggers LT/RT = DC L/R, Start = Start, sticks and D-pad unchanged.
+  window.EJS_defaultControls = { 0: {
+    0: { value2: 'BUTTON_1' },	// pad A -> DC A
+    8: { value2: 'BUTTON_2' },	// pad B -> DC B
+    1: { value2: 'BUTTON_3' },	// pad X -> DC X
+    9: { value2: 'BUTTON_4' },	// pad Y -> DC Y
+  } };
+  // the touch buttons hide while a physical gamepad is connected, and come back without one
+  setInterval(() => {
+    const e = window.EJS_emulator;
+    if (!e || !e.started || !e.touch || !e.frontend || !e.frontend.toggleVirtualGamepad) return;
+    const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter((p) => p && p.connected) : [];
+    const show = pads.length === 0;
+    if (show !== window._tcvrTouchPad) {
+      window._tcvrTouchPad = show;
+      e.frontend.toggleVirtualGamepad(show);
+    }
+  }, 1000);
   for (const src of ['tcvrnet.js', 'data/loader.js']) {
     const s = document.createElement('script');
     s.src = src;
