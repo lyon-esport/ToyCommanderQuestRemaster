@@ -70,7 +70,11 @@ server's account can read.
     --relay-kbps N    relay budget per headset, KB/s (default 256; a 4-player match needs about 20)
     --games KIND      which games players may host: all (default), public or private
     --verbose         more log lines
+    --status FILE     write the games and connected players there as JSON every 2 seconds
     --fingerprint     print the key's fingerprint and exit
+
+`tcvr/web/tcvr_host.py` (the one launcher for internet hosting, the browser version and the admin page)
+starts tcvr-server with `--status` and shows that file on its admin page.
 
 ## Tests
 

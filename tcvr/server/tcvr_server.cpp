@@ -11,7 +11,10 @@
 	One TCP and one UDP port, the same number (default 19800). Its long-term key lives in a key file made
 	on the first run; the games show its fingerprint and remember it for the server's name.
 
-	Usage: tcvr-server [--port N] [--key FILE] [--max-clients N] [--relay-kbps N] [--verbose]
+	Usage: tcvr-server [--port N] [--key FILE] [--max-clients N] [--relay-kbps N] [--verbose] [--status FILE]
+
+	--status FILE: the server writes its games and connected players there as JSON every 2 seconds (for the
+	admin page of tcvr/web/tcvr_host.py, which starts it).
 
 	This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 */
@@ -36,7 +39,9 @@
 #include <set>
 #include <string>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/stat.h>
 #endif
 
@@ -46,7 +51,7 @@ using asio::ip::udp;
 using Clock = std::chrono::steady_clock;
 
 #ifndef TCVR_SERVER_VERSION
-#define TCVR_SERVER_VERSION "1.1"
+#define TCVR_SERVER_VERSION "1.2"
 #endif
 
 namespace
@@ -77,7 +82,50 @@ struct Options
 	int idleSeconds = 30;						// no frame for this long (clients ping every 5 s): dropped
 	GamePolicy policy = GamePolicy::All;		// which games players may host here
 	int privateJoinsPerMinute = 10;				// per address: tries to join private games (slows PIN guessing)
+	std::string statusFile;						// games and players as JSON, for an admin page ("" = none)
 };
+
+// JSON string (names come from players: escape everything that isn't plain printable ASCII)
+std::string jsonText(const std::string& s)
+{
+	std::string out = "\"";
+	for (unsigned char ch : s)
+	{
+		if (ch == '"' || ch == '\\')
+		{
+			out += '\\';
+			out += (char)ch;
+		}
+		else if (ch < 0x20 || ch >= 0x7f)
+		{
+			char u[8];
+			std::snprintf(u, sizeof(u), "\\u%04x", ch);
+			out += u;
+		}
+		else
+			out += (char)ch;
+	}
+	return out + "\"";
+}
+
+// Replaces the file in one step, so a reader never sees half of it
+bool writeFileAtomic(const std::string& path, const std::string& text)
+{
+	const std::string tmp = path + ".tmp";
+	{
+		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+		if (!out)
+			return false;
+		out << text;
+		if (!out)
+			return false;
+	}
+#ifdef _WIN32
+	return MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+	return std::rename(tmp.c_str(), path.c_str()) == 0;
+#endif
+}
 
 // The server's long-term key: made on the first run, kept in a file (64 hex digits).
 bool loadOrMakeKey(const std::string& path, KeyPair& kp)
@@ -140,6 +188,9 @@ struct Client : std::enable_shared_from_this<Client>
 	bool writing = false;
 	Clock::time_point lastRx = Clock::now();
 	std::string name;
+	std::string appVersion;
+	std::time_t since = std::time(nullptr);
+	uint64_t relayBytes = 0;	// match packets the server passed on for it (no direct path)
 	Key memberKey {};
 	Key udpKey {};
 	Endpoint tcpFrom;
@@ -161,13 +212,14 @@ struct Game
 	std::vector<uint8_t> beacon;
 	bool listed = false;
 	bool isPrivate = false;
+	std::time_t since = std::time(nullptr);
 };
 
 class Server
 {
 public:
 	Server(asio::io_context& io, const Options& opt, const KeyPair& key)
-		: io(io), opt(opt), key(key), acceptor(io), udpSock(io), tick(io) {}
+		: io(io), opt(opt), key(key), acceptor(io), udpSock(io), tick(io), started(std::time(nullptr)) {}
 
 	// One server per port. On Windows SO_REUSEADDR lets a second copy bind the same port and steal
 	// connections, so ask for exclusive use there; elsewhere SO_REUSEADDR only allows a quick restart.
@@ -291,6 +343,9 @@ private:
 	std::map<uint32_t, std::deque<Clock::time_point>> privateJoins;	// by IPv4 address
 	uint32_t nextClient = 1;
 	uint32_t nextGame = 1;
+	std::time_t started;
+	int statusCountdown = 0;
+	bool statusFailed = false;
 	udp::endpoint udpFrom;
 	uint8_t udpBuf[2048];
 
@@ -450,6 +505,8 @@ private:
 				nextClient = nextClient >= (1u << 24) ? 1 : nextClient + 1;
 			c->id = nextClient++;
 			c->name = h.name;
+			c->appVersion = h.appVersion;
+			c->since = std::time(nullptr);
 			c->memberKey = h.memberKey;
 			c->lanAddrs = h.lanAddrs;
 			randomBytes(c->udpKey.data(), c->udpKey.size());
@@ -463,7 +520,8 @@ private:
 			w.seenAs = c->tcpFrom;
 			w.policy = opt.policy;
 			write(c, encode(w));
-			logLine("%s connected, app %s (%zu connected)", c->label().c_str(), h.appVersion.c_str(), clients.size());
+			logLine("%s connected from %s, app %s (%zu connected)", c->label().c_str(), c->tcpFrom.address().c_str(),
+					h.appVersion.c_str(), clients.size());
 			return;
 		}
 		switch (type)
@@ -737,6 +795,7 @@ private:
 				return;
 			if (!spend(*c, payload.size()))
 				return;
+			c->relayBytes += payload.size();
 			Writer w;
 			w.u32(c->id);
 			w.bytes(payload.data() + 4, payload.size() - 4);
@@ -770,6 +829,66 @@ private:
 		return true;
 	}
 
+	// ---- status for an admin page (--status FILE)
+
+	void writeStatus()
+	{
+		std::string j = "{\"version\":" + jsonText(TCVR_SERVER_VERSION);
+		j += ",\"protocol\":" + std::to_string(ProtocolVersion);
+		j += ",\"port\":" + std::to_string(opt.port);
+		j += ",\"games_policy\":" + jsonText(policyText(opt.policy));
+		j += ",\"max_clients\":" + std::to_string(opt.maxClients);
+		j += ",\"relay_kbps\":" + std::to_string(opt.relayBytesPerSecond / 1024);
+		j += ",\"fingerprint\":" + jsonText(fingerprint(key.pub));
+		j += ",\"started\":" + std::to_string((long long)started);
+		j += ",\"now\":" + std::to_string((long long)std::time(nullptr));
+		j += ",\"handshaking\":" + std::to_string(pending.size());
+		j += ",\"clients\":[";
+		bool first = true;
+		for (auto& [id, c] : clients)
+		{
+			if (!first)
+				j += ",";
+			first = false;
+			j += "{\"id\":" + std::to_string(id);
+			j += ",\"name\":" + jsonText(c->name);
+			j += ",\"app\":" + jsonText(c->appVersion);
+			j += ",\"address\":" + jsonText(c->tcpFrom.address());
+			j += ",\"udp\":" + jsonText(c->udp.valid() ? c->udp.text() : "");
+			j += ",\"since\":" + std::to_string((long long)c->since);
+			j += ",\"game\":" + std::to_string(c->game);
+			j += ",\"relay_bytes\":" + std::to_string(c->relayBytes) + "}";
+		}
+		j += "],\"games\":[";
+		first = true;
+		for (auto& [id, g] : games)
+		{
+			if (!first)
+				j += ",";
+			first = false;
+			j += "{\"id\":" + std::to_string(id);
+			j += ",\"owner\":" + std::to_string(g.owner);
+			j += std::string(",\"private\":") + (g.isPrivate ? "true" : "false");
+			j += std::string(",\"listed\":") + (g.listed ? "true" : "false");
+			j += ",\"since\":" + std::to_string((long long)g.since);
+			j += ",\"members\":[";
+			bool f2 = true;
+			for (uint32_t m : g.members)
+			{
+				if (!f2)
+					j += ",";
+				f2 = false;
+				j += std::to_string(m);
+			}
+			j += "],\"beacon\":" + jsonText(toHex(g.beacon.data(), g.beacon.size())) + "}";
+		}
+		j += "]}\n";
+		const bool ok = writeFileAtomic(opt.statusFile, j);
+		if (!ok && !statusFailed)
+			logLine("Can't write the status file %s", opt.statusFile.c_str());
+		statusFailed = !ok;
+	}
+
 	void sendUdp(const ClientPtr& c, UdpType type, const std::vector<uint8_t>& payload, const udp::endpoint& to)
 	{
 		auto data = std::make_shared<std::vector<uint8_t>>(sealServerUdp(type, c->id, payload, c->udpKey));
@@ -794,6 +913,11 @@ private:
 					idle.push_back(c);
 			for (const ClientPtr& c : idle)
 				close(c, "timed out");
+			if (!opt.statusFile.empty() && --statusCountdown <= 0)
+			{
+				statusCountdown = 2;
+				writeStatus();
+			}
 			onTick();
 		});
 	}
@@ -810,6 +934,7 @@ void usage()
 		"  --relay-kbps N    relay budget per player in KB/s (default 256)\n"
 		"  --games KIND      which games players may host: all (default), public or private\n"
 		"  --verbose         more log lines\n"
+		"  --status FILE     write the games and players there as JSON every 2 s (for an admin page)\n"
 		"  --fingerprint     print the key's fingerprint and exit\n",
 		TCVR_SERVER_VERSION, DefaultServerPort);
 }
@@ -842,6 +967,8 @@ int main(int argc, char **argv)
 			opt.relayBytesPerSecond = (size_t)std::max(1, std::atoi(value().c_str())) * 1024;
 		else if (a == "--verbose")
 			verbose = true;
+		else if (a == "--status")
+			opt.statusFile = value();
 		else if (a == "--games")
 		{
 			const std::string v = value();
