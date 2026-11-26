@@ -14,7 +14,8 @@ import lobby, netbridge
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "www")
 
-LOBBIES = lobby.Lobbies(log=lambda m: print(m, flush=True))
+LOBBIES = lobby.Lobbies(log=lambda m: print(m, flush=True),
+                        address_of_server=lambda: (lan_addresses() or ["127.0.0.1"])[0])	# a game a page creates
 
 # Player profiles: each browser player's save files (the game's VMU) are kept here, on this computer, under
 # the player's 3-letter name, so a player who comes back gets them from any browser or device.
@@ -68,7 +69,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if u.path == "/lobby/games":
             self.send_json(LOBBIES.games())
         elif u.path == "/lobby/view" and cid:
-            v = LOBBIES.joiner(cid).get_view()
+            v = LOBBIES.view(cid)
             v["peers"] = lobby.peer_list(v)
             self.send_json(v)
         elif u.path == "/lobby/snap" and cid:

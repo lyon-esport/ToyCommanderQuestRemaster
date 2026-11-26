@@ -134,6 +134,43 @@ async function goToMatch(v) {
   location.replace(location.pathname + '?' + q.toString());
 }
 
+// A game this page creates (the local server hosts it for the page, lobby.py Host): the host's choices
+// (tcvr_lobby.cpp limitValue: points, or seconds in Cat and Mice; index 10 is the game's default)
+const LIMIT_STEPS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100];
+const CAT_SECONDS = [0, 30, 60, 90, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960, 1020, 1080, 1140];
+const limitValue = (mode, i) => (mode === 1 ? CAT_SECONDS : LIMIT_STEPS)[i];
+const limitText = (mode, v) => v === 0 ? 'No limit' : mode !== 1 ? `${v} point${v === 1 ? '' : 's'} to win`
+  : `${Math.floor(v / 60)} min${v % 60 ? ' ' + (v % 60) + ' s' : ''} time limit`;
+let hostSettings = { mode: 0, room: 0, points: limitValue(0, 10) };
+try { Object.assign(hostSettings, JSON.parse(localStorage.getItem('tcvrHostSettings') || '{}')); } catch (e) {}
+
+function hostView(v) {
+  const st = v.state, s = st.settings;
+  const opts = (list, cur) => list.map(([val, text]) => `<option value="${val}"${val === cur ? ' selected' : ''}>${esc(text)}</option>`).join('');
+  const steps = (s.mode === 1 ? CAT_SECONDS : LIMIT_STEPS).map((x) => [x, limitText(s.mode, x)]);
+  const players = st.players.map((p, i) => p.present
+    ? `<li><span>${esc(p.name)}${i === 0 ? ' <span class="dim">(you, host)</span>' : ''}</span>` +
+      `<span class="${p.ready || i === 0 ? 'ready' : 'dim'}">${i === 0 ? '' : p.ready ? 'Ready' : 'Not ready'}</span></li>` : '').join('');
+  render(`<div><b>Your game</b> <span class="dim">(others join it from their game list, or by the address ${esc(v.hostAddress)})</span></div>` +
+    `<div class="row"><select id="hmode">${opts(MODES.map((m, i) => [i, m]), s.mode)}</select>` +
+    `<select id="hroom">${opts(ROOMS.map((r, i) => [i, r]), s.room)}</select>` +
+    `<select id="hpoints">${opts(steps, s.points)}</select></div>` +
+    `<ul>${players}</ul>` +
+    `<div class="row"><button class="main" id="hstart"${v.canStart ? '' : ' disabled'}>Start the match</button><button id="leave">Leave</button></div>` +
+    `<div class="dim">${v.canStart ? 'Everybody is ready.' : esc(v.why)} The match starts from the game's power-on (about 30 s of automatic setup).</div>`);
+  const change = () => {
+    const mode = +document.getElementById('hmode').value;
+    let points = +document.getElementById('hpoints').value;
+    if (mode !== s.mode) points = limitValue(mode, 10);
+    hostSettings = { mode, room: +document.getElementById('hroom').value, points };
+    try { localStorage.setItem('tcvrHostSettings', JSON.stringify(hostSettings)); } catch (e) {}
+    cmd({ op: 'settings', settings: hostSettings }).then(lobbyLoop);
+  };
+  for (const k of ['hmode', 'hroom', 'hpoints']) document.getElementById(k).onchange = change;
+  document.getElementById('hstart').onclick = () => cmd({ op: 'start' }).then(lobbyLoop);
+  document.getElementById('leave').onclick = () => cmd({ op: 'leave' }).then(lobbyLoop);
+}
+
 async function lobbyLoop() {
   if (!window._tcvrIdentity) {
     render('<span class="dim">The multiplayer games show here once the game has started.</span>');
@@ -143,6 +180,7 @@ async function lobbyLoop() {
   try { v = await (await fetch(api('/lobby/view'))).json(); } catch (e) { render('<div class="msg">The local server does not answer.</div>'); return; }
   if (v.phase === 'started' && v.start) { render('<b>The match is starting...</b>'); goToMatch(v); return; }
   if (v.phase === 'connecting') { render('<span class="dim">Joining the game...</span>'); return; }
+  if (v.role === 'host' && v.phase === 'inLobby' && v.state) { hostView(v); return; }
   if (v.phase === 'inLobby' && v.state) {
     const st = v.state;
     const players = st.players.map((p, i) => p.present
@@ -167,8 +205,11 @@ async function lobbyLoop() {
   }).join('');
   const msg = v.phase === 'refused' || v.phase === 'hostLeft' || v.phase === 'failed' ? `<div class="msg">${esc(v.message)}</div>` : '';
   render(`${msg}<div class="row">Your name <input class="name" id="name" maxlength="3" value="${esc(myName)}"></div>` +
-    (list ? `<ul>${list}</ul>` : '<div class="dim">Looking for games on this network... Create a game on a headset or a PC.</div>') +
-    `<div class="row"><input id="addr" placeholder="Address" size="14"><button id="ask">Find</button></div>`);
+    (list ? `<ul>${list}</ul>` : '<div class="dim">Looking for games on this network...</div>') +
+    `<div class="row"><input id="addr" placeholder="Address" size="14"><button id="ask">Find</button></div>` +
+    `<div class="row"><button class="main" id="create">Create a game</button></div>`);
+  document.getElementById('create').onclick = () => cmd({ op: 'host', name: myName, version: id.version, gameId: id.gameId,
+    disc: id.disc, settings: hostSettings }).then(lobbyLoop);
   const nameInput = document.getElementById('name');
   nameInput.onchange = () => { myName = (nameInput.value || 'WEB').toUpperCase().slice(0, 3); try { localStorage.setItem('tcvrName', myName); } catch (e) {} };
   document.getElementById('ask').onclick = () => cmd({ op: 'query', address: document.getElementById('addr').value.trim() });
@@ -355,7 +396,7 @@ if (MATCH) {
     .finally(bootEmulator);
 } else {
   startScreen();	// a match page starts at once: the player already chose on the lobby page
-  setInterval(() => { if (document.activeElement && document.activeElement.tagName === 'INPUT') return; lobbyLoop(); }, 1000);
+  setInterval(() => { if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return; lobbyLoop(); }, 1000);
 }
 </script>
 </body>

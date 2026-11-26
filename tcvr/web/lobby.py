@@ -17,11 +17,15 @@ joiner, and the page drives it over HTTP with small JSON messages (serve.py):
 cid tells the browser players of one server apart (each tab keeps its own). The lobby connection
 lives in the server, so it stays up while the page reloads into the match and back.
 
-Browser players only join (no hosting, no host handover to them: they announce no standby port).
+A browser player can also create a game (POST /lobby/cmd {"op":"host",...}): the server then hosts it
+for the page as the app does (beacons, the TCP lobby, STATE, START), and the page drives it with
+{"op":"settings",...}, {"op":"start"} and {"op":"leave"}. A browser host offers no match start state, so
+its matches start the long way (power-on and the automatic setup, about 30 s). Browser players take no
+part in host handover (they announce no standby port): when a browser host leaves, its game ends.
 
 This file is part of Flycast and is distributed under the GNU GPL v2 or later.
 """
-import socket, struct, threading, time, zlib
+import os, socket, struct, threading, time, zlib
 
 MAX_PLAYERS = 4
 DISCOVERY_PORT = 19790
@@ -287,6 +291,7 @@ class Discovery:
         self.lock = threading.Lock()
         self.seen = {}		# (hostId, address) -> (time, beacon)
         self.sock = None
+        self.hosts = []		# the games this server hosts for its pages: they answer queries (Host)
 
     def start(self):
         if self.sock is not None:
@@ -315,7 +320,10 @@ class Discovery:
             except OSError:
                 return
             kind, b = decode_datagram(data)
-            if kind == "beacon":
+            if kind == "query":
+                for h in list(self.hosts):
+                    h.answer_query(ip)
+            elif kind == "beacon":
                 with self.lock:
                     self.seen[(b["hostId"], ip)] = (time.monotonic(), b)
 
@@ -327,6 +335,14 @@ class Discovery:
             self.sock.sendto(encode_query(), (address, self.port))
         except OSError as e:
             self.log("lobby: query to %s failed: %s" % (address, e))
+
+    def send(self, data, address):
+        if self.sock is None and not self.start():
+            return
+        try:
+            self.sock.sendto(data, (address, self.port))
+        except OSError:
+            pass
 
     def games(self):
         now = time.monotonic()
@@ -568,6 +584,363 @@ class Joiner:
         self._send(sock, SNAPOK, encode_snapok(m["players"], m["id"]))
 
 
+# ---- a game created by a browser player -------------------------------------------------------
+
+LIMIT_STEPS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100]
+CAT_SECONDS = [0, 30, 60, 90, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960, 1020,
+               1080, 1140]
+DEFAULT_LIMIT_INDEX = 10
+MATCH_INPUT_DELAY = 2		# as the app (gui_tcvr_mp.cpp MatchInputDelay)
+PAGE_GONE_S = 15.0			# a host page that stops asking for its lobby this long has left
+PAGE_GONE_MATCH_S = 3 * 3600.0	# (in a match the page does not ask)
+
+
+def limit_value(mode, index):
+    index = max(0, min(index, len(LIMIT_STEPS) - 1))
+    return CAT_SECONDS[index] if mode == 1 else LIMIT_STEPS[index]
+
+
+def clean_settings(s):
+    mode = max(0, min(int(s.get("mode", 0)), 2))
+    room = max(0, min(int(s.get("room", 0)), 7))
+    points = max(0, min(int(s.get("points", limit_value(mode, DEFAULT_LIMIT_INDEX))), 0xFFFF))
+    return {"mode": mode, "room": room, "points": points}
+
+
+class HostConn:
+    def __init__(self, sock, address):
+        self.sock, self.address = sock, address
+        self.slot = -1
+        self.ggpo_port = self.lobby_port = 0
+        self.last_rx = time.monotonic()
+        self.closed = False
+        self.wlock = threading.Lock()
+
+
+class Host:
+    """A game a browser player created: the host side of tcvr_lobby.cpp, run by this server for the page.
+    The page is the host player (slot 0); its GGPO port is a UDP port of this server (netbridge.py)."""
+
+    def __init__(self, discovery, address_of_server, log=print, ping_s=PING_S, drop_s=DROP_S, beacon_s=1.0):
+        self.discovery, self.address_of_server, self.log = discovery, address_of_server, log
+        self.ping_s, self.drop_s, self.beacon_s = ping_s, drop_s, beacon_s
+        self.lock = threading.Lock()
+        self.srv = None
+        self.hosting = False
+
+    # -- the page's commands
+
+    def host(self, name, version, game_id, disc, settings, ggpo_port):
+        self.leave()
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            srv.bind(("0.0.0.0", 0))
+            srv.listen(8)
+        except OSError as e:
+            srv.close()
+            self.log("lobby: cannot open a game: %s" % e)
+            return False
+        with self.lock:
+            self.srv = srv
+            self.port = srv.getsockname()[1]
+            self.me = {"name": clean_name(name), "version": version, "gameId": game_id, "disc": bytes(disc)[:16].ljust(16, b"\0")}
+            self.ggpo_port = ggpo_port
+            self.settings = clean_settings(settings)
+            self.host_id = 0
+            while self.host_id == 0:
+                self.host_id = struct.unpack("<I", os.urandom(4))[0]
+            self.slots = [None] * MAX_PLAYERS
+            self.names = [""] * MAX_PLAYERS
+            self.ready = [False] * MAX_PLAYERS
+            self.conns = []
+            self.revision = 0
+            self.started = False
+            self.start_info = None
+            self.seen = time.monotonic()
+            self.hosting = True
+            self.gen = getattr(self, "gen", 0) + 1
+            gen = self.gen
+        self.discovery.start()
+        if self not in self.discovery.hosts:
+            self.discovery.hosts.append(self)
+        threading.Thread(target=self._accept, args=(gen, srv), daemon=True).start()
+        threading.Thread(target=self._tick, args=(gen,), daemon=True).start()
+        self.log("lobby: %s created a game (%s), lobby port %d" % (self.me["name"], MODE_NAMES[self.settings["mode"]], self.port))
+        return True
+
+    def set_settings(self, settings):
+        with self.lock:
+            if not self.hosting or self.started:
+                return
+            s = clean_settings(settings)
+            if s == self.settings:
+                return
+            self.settings = s
+        self._publish()
+
+    def can_start(self):
+        """("", True) or (why not, False)."""
+        with self.lock:
+            return self._can_start()
+
+    def _can_start(self):
+        if not self.hosting or self.started:
+            return "Not hosting", False
+        joined = [i for i in range(1, MAX_PLAYERS) if self.slots[i]]
+        if not joined:
+            return "Waiting for another player", False
+        if not all(self.ready[i] for i in joined):
+            return "Waiting for the players to be ready", False
+        return "", True
+
+    def start(self):
+        with self.lock:
+            why, ok = self._can_start()
+            if not ok:
+                return False
+            order = [0] + [i for i in range(1, MAX_PLAYERS) if self.slots[i]]
+            base = {"peers": [{"address": "" if i == 0 else self.slots[i].address,
+                               "port": self.ggpo_port if i == 0 else self.slots[i].ggpo_port} for i in order],
+                    "inputDelay": MATCH_INPUT_DELAY, "sessionId": struct.unpack("<I", os.urandom(4))[0],
+                    "settings": dict(self.settings), "snapshot": ""}
+            self.started = True
+            sends = []
+            for k, i in enumerate(order):
+                mine = dict(base, localIndex=k)
+                if i == 0:
+                    self.start_info = mine
+                else:
+                    sends.append((self.slots[i], encode_start(mine)))
+        for c, p in sends:
+            self._send(c, START, p)
+        self.log("lobby: the browser host started a match of %d players" % len(order))
+        return True
+
+    def match_over(self):
+        with self.lock:
+            if not self.hosting or not self.started:
+                return
+            self.started = False
+            self.start_info = None
+            self.ready = [False] * MAX_PLAYERS
+            now = self.seen = time.monotonic()
+            for c in self.conns:
+                c.last_rx = max(c.last_rx, now - self.ping_s)
+        self._publish()
+
+    def leave(self):
+        with self.lock:
+            if not self.hosting:
+                return
+            self.hosting = False
+            self.gen += 1
+            conns, self.conns = self.conns, []
+            srv, self.srv = self.srv, None
+        if self in self.discovery.hosts:
+            self.discovery.hosts.remove(self)
+        for c in conns:
+            self._send(c, LEAVE)
+            self._close(c)
+        try:
+            srv.close()
+        except OSError:
+            pass
+
+    def get_view(self):
+        with self.lock:
+            if not self.hosting:
+                return None
+            self.seen = time.monotonic()		# the page is there (it asks every second in the lobby)
+            why, ok = self._can_start()
+            return {"role": "host", "phase": "started" if self.started else "inLobby", "message": "", "mySlot": 0,
+                    "state": self._state(), "start": self.start_info, "hostAddress": self.address_of_server(),
+                    "lobbyPort": self.port, "refuse": 0, "ggpoPort": self.ggpo_port, "ready": True, "snapshots": [],
+                    "canStart": ok, "why": why}
+
+    # -- the lobby
+
+    def _state(self):
+        players = []
+        for i in range(MAX_PLAYERS):
+            if i == 0:
+                players.append({"present": True, "name": self.me["name"], "ready": True, "address": "",
+                                "ggpoPort": self.ggpo_port, "lobbyPort": self.port})
+            elif self.slots[i]:
+                c = self.slots[i]
+                players.append({"present": True, "name": self.names[i], "ready": self.ready[i], "address": c.address,
+                                "ggpoPort": c.ggpo_port, "lobbyPort": c.lobby_port})
+            else:
+                players.append({"present": False})
+        return {"revision": self.revision, "settings": dict(self.settings), "lobbyId": self.host_id, "hostSlot": 0,
+                "players": players}
+
+    def _beacon(self):
+        return encode_beacon({"hostId": self.host_id, "version": self.me["version"], "gameId": self.me["gameId"],
+                              "hostName": self.me["name"], "settings": self.settings,
+                              "players": 1 + sum(1 for c in self.slots if c), "maxPlayers": MAX_PLAYERS,
+                              "lobbyPort": self.port, "started": self.started})
+
+    def answer_query(self, address):
+        with self.lock:
+            if not self.hosting or self.started:
+                return
+            data = self._beacon()
+        self.discovery.send(data, address)
+
+    def _publish(self):
+        with self.lock:
+            if not self.hosting:
+                return
+            self.revision += 1
+            payload = encode_state(self._state())
+            targets = [c for c in self.slots if c]
+        for c in targets:
+            self._send(c, STATE, payload)
+
+    def _send(self, c, msg_type, payload=b""):
+        try:
+            with c.wlock:
+                c.sock.sendall(frame(msg_type, payload))
+        except OSError:
+            pass
+
+    def _close(self, c):
+        c.closed = True
+        try:
+            c.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            c.sock.close()
+        except OSError:
+            pass
+
+    def _drop(self, c):
+        """A player's connection is gone."""
+        with self.lock:
+            if c.closed:
+                return
+            changed = c.slot >= 0 and self.slots[c.slot] is c
+            if changed:
+                self.slots[c.slot] = None
+                self.ready[c.slot] = False
+            if c in self.conns:
+                self.conns.remove(c)
+        self._close(c)
+        if changed:
+            self._publish()
+
+    def _accept(self, gen, srv):
+        while True:
+            try:
+                sock, (ip, _) = srv.accept()
+            except OSError:
+                return
+            with self.lock:
+                if gen != self.gen:
+                    sock.close()
+                    return
+                c = HostConn(sock, ip)
+                self.conns.append(c)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            threading.Thread(target=self._read, args=(gen, c), daemon=True).start()
+
+    def _read(self, gen, c):
+        parser = FrameParser()
+        while True:
+            try:
+                data = c.sock.recv(65536)
+            except OSError:
+                data = b""
+            if not data:
+                self._drop(c)
+                return
+            c.last_rx = time.monotonic()
+            frames = parser.feed(data)
+            if frames is None:
+                self._drop(c)
+                return
+            for t, p in frames:
+                if not self._on_frame(gen, c, t, p):
+                    return
+
+    def _on_frame(self, gen, c, t, p):
+        if t == HELLO:
+            h = decode_hello(p)
+            with self.lock:
+                if gen != self.gen or c.slot >= 0 or h is None:
+                    h = None
+                else:
+                    free = [i for i in range(1, MAX_PLAYERS) if not self.slots[i]]
+                    why = 0
+                    if self.started:
+                        why = 4
+                    elif h["protocol"] != PROTOCOL or h["version"] != self.me["version"]:
+                        why = 2
+                    elif h["disc"] != self.me["disc"]:
+                        why = 3
+                    elif not free:
+                        why = 1
+                    if not why:
+                        slot = free[0]
+                        c.slot, c.ggpo_port, c.lobby_port = slot, h["ggpoPort"], h.get("lobbyPort", 0)
+                        self.slots[slot], self.names[slot], self.ready[slot] = c, h["name"], False
+            if h is None:
+                self._drop(c)
+                return False
+            if why:
+                self._send(c, REFUSE, bytes([why]))
+                self.log("lobby: refused %s (%s)" % (h["name"], REFUSE_TEXT.get(why, why)))
+                time.sleep(0.2)
+                self._drop(c)
+                return False
+            self._send(c, WELCOME, bytes([slot]))
+            self.log("lobby: %s joined the browser game (slot %d)" % (h["name"], slot))
+            self._publish()
+        elif t == READY:
+            with self.lock:
+                changed = c.slot >= 0 and len(p) >= 1 and self.ready[c.slot] != (p[0] != 0)
+                if changed:
+                    self.ready[c.slot] = p[0] != 0
+            if changed:
+                self._publish()
+        elif t == LEAVE:
+            self._drop(c)
+            return False
+        return True		# PING (its arrival is what counts), SNAPOK (no states offered)
+
+    def _tick(self, gen):
+        last_beacon = last_ping = 0.0
+        while True:
+            with self.lock:
+                if gen != self.gen or not self.hosting:
+                    return
+                started = self.started
+                conns = list(self.conns)
+                beacon = None if started else self._beacon()
+                away = time.monotonic() - self.seen
+            # the host's page is gone (closed, or away from the lobby page): the game ends
+            if away > (PAGE_GONE_MATCH_S if started else PAGE_GONE_S):
+                self.log("lobby: the browser host's page is gone: its game ends")
+                self.leave()
+                return
+            now = time.monotonic()
+            if beacon is not None and now - last_beacon >= self.beacon_s:
+                last_beacon = now
+                for target in ("255.255.255.255", "127.0.0.1"):
+                    self.discovery.send(beacon, target)
+            ping = now - last_ping >= self.ping_s
+            if ping:
+                last_ping = now
+            for c in conns:
+                # (not during a match: a player whose page stands still a moment is still in it)
+                if now - c.last_rx > self.drop_s and not started:
+                    self._drop(c)
+                elif ping:
+                    self._send(c, PING)
+            time.sleep(0.1)
+
+
 def raw_state(data):
     """A savestate file of the app (FLYSAVE1 header, picture, RZIP chunks: core/nullDC.cpp, core/archive/rzip.cpp)
     as the raw bytes the core's Deserializer reads (the browser core has no savestate files); None if it is not one."""
@@ -607,11 +980,30 @@ def peer_list(view):
 class Lobbies:
     """All the browser players of this server, by the page's cid."""
 
-    def __init__(self, log=print, discovery_port=DISCOVERY_PORT):
+    def __init__(self, log=print, discovery_port=DISCOVERY_PORT, address_of_server=lambda: ""):
         self.log = log
         self.discovery = Discovery(discovery_port, log)
+        self.address_of_server = address_of_server
         self.players = {}
+        self.hosts = {}
         self.lock = threading.Lock()
+
+    def host_of(self, cid):
+        with self.lock:
+            h = self.hosts.get(cid)
+            if h is None:
+                h = self.hosts[cid] = Host(self.discovery, self.address_of_server, self.log)
+            return h
+
+    def view(self, cid):
+        """The page's lobby: the game it hosts, else the one it joined (or none)."""
+        with self.lock:
+            h = self.hosts.get(cid)
+        v = h.get_view() if h is not None else None
+        if v is None:
+            v = self.joiner(cid).get_view()
+            v["role"] = "joiner" if v["phase"] != "idle" else "none"
+        return v
 
     def joiner(self, cid):
         with self.lock:
@@ -628,15 +1020,31 @@ class Lobbies:
         op = cmd.get("op")
         if op == "query":
             self.discovery.query(str(cmd.get("address", "")))
+        elif op == "host":
+            self.joiner(cid).leave()
+            disc = bytes.fromhex(str(cmd.get("disc", "")))[:16]
+            j = self.joiner(cid)
+            with j.lock:
+                j.ggpo_port = j.ggpo_port or free_udp_port()	# the page's GGPO port, one per page as a joiner
+                port = j.ggpo_port
+            return self.host_of(cid).host(str(cmd.get("name", "WEB")), str(cmd.get("version", "")),
+                                          str(cmd.get("gameId", "")), disc, cmd.get("settings") or {}, port)
+        elif op == "settings":
+            self.host_of(cid).set_settings(cmd.get("settings") or {})
+        elif op == "start":
+            return self.host_of(cid).start()
         elif op == "join":
+            self.host_of(cid).leave()
             disc = bytes.fromhex(str(cmd.get("disc", "")))[:16]
             self.joiner(cid).join(str(cmd["address"]), int(cmd["port"]), str(cmd.get("name", "WEB")),
                                   str(cmd.get("version", "")), disc)
         elif op == "ready":
             self.joiner(cid).set_ready(bool(cmd.get("ready")))
         elif op == "matchOver":
+            self.host_of(cid).match_over()
             self.joiner(cid).match_over()
         elif op == "leave":
+            self.host_of(cid).leave()
             self.joiner(cid).leave()
         else:
             return False

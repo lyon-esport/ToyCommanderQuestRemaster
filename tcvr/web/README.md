@@ -68,6 +68,13 @@ own window when the computer has it: a `tcvr-server` folder next to the script, 
 first line of `internet-server.txt` (local file, not in git). That server keeps running from its own
 folder, where its key file is.
 
+A browser player can also create the game (Create a game in the Multiplayer panel): the server hosts it
+for the page as the app does (lobby.py Host: beacons, TCP lobby, STATE, START), headsets, PCs and other
+browsers join it as any game, and the page picks the mode, room and limit and starts the match. A browser
+host has no match start state to offer, so its matches start from the game's power-on with the automatic
+setup (about 30 s). When the host page leaves (or stops asking for its lobby for 15 s), its game ends: no
+host handover to or from a browser.
+
 Every copy in a match must be built from the same commit: the host refuses another app version
 (`git describe --tags`, so build from a full clone with the tags, not a shallow one).
 

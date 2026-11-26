@@ -159,5 +159,86 @@ class Joining(unittest.TestCase):
         self.assertTrue(wait(lambda: j.get_view()["phase"] == "hostLeft"))
 
 
+class Hosting(unittest.TestCase):
+    """A game a page creates (Host), joined by lobby.py's own joiner (which was run against the app's host)."""
+
+    def setUp(self):
+        self.lobbies = lobby.Lobbies(log=lambda m: None, discovery_port=free_port(), address_of_server=lambda: "192.0.2.7")
+
+    def tearDown(self):
+        for h in self.lobbies.hosts.values():
+            h.leave()
+
+    def create(self, cid="page1", version="v", disc="00" * 16):
+        self.assertTrue(self.lobbies.command(cid, {"op": "host", "name": "web", "version": version, "gameId": "T-1",
+                                                   "disc": disc, "settings": {"mode": 1, "room": 6, "points": 120}}))
+        return self.lobbies.view(cid)
+
+    def test_create_join_ready_start(self):
+        v = self.create()
+        self.assertEqual((v["role"], v["phase"], v["canStart"], v["why"]), ("host", "inLobby", False, "Waiting for another player"))
+        self.assertEqual(v["state"]["settings"], {"mode": 1, "room": 6, "points": 120})
+        # found on the discovery port, with its lobby port
+        self.assertTrue(wait(lambda: any(g["lobbyPort"] == v["lobbyPort"] for g in self.lobbies.games())))
+        j = lobby.Joiner(log=lambda m: None)
+        j.join("127.0.0.1", v["lobbyPort"], "PCH", "v", bytes(16))
+        self.assertTrue(wait(lambda: j.get_view()["phase"] == "inLobby" and j.get_view()["state"] is not None
+                             and j.get_view()["state"]["players"][1].get("name") == "PCH"))
+        self.assertEqual(j.get_view()["mySlot"], 1)
+        self.assertEqual(self.lobbies.view("page1")["why"], "Waiting for the players to be ready")
+        self.lobbies.command("page1", {"op": "settings", "settings": {"mode": 0, "room": 2, "points": 15}})
+        self.assertTrue(wait(lambda: j.get_view()["state"]["settings"] == {"mode": 0, "room": 2, "points": 15}))
+        self.assertFalse(self.lobbies.command("page1", {"op": "start"}))
+        j.set_ready(True)
+        self.assertTrue(wait(lambda: self.lobbies.view("page1")["canStart"]))
+        self.assertTrue(self.lobbies.command("page1", {"op": "start"}))
+        self.assertTrue(wait(lambda: j.get_view()["phase"] == "started"))
+        hv = self.lobbies.view("page1")
+        self.assertEqual((hv["phase"], hv["start"]["localIndex"], hv["start"]["snapshot"]), ("started", 0, ""))
+        js = j.get_view()["start"]
+        self.assertEqual((js["localIndex"], js["inputDelay"], js["settings"]["room"]), (1, 2, 2))
+        # the joiner reaches the host's page at the address it joined by, on the page's GGPO port
+        self.assertEqual(lobby.peer_list(j.get_view()), "127.0.0.1:%d,127.0.0.1:%d" % (hv["ggpoPort"], j.get_view()["ggpoPort"]))
+        self.assertEqual(lobby.peer_list(hv), "192.0.2.7:%d,127.0.0.1:%d" % (hv["ggpoPort"], j.get_view()["ggpoPort"]))
+        # the match is over: everybody back in the lobby, not ready
+        self.lobbies.command("page1", {"op": "matchOver"})
+        j.match_over()
+        hv = self.lobbies.view("page1")
+        self.assertEqual((hv["phase"], hv["canStart"]), ("inLobby", False))
+        self.assertTrue(wait(lambda: j.get_view()["phase"] == "inLobby"))
+        # the host leaves: the joiner hears it
+        self.lobbies.command("page1", {"op": "leave"})
+        self.assertTrue(wait(lambda: j.get_view()["phase"] == "hostLeft"))
+        self.assertEqual(self.lobbies.view("page1")["role"], "none")
+
+    def test_refuses_another_version(self):
+        v = self.create(version="v2")
+        j = lobby.Joiner(log=lambda m: None)
+        j.join("127.0.0.1", v["lobbyPort"], "pch", "v1", bytes(16))
+        self.assertTrue(wait(lambda: j.get_view()["phase"] == "refused"))
+        self.assertEqual(j.get_view()["message"], lobby.REFUSE_TEXT[2])
+
+    def test_player_leaves(self):
+        v = self.create()
+        j = lobby.Joiner(log=lambda m: None)
+        j.join("127.0.0.1", v["lobbyPort"], "PCH", "v", bytes(16))
+        self.assertTrue(wait(lambda: self.lobbies.view("page1")["state"]["players"][1]["present"]))
+        j.leave()
+        self.assertTrue(wait(lambda: not self.lobbies.view("page1")["state"]["players"][1]["present"]))
+
+    def test_query_answered(self):
+        v = self.create()
+        self.lobbies.discovery.query("127.0.0.1")
+        self.assertTrue(wait(lambda: any(g["lobbyPort"] == v["lobbyPort"] for g in self.lobbies.games())))
+
+
+def free_port():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
 if __name__ == "__main__":
     unittest.main()
